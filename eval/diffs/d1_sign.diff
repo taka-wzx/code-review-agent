@@ -1,0 +1,20 @@
+diff --git a/tracker/bounce.py b/tracker/bounce.py
+--- a/tracker/bounce.py
++++ b/tracker/bounce.py
+@@ -40,10 +40,15 @@ def bounce_error_mm(pred_y, actual_y):
+     return pred_y - actual_y
+
+
+-def classify_bounce(bounce_dy_mm):
+-    # positive dy => predicted point is further along +y
+-    if bounce_dy_mm > 0:
++def classify_bounce(bounce_dy_mm, vy_at_snap):
++    """Return 'overshoot' or 'undershoot' for a bounce prediction."""
++    # dy > 0 means predicted landing is at larger y than actual
++    if bounce_dy_mm > 0:
+         return "overshoot"
+     return "undershoot"
++
++
++def mean_error(errors):
++    return sum(errors) / len(errors)

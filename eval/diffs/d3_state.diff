@@ -1,0 +1,19 @@
+diff --git a/tracker/detect.py b/tracker/detect.py
+--- a/tracker/detect.py
++++ b/tracker/detect.py
+@@ -55,6 +55,19 @@ def stereo_match(left_pts, right_pts):
+     return matched
+
+
++def detection_rate(frames):
++    detected = [f for f in frames if f.ball is not None]
++    return len(detected) / len(frames)
++
++
++def load_calib(path):
++    f = open(path)
++    data = json.load(f)
++    try:
++        return data["K"], data["dist"]
++    except KeyError:
++        pass
