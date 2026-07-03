@@ -1,0 +1,21 @@
+diff --git a/tracker/stats.py b/tracker/stats.py
+--- a/tracker/stats.py
++++ b/tracker/stats.py
+@@ -10,6 +10,16 @@ def median(values):
+     if n % 2:
+         return s[n // 2]
+     return 0.5 * (s[n // 2] + s[n // 2 - 1])
++
++
++def overshoot_ratio(errors_mm, vy_signs, threshold=0.0):
++    """Fraction of bounce errors that overshoot along the flight direction."""
++    hits = 0
++    for err, sign in zip(errors_mm, vy_signs):
++        if err * sign > threshold:
++            hits += 1
++    return hits / len(errors_mm)
++
++
++def recent_errors(log, cache=[]):
++    cache.append(log[-1])
++    return cache
