@@ -1,0 +1,53 @@
+{
+  "d1_sign": [
+    {
+      "id": "d1-sign-projection",
+      "severity": "high",
+      "description": "classify_bounce 用 bounce_dy_mm 的原始符号判 overshoot/undershoot，没有投影到飞行方向 vy_at_snap；当 vy<0 时分类结论正好相反。命中标准：finding 必须指出分类/符号判断逻辑本身是错的（未按飞行方向投影、vy<0 时结论颠倒、或等价表述）。仅指出 vy_at_snap 参数未被使用、暗示实现不完整，不算命中本条（那是另一条埋点）。"
+    },
+    {
+      "id": "d1-dead-param",
+      "severity": "medium",
+      "description": "新参数 vy_at_snap 传进了 classify_bounce 但函数体从未使用它（死参数，暗示逻辑没写完）。命中标准：指出该参数未被使用即算命中。"
+    },
+    {
+      "id": "d1-mean-error-div0",
+      "severity": "medium",
+      "description": "mean_error 对空列表除零：len(errors) 为 0 时 ZeroDivisionError。命中标准：指出空输入导致除零即算命中。"
+    }
+  ],
+  "d2_units": [
+    {
+      "id": "d2-index-oob",
+      "severity": "high",
+      "description": "循环 range(len(positions_mm)) 内访问 positions_mm[i+1]，最后一次迭代索引越界 IndexError。命中标准：指出越界及其位置即算命中。"
+    },
+    {
+      "id": "d2-unit-1000x",
+      "severity": "high",
+      "description": "单位换算错误：dist_mm / FRAME_DT_S 得到的是 mm/s 而不是 m/s（少除 1000），随后 ×3.6 得出的 km/h 大 1000 倍。命中标准：指出 mm/s 与 m/s 混淆或结果差 1000 倍即算命中。仅抱怨变量命名误导而未指出数值错误的，不算命中。"
+    }
+  ],
+  "d3_state": [
+    {
+      "id": "d3-det-rate-div0",
+      "severity": "medium",
+      "description": "detection_rate 对空 frames 列表除零 ZeroDivisionError。命中标准：指出空输入除零即算命中。"
+    },
+    {
+      "id": "d3-file-leak",
+      "severity": "medium",
+      "description": "load_calib 用 open() 打开文件后从不关闭（无 with / f.close()），资源泄漏。命中标准：指出文件未关闭即算命中。"
+    },
+    {
+      "id": "d3-swallow-keyerror",
+      "severity": "high",
+      "description": "except KeyError: pass 吞掉异常后函数隐式返回 None；调用方解包 K, dist = load_calib(...) 会崩（TypeError）且丢失根因。命中标准：指出吞异常导致隐式返回 None / 调用方崩溃即算命中。"
+    },
+    {
+      "id": "d3-missing-import",
+      "severity": "low",
+      "description": "函数体用了 json.load 但 diff 中没有 import json；agent 应尝试用 read_file 确认文件头是否已有 import，若确认不了应报出疑似缺失。命中标准：指出 json 可能未导入即算命中。"
+    }
+  ]
+}
