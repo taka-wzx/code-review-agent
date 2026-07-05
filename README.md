@@ -42,11 +42,20 @@ cd ..\code_review_agent
 - ground truth 在 `eval/truth.json`（每个埋点附**命中标准**，固化人工打分时的微妙判例）
 - judge 裁决经结构化校验（id 齐全/索引不越界/无重叠/全覆盖），不合法自动带错误重试一次
 - **judge 校准**：埋点命中判定 9/9 与人工一致，分类 11/12（详见 `eval/cases.md`）
-- 当前 baseline（deepseek-v4-pro，无仓库上下文）：**recall 0.78 (7/9)，precision 0.58 (7/12)，FP 0，noise 5**
+
+## 上下文检索（W3）
+
+`context.py`：解析 diff → 主动预取约定文档（CLAUDE.md）、改动文件全文、函数调用方片段（纯符号级检索，无向量库，预算 cap 28k chars）。评测用 fixture 仓库 `eval/repo/`；`--no-context` 关掉检索做 ablation。
+
+| 版本 | recall | precision | noise |
+|---|---|---|---|
+| V0 无上下文 | 0.78 (7/9) | 0.58 (7/12) | 5 |
+| V1 +主动检索 | **1.00 (9/9)** | **0.82 (9/11)** | 2 |
+
+两个 miss（§5.1 符号投影、缺 import）均为上下文饥饿型，检索后全部命中。注：n=9 的合成集，见 cases.md 的过拟合注脚。
 
 ## 限制
 
-- 只有一个工具；不跑 linter/测试
-- 无主动上下文检索——两个 miss 全是上下文饥饿型（W3 做）
-- 无 verifier 复核——5 条噪音无人拦（W5 做）
-- 大 diff 不做压缩（W3 做）、没有 trace 落盘（W6 做）
+- 只有 read_file 一个执行工具；不跑 linter/测试
+- 无 verifier 复核——style 噪音无人拦（W5 做）
+- 评测集小且合成（扩真实用例是 W5 前置）；没有 trace 落盘（W6 做）

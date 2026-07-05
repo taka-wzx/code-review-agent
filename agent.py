@@ -19,6 +19,8 @@ from pathlib import Path
 from openai import OpenAI
 import openai
 
+from context import build_context
+
 # --- provider config ---------------------------------------------------------
 # Both DeepSeek and Zhipu/GLM expose OpenAI-compatible endpoints, so one client
 # works for both -- only the base_url, model id, and key env var change.
@@ -113,10 +115,19 @@ def read_file(repo_root: Path, rel_path: str) -> str:
     return text
 
 
-def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str) -> dict:
+def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
+               use_context: bool = True) -> dict:
+    user = f"Review this diff:\n\n```diff\n{diff_text}\n```"
+    if use_context:
+        pack = build_context(diff_text, Path(repo_root),
+                             log=lambda m: print(f"[context] {m}", file=sys.stderr))
+        if pack:
+            user += ("\n\nRepository context retrieved automatically (conventions, "
+                     "changed files in full, callers). You can still use read_file "
+                     "for anything not covered:\n\n" + pack)
     messages = [
         {"role": "system", "content": SYSTEM},
-        {"role": "user", "content": f"Review this diff:\n\n```diff\n{diff_text}\n```"},
+        {"role": "user", "content": user},
     ]
     for step in range(1, MAX_STEPS + 1):
         response = client.chat.completions.create(
@@ -204,12 +215,15 @@ def main():
     parser = argparse.ArgumentParser(description="Minimal code-review agent")
     parser.add_argument("diff", help="Path to a unified diff file")
     parser.add_argument("--repo", default=".", help="Repo root for read_file context")
+    parser.add_argument("--no-context", action="store_true",
+                        help="Skip proactive context retrieval (ablation)")
     args = parser.parse_args()
 
     diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
     client, model = make_client()
     try:
-        review = run_review(client, diff_text, Path(args.repo), model)
+        review = run_review(client, diff_text, Path(args.repo), model,
+                            use_context=not args.no_context)
     except openai.AuthenticationError:
         sys.exit("Invalid or missing API key -- check your .env / environment variable")
     except openai.RateLimitError:

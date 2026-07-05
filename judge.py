@@ -34,8 +34,9 @@ Rules:
   bug per its stated hit criteria. Wording need not match; line numbers may
   differ slightly. Judge strictly on substance: a finding that only brushes
   near the bug without naming its actual mechanism is NOT a hit.
-- One finding may hit at most one bug; one bug may be hit by several
-  findings (list them all).
+- One bug may be hit by several findings (list them all), and one finding
+  may hit several bugs (agents sometimes merge two real defects into one
+  finding -- give credit for each bug whose substance it states).
 - Classify every finding that hits no bug as exactly one of:
   - "false_positive": claims something factually incorrect / that does not
     hold for this code.
@@ -116,10 +117,8 @@ def validate_verdict(verdict: dict, bugs: list, findings: list) -> list[str]:
         for i in idxs:
             if not isinstance(i, int) or not (0 <= i < n):
                 problems.append(f"bug {b.get('id')}: finding index {i} out of range 0..{n - 1}")
-            elif i in matched:
-                problems.append(f"finding {i} matched to more than one bug")
             else:
-                matched.add(i)
+                matched.add(i)  # a finding may legitimately hit several bugs
 
     extra = verdict.get("unmatched_findings")
     if not isinstance(extra, list):
@@ -151,7 +150,8 @@ def compute_metrics(verdicts: dict) -> dict:
     for name, entry in sorted(verdicts.items()):
         v, n = entry["verdict"], entry["n_findings"]
         hits = sum(1 for b in v["bugs"] if b["hit"])
-        matched = sum(len(b["matched_finding_indices"]) for b in v["bugs"])
+        # unique finding indices, so a finding hitting two bugs counts once
+        matched = len({i for b in v["bugs"] for i in b["matched_finding_indices"]})
         fp = sum(1 for e in v["unmatched_findings"] if e["classification"] == "false_positive")
         noise = sum(1 for e in v["unmatched_findings"] if e["classification"] == "noise")
         per_diff[name] = {"bugs": len(v["bugs"]), "hits": hits, "findings": n,

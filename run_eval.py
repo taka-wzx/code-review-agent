@@ -22,8 +22,12 @@ RESULTS = HERE / "eval" / "results"
 
 def main():
     parser = argparse.ArgumentParser(description="Batch eval runner")
-    parser.add_argument("--repo", default=".", help="Repo root for read_file context")
+    parser.add_argument("--repo", default=str(HERE / "eval" / "repo"),
+                        help="Repo root for context retrieval (default: eval fixture repo)")
+    parser.add_argument("--no-context", action="store_true",
+                        help="Skip proactive context retrieval (ablation baseline)")
     args = parser.parse_args()
+    print(f"repo={args.repo}  context={'OFF (ablation)' if args.no_context else 'ON'}")
 
     diffs = sorted(DIFFS.glob("*.diff"))
     if not diffs:
@@ -37,7 +41,8 @@ def main():
         print(f"\n{'='*60}\n{name}\n{'='*60}")
         diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
         try:
-            review = run_review(client, diff_text, Path(args.repo), model)
+            review = run_review(client, diff_text, Path(args.repo), model,
+                                use_context=not args.no_context)
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
             continue
