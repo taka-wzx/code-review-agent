@@ -1,0 +1,22 @@
+diff --git a/tracker/roi.py b/tracker/roi.py
+--- a/tracker/roi.py
++++ b/tracker/roi.py
+@@ -1 +1,18 @@
+ """Full-frame fallback detection when the ROI tracker loses the ball."""
++
++from tracker.detect import MIN_BALL_RADIUS_PX
++
++FULLFRAME_INPUT_PX = 512
++
++
++def fullframe_fallback(frame, run_engine, resize):
++    """Run the detector over the whole frame at reduced resolution.
++
++    Native frames are 768 x 960; a ball at typical table distance spans
++    an 8-10 px radius at native resolution.
++    """
++    h, w = frame.shape[:2]
++    scale = FULLFRAME_INPUT_PX / float(max(h, w))
++    small = resize(frame, scale)
++    dets = [d for d in run_engine(small) if d[2] >= MIN_BALL_RADIUS_PX]
++    return [(x / scale, y / scale, r / scale) for (x, y, r) in dets]

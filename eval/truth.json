@@ -49,5 +49,122 @@
       "severity": "low",
       "description": "函数体用了 json.load 但 diff 中没有 import json；agent 应尝试用 read_file 确认文件头是否已有 import，若确认不了应报出疑似缺失。命中标准：指出 json 可能未导入即算命中。"
     }
+  ],
+  "d4_gate": [
+    {
+      "id": "d4-absolute-gate",
+      "severity": "high",
+      "description": "accept_step 用绝对距离门（step_mm > 300 拒绝），完全不使用 dt_s。漏帧时 dt 翻倍 2-3 倍（调用方注释与项目约定 §5.3 都说明漏帧常见），合法快球的步长自然超 300mm 被误杀；正确做法是按速度判（step/dt）。命中标准：指出门必须除以 dt / 按速度而非绝对距离判定（或指出 dt_s 未参与判定导致漏帧球被误杀）。仅泛泛说 dt_s 参数未使用而未联系到误杀后果的，算命中 d4-magic-number 之外的这条的边缘——需明确点到门逻辑对漏帧/快球错误。"
+    },
+    {
+      "id": "d4-magic-number",
+      "severity": "low",
+      "description": "常量 MAX_STEP_MM 已定义但函数体里写死 300.0 魔法数，两处将来会漂移。命中标准：指出应使用 MAX_STEP_MM 常量/魔法数重复即算命中。"
+    }
+  ],
+  "d5_bootstrap": [
+    {
+      "id": "d5-window-deadzone",
+      "severity": "high",
+      "description": "bootstrap_velocity 在 len(samples) < BOOTSTRAP_WINDOW(=5) 时直接返回 None。调用方注释明确说明采集段经常只有 2-4 个样本就结束——这些段永远无法自举速度（死区）。命中标准：指出等满 5 样本导致短采集段永不触发/需要少样本回退路径。"
+    },
+    {
+      "id": "d5-window-off-by-one",
+      "severity": "medium",
+      "description": "取窗口末端用了 window[-2]（倒数第二个样本）而不是 window[-1]，白白丢掉最新样本、基线时间跨度也少一个间隔。命中标准：指出 window[-2] 应为 window[-1] / 用错倒数第二个样本。"
+    }
+  ],
+  "d6_ghost": [
+    {
+      "id": "d6-ghost-bounce",
+      "severity": "high",
+      "description": "record_bounce 接受 asr 参数但从不检查，静止球/发球抛球阶段（asr < ACQUIRE_MIN_STATE=4，常量就在本文件且有注释）报告的弹跳也会被记录=鬼弹跳点。命中标准：指出应按 asr >= ACQUIRE_MIN_STATE 过滤（或等价表述：非飞行确认状态的弹跳不应记录）。仅说 asr 未使用而不联系鬼弹跳后果算边缘命中——需点到过滤逻辑缺失。"
+    },
+    {
+      "id": "d6-no-reset",
+      "severity": "medium",
+      "description": "start_new_rally 只重置 strokes，不清空 bounce_points——弹跳点跨回合累积，上一回合的弹点会画到下一回合。命中标准：指出 bounce_points 未在新回合重置。"
+    }
+  ],
+  "d7_display": [
+    {
+      "id": "d7-dead-flag-path",
+      "severity": "high",
+      "description": "draw_predicted 在 PREDICT_DISPLAY_ONLY_FROZEN 且未冻结时直接 return。tracker/config.py 中 PREDICT_DISPLAY_ONLY_FROZEN=True 而 FREEZE_PREDICTION_ON_COMMIT=False（冻结逻辑尚未启用）——frozen 永远为 False，预测线永远不会绘制（死路径）。真实项目里这正是\"红线消失\"的根因。命中标准：指出两旗标组合导致预测线永不绘制/需要检查冻结逻辑是否启用。仅说\"建议确认 frozen 从何而来\"不算命中；需要指出恒假的组合。"
+    },
+    {
+      "id": "d7-gap-connect",
+      "severity": "medium",
+      "description": "draw_observed 把相邻检测点直接连线，但 docstring 明说检测失败的帧缺失、相邻条目可能相隔很多帧——跨大间隔直连产生穿越画面的错误长线段，应按 frame_idx 间隔断开。命中标准：指出未检查 frame_idx 间隔/跨缺失帧直连的问题。"
+    }
+  ],
+  "d8_roi": [
+    {
+      "id": "d8-radius-filter-scale",
+      "severity": "high",
+      "description": "半径过滤在降采样图坐标系里做：768×960 → 512 时 scale≈0.53，docstring 说球在原生分辨率 8-10px 半径，缩放后 ~4.2-5.3px，而 detect.py 的 MIN_BALL_RADIUS_PX=5.0——绝大多数真球在过滤这一步被静默丢弃（全图回退基本失效）。正确做法是把半径换算回原生坐标后再过滤（或缩放阈值）。命中标准：指出过滤发生在缩放坐标系导致球半径低于阈值被丢/过滤应在换算回原生尺度之后。需要点到坐标系/尺度错位，仅说\"降分辨率可能漏检\"算边缘不命中。"
+    }
+  ],
+  "d9_timing": [
+    {
+      "id": "d9-ms-as-s",
+      "severity": "high",
+      "description": "frame_dt_s 的参数是毫秒时间戳（参数名 *_ms），docstring 说返回秒，但直接相减未除 1000——返回值大 1000 倍。命中标准：指出 ms 差值当秒用/少除 1000。"
+    },
+    {
+      "id": "d9-deg-as-rad",
+      "severity": "high",
+      "description": "spin_rate_rps 参数是 deg/s（参数名 omega_deg_per_s），除以 2π 是把它当 rad/s 处理；正确是除以 360。命中标准：指出 deg/rad 混用/应除 360。"
+    }
+  ],
+  "d10_filter": [
+    {
+      "id": "d10-dt-zero",
+      "severity": "high",
+      "description": "velocity_from_positions 的 docstring 明说 ts 可能含重复时间戳（双相机同帧），dt=0 时除零崩溃。命中标准：指出重复时间戳导致除零。"
+    },
+    {
+      "id": "d10-cov-asymmetry",
+      "severity": "medium",
+      "description": "P_new = P - K@S@K.T 代数上正确，但数值上不保证对称性，浮点误差随更新累积使 P 失去对称正定（KF 已知稳定性问题）；应使用 Joseph form 或强制对称化 (P+P.T)/2。命中标准：指出协方差更新缺对称化/数值稳定性处理。这是较难的领域埋点，报出即算，不苛求 Joseph form 字眼。"
+    }
+  ],
+  "d11_cor": [
+    {
+      "id": "d11-ukf-vz",
+      "severity": "medium",
+      "description": "cor_from_impact 有 raw 和 ukf 两组参数却用了 UKF 平滑值；项目约定 §5.4 明确 COR 标定必须用撞击帧 raw 三角化 vz（平滑在速度突变点滞后，COR 系统性偏高）。命中标准：指出应改用 raw 参数/平滑值在撞击帧有偏。"
+    },
+    {
+      "id": "d11-origin-fit",
+      "severity": "low",
+      "description": "fit_cor 强制拟合过原点（无截距项），真实弹跳存在与切向速度/旋转相关的固定偏移，过原点假设使斜率有偏。命中标准：指出过原点假设/缺截距项的问题。"
+    }
+  ],
+  "d12_trap_clean": [],
+  "d13_trap_refactor": [],
+  "d14_sign_x": [
+    {
+      "id": "d14-x-not-projected",
+      "severity": "high",
+      "description": "flight_frame_errors 对 y 轴正确投影（sign_y * dy_mm），但 x 轴直接 along_x = dx_mm 没有用 sign(vx_at_snap) 投影——项目约定 §5.1 明确写了\"x 轴同理\"。vx<0 时 x 轴 overshoot/undershoot 结论相反。半修复陷阱。命中标准：指出 x 轴缺投影/vx_at_snap 未参与。仅评论 y 轴投影正确性或 vy==0 边界的不算命中。"
+    }
+  ],
+  "d15_pipeline": [
+    {
+      "id": "d15-ms-as-us",
+      "severity": "high",
+      "description": "set_camera_exposure 的参数是毫秒（exposure_ms），docstring 说驱动 API 期望微秒，却直接传给 set_exposure_us——曝光时间差 1000 倍。命中标准：指出 ms 传给了微秒接口/少乘 1000。"
+    },
+    {
+      "id": "d15-trim-noop",
+      "severity": "medium",
+      "description": "trim_history 里 history = history[-MAX_HISTORY:] 只是重绑定局部名，调用方的列表根本没被裁剪——函数是无效的（session.history 无限增长）。命中标准：指出切片重绑定不改变调用方列表/应用 del history[:-MAX] 等原地操作。"
+    },
+    {
+      "id": "d15-writer-leak",
+      "severity": "medium",
+      "description": "export_session 在 frame.annotated is None 时提前 return False，video writer 永不 release——资源泄漏且已写入的视频文件可能损坏。命中标准：指出提前返回路径缺 release/需要 try-finally。"
+    }
   ]
 }

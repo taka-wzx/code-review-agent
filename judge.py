@@ -8,18 +8,23 @@ The judge's verdict is delivered via a forced-single tool call
 (submit_scores) -- same cross-provider structured-output trick as agent.py.
 
 Usage (run after run_eval.py):
-    python judge.py
+    python judge.py [--results-dir eval/results]
 """
+import argparse
 import json
 import sys
 from pathlib import Path
 
 from agent import make_client
 
+# Windows redirects default to GBK; judge reasons may contain any unicode
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 HERE = Path(__file__).parent
 TRUTH_PATH = HERE / "eval" / "truth.json"
-RESULTS_DIR = HERE / "eval" / "results"
-SCORES_PATH = RESULTS_DIR / "scores.json"
+DEFAULT_RESULTS = HERE / "eval" / "results"
 
 MAX_ATTEMPTS = 2   # per diff: 1 try + 1 retry with the validation error fed back
 
@@ -210,12 +215,19 @@ def judge_one(client, model: str, name: str, bugs: list, findings: list) -> dict
 
 
 def main():
+    parser = argparse.ArgumentParser(description="LLM-judge auto-scorer")
+    parser.add_argument("--results-dir", default=str(DEFAULT_RESULTS),
+                        help="Directory with run_eval.py outputs to score")
+    args = parser.parse_args()
+    results_dir = Path(args.results_dir)
+    scores_path = results_dir / "scores.json"
+
     truth = json.loads(TRUTH_PATH.read_text(encoding="utf-8"))
     client, model = make_client()
 
     verdicts = {}
     for name, bugs in sorted(truth.items()):
-        result_path = RESULTS_DIR / f"{name}.json"
+        result_path = results_dir / f"{name}.json"
         if not result_path.is_file():
             print(f"SKIP {name}: no result file (run run_eval.py first)", file=sys.stderr)
             continue
@@ -230,7 +242,7 @@ def main():
         sys.exit("nothing judged")
 
     metrics = compute_metrics(verdicts)
-    SCORES_PATH.write_text(
+    scores_path.write_text(
         json.dumps({"metrics": metrics, "verdicts": verdicts},
                    indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -243,7 +255,7 @@ def main():
     print(f"precision = {t['matched']}/{t['findings']} = {t['precision']}  "
           f"(matched findings / all findings)")
     print(f"false positives = {t['false_positives']}, noise = {t['noise']}")
-    print(f"\nfull verdicts -> {SCORES_PATH}")
+    print(f"\nfull verdicts -> {scores_path}")
 
 
 if __name__ == "__main__":

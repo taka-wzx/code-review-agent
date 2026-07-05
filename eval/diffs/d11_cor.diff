@@ -1,0 +1,21 @@
+diff --git a/tracker/bounce_cor.py b/tracker/bounce_cor.py
+--- a/tracker/bounce_cor.py
++++ b/tracker/bounce_cor.py
+@@ -1 +1,17 @@
+ """Bounce restitution (COR) calibration from recorded impacts."""
++
++
++def cor_from_impact(vz_in_ukf, vz_out_ukf, vz_in_raw, vz_out_raw):
++    """Coefficient of restitution for one impact: -vz_out / vz_in."""
++    return -vz_out_ukf / vz_in_ukf
++
++
++def fit_cor(vz_pairs):
++    """Least-squares slope of vz_out vs vz_in over many impacts.
++
++    vz_pairs: list of (vz_in, vz_out) at the impact frame.
++    The fit is forced through the origin.
++    """
++    num = sum(vz_in * vz_out for vz_in, vz_out in vz_pairs)
++    den = sum(vz_in * vz_in for vz_in, _ in vz_pairs)
++    return -num / den

@@ -15,6 +15,11 @@ from pathlib import Path
 
 from agent import run_review, make_client
 
+# Windows redirects default to GBK; model output may contain any unicode
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+
 HERE = Path(__file__).parent
 DIFFS = HERE / "eval" / "diffs"
 RESULTS = HERE / "eval" / "results"
@@ -26,14 +31,18 @@ def main():
                         help="Repo root for context retrieval (default: eval fixture repo)")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip proactive context retrieval (ablation baseline)")
+    parser.add_argument("--results-dir", default=str(RESULTS),
+                        help="Where to write per-diff review JSONs")
     args = parser.parse_args()
-    print(f"repo={args.repo}  context={'OFF (ablation)' if args.no_context else 'ON'}")
+    results_dir = Path(args.results_dir)
+    print(f"repo={args.repo}  context={'OFF (ablation)' if args.no_context else 'ON'}  "
+          f"results={results_dir}")
 
     diffs = sorted(DIFFS.glob("*.diff"))
     if not diffs:
         sys.exit(f"No diffs found in {DIFFS}")
 
-    RESULTS.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     client, model = make_client()
 
     for diff_path in diffs:
@@ -47,14 +56,14 @@ def main():
             print(f"  FAILED: {e}", file=sys.stderr)
             continue
 
-        (RESULTS / f"{name}.json").write_text(
+        (results_dir / f"{name}.json").write_text(
             json.dumps(review, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         for f in review["findings"]:
             print(f"  [{f['severity']:<6}] {f['file']}:{f['line']}  {f['issue']}")
 
-    print(f"\nDone. Results in {RESULTS}/. "
-          f"Now score them by hand against eval/cases.md.")
+    print(f"\nDone. Results in {results_dir}/. "
+          f"Score them with: python judge.py --results-dir {results_dir}")
 
 
 if __name__ == "__main__":

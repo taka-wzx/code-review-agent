@@ -2,7 +2,8 @@
 
 import numpy as np
 
-MIN_BALL_RADIUS_PX = 2.0
+# the detection engine is unreliable below 5 px radius: recall collapses
+MIN_BALL_RADIUS_PX = 5.0
 MAX_BALL_RADIUS_PX = 30.0
 MAX_EPIPOLAR_DIST_PX = 4.0
 

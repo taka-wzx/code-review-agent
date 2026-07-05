@@ -1,0 +1,93 @@
+diff --git a/tracker/pipeline.py b/tracker/pipeline.py
+--- a/tracker/pipeline.py
++++ b/tracker/pipeline.py
+@@ -6,3 +6,89 @@
+ 
+ MAX_HISTORY = 500
+ SPEED_BUCKET_KMH = 10.0
++
++
++def percentile(sorted_vals, q):
++    """Nearest-rank percentile of an ascending list; q in [0, 1]."""
++    if not sorted_vals:
++        return None
++    idx = min(int(q * len(sorted_vals)), len(sorted_vals) - 1)
++    return sorted_vals[idx]
++
++
++def summarize_speeds(speeds_kmh):
++    """Median / p90 / max of per-throw peak speeds."""
++    if not speeds_kmh:
++        return {"n": 0}
++    xs = sorted(speeds_kmh)
++    return {
++        "n": len(xs),
++        "median_kmh": percentile(xs, 0.5),
++        "p90_kmh": percentile(xs, 0.9),
++        "max_kmh": xs[-1],
++    }
++
++
++def speed_histogram(speeds_kmh):
++    """Bucket speeds into SPEED_BUCKET_KMH-wide bins for the HUD chart."""
++    hist = {}
++    for s in speeds_kmh:
++        bucket = int(s // SPEED_BUCKET_KMH) * int(SPEED_BUCKET_KMH)
++        hist[bucket] = hist.get(bucket, 0) + 1
++    return dict(sorted(hist.items()))
++
++
++def format_row(throw_id, speed_kmh, bounce_ok):
++    """One fixed-width HUD table row."""
++    mark = "ok" if bounce_ok else "--"
++    return f"{throw_id:>4}  {speed_kmh:7.1f} km/h  [{mark}]"
++
++
++def trim_history(history):
++    """Keep only the most recent MAX_HISTORY entries."""
++    history = history[-MAX_HISTORY:]
++    return len(history)
++
++
++def set_camera_exposure(cam, exposure_ms):
++    """Configure sensor exposure; the driver API expects microseconds."""
++    cam.set_exposure_us(exposure_ms)
++
++
++def collect_bounce_errors(throws):
++    """Absolute bounce errors (mm) for throws that have ground truth."""
++    errors = []
++    for t in throws:
++        if t.get("actual_y") is None:
++            continue
++        errors.append(abs(t["pred_y"] - t["actual_y"]))
++    return errors
++
++
++def export_session(session, out_dir):
++    """Write the JSONL log and the annotated video for one session."""
++    out = Path(out_dir)
++    out.mkdir(parents=True, exist_ok=True)
++    save_jsonl(session.records, out / "throws.jsonl")
++
++    writer = session.open_video_writer(out / "annotated.mp4")
++    for frame in session.frames:
++        if frame.annotated is None:
++            return False
++        writer.write(frame.annotated)
++    writer.release()
++    return True
++
++
++def session_report(session, out_dir):
++    """Full end-of-session report: stats dict + exported artifacts."""
++    speeds = [t["peak_kmh"] for t in session.records if "peak_kmh" in t]
++    report = {
++        "speeds": summarize_speeds(speeds),
++        "histogram": speed_histogram(speeds),
++        "bounce_errors_mm": collect_bounce_errors(session.records),
++        "history_len": trim_history(session.history),
++    }
++    exported = export_session(session, out_dir)
++    report["export_ok"] = exported
++    return report
