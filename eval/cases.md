@@ -68,3 +68,25 @@ COR raw/ukf、x 轴投影半修复陷阱、大 diff 混 3 bug，外加 **2 个�
 - **两版都漏**：d7-dead-flag-path（需要追 import 进 config.py 看旗标组合——**检索不追 import 是当前架构缺口**）、d11-origin-fit（过原点拟合的统计偏差，纯领域难点）。
 - **V1 反而漏了 d7-gap-connect**（V0 抓到）：agent 未锁 temperature，run-to-run 方差真实存在——可复现性待办。
 - **核心结论：瓶颈从 recall 移到 noise**。noise 30→31 纹丝不动（检索把约定喂进上下文后 style nit 反而更多），precision 被摁在 0.42-0.45。陷阱用例 d12 被报 3-5 条"建议"。→ **W5 verifier 的靶子明确：把 noise 砍半以上，precision 应上 0.7**。
+
+## W5：verifier 二次复核（2026-07-05）
+
+`verifier.py`：finder 出稿后独立第二遍——每条 finding 判 keep/drop（KEEP=具体缺陷+可验证失败场景；DROP=事实错误/style nit/无证据投机/重复/泛泛建议）。temperature=0，结构化校验+重试，**失败 fail-open**（坏掉的过滤器不能吃真 bug）。被丢 finding 带 `drop_reason` 存 `dropped_findings` 可审计。`--no-verify` 做 ablation。
+
+| 版本（n=28） | recall | precision | FP | noise | findings 总数 |
+|---|---|---|---|---|---|
+| V0 被动工具 | 0.857 | 0.421 | 3 | 30 | 57 |
+| V1 +主动检索 | **0.893** | 0.446 | 0 | 31 | 56 |
+| V2 +verifier | 0.786 | **0.875** | 0 | **3** | 24 |
+
+**收获**：noise -90%（31→3）；陷阱用例 d12/d13 findings **归零**（V1 各 3 条）；verifier 还正确砍掉了 finder 越界报的 diff 外问题（d5 里报 gate.py 的"[Pre-existing]"条目——作用域控制）。
+
+**代价与失败分析（recall -0.107，6 个 miss 拆账）**：
+- 3 个非 verifier 责任：d7×2（finder 本 run 就没找到，run 方差+import 缺口）、d11-origin-fit（finder 一直没找到过）。
+- **3 个 verifier 错杀**（各有教训）：
+  - d5-window-deadzone（**high，最痛**）：drop 理由是"函数正确返回 None、调用方处理了"——verifier 看了局部正确性，没把调用方注释"段常 2-4 样本就结束"当证据推出**功能级死区**。教训：**"投机建议"判据与"领域死区"bug 相撞**——调用方文档化的使用模式应算证据而非投机。
+  - d10-cov-asymmetry（medium）：被判"投机的数值稳定性建议"——本就是难档领域埋点，verifier 的证据标准对这类"慢性数值问题"天然不利。
+  - d4-magic-number（low）：被判 style——这个埋点本身就在 style/缺陷边界上，算判定口径分歧。
+- **不做的事**：不针对这 3 个错杀去调 verifier prompt——那是在测试集上过拟合；正确路径是先建 held-out 集再迭代 prompt（W6+）。
+
+**汇总一句话**：F1 视角 V0 0.57 → V1 0.59 → V2 **0.83**；代价路径清楚、错杀可审计（drop_reason 全留档）。

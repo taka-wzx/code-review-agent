@@ -31,12 +31,14 @@ def main():
                         help="Repo root for context retrieval (default: eval fixture repo)")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip proactive context retrieval (ablation baseline)")
+    parser.add_argument("--no-verify", action="store_true",
+                        help="Skip the verifier second pass (ablation)")
     parser.add_argument("--results-dir", default=str(RESULTS),
                         help="Where to write per-diff review JSONs")
     args = parser.parse_args()
     results_dir = Path(args.results_dir)
-    print(f"repo={args.repo}  context={'OFF (ablation)' if args.no_context else 'ON'}  "
-          f"results={results_dir}")
+    print(f"repo={args.repo}  context={'OFF' if args.no_context else 'ON'}  "
+          f"verify={'OFF' if args.no_verify else 'ON'}  results={results_dir}")
 
     diffs = sorted(DIFFS.glob("*.diff"))
     if not diffs:
@@ -51,7 +53,8 @@ def main():
         diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
         try:
             review = run_review(client, diff_text, Path(args.repo), model,
-                                use_context=not args.no_context)
+                                use_context=not args.no_context,
+                                use_verify=not args.no_verify)
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
             continue

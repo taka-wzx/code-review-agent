@@ -54,13 +54,18 @@ cd ..\code_review_agent
 |---|---|---|---|---|
 | V0 被动工具 | 0.857 (24/28) | 0.421 | 3 | 30 |
 | V1 +主动检索 | **0.893 (25/28)** | 0.446 | **0** | 31 |
+| V2 +verifier | 0.786 (22/28) | **0.875** | **0** | **3** |
 
-检索修复约定/调用方依赖型 miss（符号投影、自举死区）并消灭全部误报；**瓶颈已从 recall 移到 noise**（30+ 条 style/投机建议把 precision 摁在 0.45）——W5 verifier 的靶子。失败分析详见 `eval/cases.md`。
+- **V1**：检索修复约定/调用方依赖型 miss 并消灭全部误报，但 noise 不动——瓶颈移到 precision
+- **V2**：`verifier.py` 独立二次复核（keep/drop 每条 finding，temperature=0，fail-open，
+  被丢条目带 `drop_reason` 落盘可审计）——noise -90%，陷阱用例 findings 归零；
+  代价 recall -0.107（3 条 verifier 错杀，各有归因，见 cases.md 失败分析）
+- F1 视角：V0 0.57 → V1 0.59 → **V2 0.83**
 
 ## 限制
 
 - 只有 read_file 一个执行工具；不跑 linter/测试
-- 检索不追 import（d7 死旗标 bug 两版都漏的根因）——已知架构缺口
-- 无 verifier 复核——noise 30+ 无人拦（W5 做）
-- agent 未锁 temperature，run-to-run 有方差（d7-gap-connect 一版抓到一版漏）
+- 检索不追 import（d7 死旗标 bug 屡漏的根因）——已知架构缺口
+- verifier 的"投机建议"判据会误伤"领域死区"型 bug（d5 错杀）；prompt 迭代需先建 held-out 集防过拟合
+- finder 未锁 temperature，run-to-run 有方差（d7-gap-connect 一版抓到一版漏）
 - 没有 trace 落盘（W6 做）
