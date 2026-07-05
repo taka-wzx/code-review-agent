@@ -4,29 +4,49 @@
 
 ## 运行
 
+Provider 无关：走 OpenAI 兼容接口，`LLM_PROVIDER` 切换 `deepseek`（默认）/ `glm`。
+
 ```powershell
-# 1. 设 API key（在 https://platform.claude.com 创建）
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+# 0. 建项目独立虚拟环境 + 装依赖（只做一次）
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 1. 设 provider + key
+$env:LLM_PROVIDER = "deepseek"          # 或 "glm"
+$env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY
 
 # 2. 跑内置样例（sample.diff 里埋了几个真实 bug，看它能不能抓到）
-E:/miniconda3/envs/tracker/python.exe agent.py sample.diff
+.venv\Scripts\python.exe agent.py sample.diff
 
 # 3. 审查真实 commit
 cd e:\shiyan\pingpong_tracker
 git show HEAD --format="" > ..\code_review_agent\real.diff
 cd ..\code_review_agent
-E:/miniconda3/envs/tracker/python.exe agent.py real.diff --repo e:\shiyan\pingpong_tracker
+.venv\Scripts\python.exe agent.py real.diff --repo e:\shiyan\pingpong_tracker
 ```
 
 ## 结构（~150 行，全在 agent.py）
 
-- **agent loop**：`run_review()` — 调 API → `stop_reason == "tool_use"` 就执行工具、把 `tool_result` 回填 → 循环直到 `end_turn`
-- **工具**：`read_file`（带 repo root 路径逃逸检查）
-- **结构化输出**：`output_config.format` + JSON schema，保证最终回答是合法 JSON
-- **护栏**：`MAX_STEPS=8`、每次请求 120s 超时（SDK 自动重试 429/5xx 两次）、工具失败回 `is_error` 而不是崩
+- **agent loop**：`run_review()` — 调 API → 有 `tool_calls` 就执行、把 `role:"tool"` 结果回填 → 循环直到模型调用 `submit_review`
+- **工具**：`read_file`（带 repo root 路径逃逸检查）+ `submit_review`（提交最终结果）
+- **结构化输出**：把「提交结果」做成 `submit_review` 工具、schema 当函数参数——不依赖任何厂商专有的 JSON 模式，跨 DeepSeek/GLM 通用
+- **护栏**：`MAX_STEPS=8`、每次请求 120s 超时（SDK 自动重试两次）、工具失败回 `Error:` 文本而不是崩
 
-## 限制（W0 就该有的限制）
+## 评测（W1 人工基线 + W2 自动打分）
+
+```powershell
+.venv\Scripts\python.exe run_eval.py    # 跑评测集 -> eval/results/*.json
+.venv\Scripts\python.exe judge.py       # LLM-judge 自动打分 -> recall/precision + scores.json
+```
+
+- ground truth 在 `eval/truth.json`（每个埋点附**命中标准**，固化人工打分时的微妙判例）
+- judge 裁决经结构化校验（id 齐全/索引不越界/无重叠/全覆盖），不合法自动带错误重试一次
+- **judge 校准**：埋点命中判定 9/9 与人工一致，分类 11/12（详见 `eval/cases.md`）
+- 当前 baseline（deepseek-v4-pro，无仓库上下文）：**recall 0.78 (7/9)，precision 0.58 (7/12)，FP 0，noise 5**
+
+## 限制
 
 - 只有一个工具；不跑 linter/测试
-- 没有 eval（W1 做）、没有 trace 落盘（W4 做）
-- 大 diff 不做压缩（W3 做）
+- 无主动上下文检索——两个 miss 全是上下文饥饿型（W3 做）
+- 无 verifier 复核——5 条噪音无人拦（W5 做）
+- 大 diff 不做压缩（W3 做）、没有 trace 落盘（W6 做）

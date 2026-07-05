@@ -10,13 +10,10 @@ Usage:
 """
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-import anthropic
-
-from agent import run_review
+from agent import run_review, make_client
 
 HERE = Path(__file__).parent
 DIFFS = HERE / "eval" / "diffs"
@@ -28,22 +25,19 @@ def main():
     parser.add_argument("--repo", default=".", help="Repo root for read_file context")
     args = parser.parse_args()
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-        sys.exit("No credentials: set ANTHROPIC_API_KEY first")
-
     diffs = sorted(DIFFS.glob("*.diff"))
     if not diffs:
         sys.exit(f"No diffs found in {DIFFS}")
 
     RESULTS.mkdir(parents=True, exist_ok=True)
-    client = anthropic.Anthropic(timeout=120.0)
+    client, model = make_client()
 
     for diff_path in diffs:
         name = diff_path.stem
         print(f"\n{'='*60}\n{name}\n{'='*60}")
         diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
         try:
-            review = run_review(client, diff_text, Path(args.repo))
+            review = run_review(client, diff_text, Path(args.repo), model)
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
             continue

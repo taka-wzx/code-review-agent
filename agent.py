@@ -1,7 +1,11 @@
-"""Minimal code-review agent loop (W0).
+"""Minimal code-review agent loop (W0), provider-agnostic.
 
-Feed a unified diff -> Claude reviews it, reading repo files for context
+Feed a unified diff -> the model reviews it, reading repo files for context
 via a read_file tool when it wants to -> prints a structured JSON review.
+
+Works on any OpenAI-compatible API. Pick the provider with LLM_PROVIDER:
+    deepseek (default)  needs DEEPSEEK_API_KEY
+    glm                 needs GLM_API_KEY (or ZHIPUAI_API_KEY)
 
 Usage:
     python agent.py sample.diff [--repo path/to/repo]
@@ -12,21 +16,41 @@ import os
 import sys
 from pathlib import Path
 
-import anthropic
+from openai import OpenAI
+import openai
 
-MODEL = "claude-opus-4-8"
+# --- provider config ---------------------------------------------------------
+# Both DeepSeek and Zhipu/GLM expose OpenAI-compatible endpoints, so one client
+# works for both -- only the base_url, model id, and key env var change.
+PROVIDERS = {
+    "deepseek": {
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-pro",
+        "key_envs": ("DEEPSEEK_API_KEY",),
+    },
+    "glm": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4.6",
+        "key_envs": ("GLM_API_KEY", "ZHIPUAI_API_KEY"),
+    },
+}
 MAX_STEPS = 8            # hard cap on loop iterations
-REQUEST_TIMEOUT = 120.0  # seconds per API call (SDK also retries 429/5xx twice)
+REQUEST_TIMEOUT = 120.0  # seconds per API call
 
 SYSTEM = """You are a code reviewer. You are given a unified diff.
 Use the read_file tool when you need context beyond the diff (the full
-function, callers, related tests). Then report your findings.
+function, callers, related tests). When you are done, you MUST report your
+findings by calling the submit_review tool exactly once. Do not answer in
+plain text.
 
 Report every issue you find, including ones you are uncertain about or
-consider low-severity. Do not filter for importance at this stage — your
-goal is coverage. For each finding include severity so a downstream
-filter can rank them. Only omit pure style/naming nits."""
+consider low-severity. Do not filter for importance at this stage -- your
+goal is coverage. For each finding include severity so a downstream filter
+can rank them. Only omit pure style/naming nits."""
 
+# JSON schema for the final review, reused as the parameters of submit_review.
+# Making "submit the review" a tool (instead of a provider-specific JSON-schema
+# response mode) keeps structured output working on any OpenAI-compatible API.
 REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
@@ -43,31 +67,40 @@ REVIEW_SCHEMA = {
                     "suggestion": {"type": "string"},
                 },
                 "required": ["file", "line", "severity", "issue", "suggestion"],
-                "additionalProperties": False,
             },
         },
     },
     "required": ["summary", "findings"],
-    "additionalProperties": False,
 }
 
-TOOLS = [{
-    "name": "read_file",
-    "description": (
-        "Read a file from the repository under review. Call this when the "
-        "diff alone is not enough context — e.g. to see the full function, "
-        "its callers, or related code."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "path": {"type": "string", "description": "Repo-relative file path"},
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": (
+                "Read a file from the repository under review. Call this when "
+                "the diff alone is not enough context -- e.g. to see the full "
+                "function, its callers, or related code."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Repo-relative file path"},
+                },
+                "required": ["path"],
+            },
         },
-        "required": ["path"],
-        "additionalProperties": False,
     },
-    "strict": True,
-}]
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_review",
+            "description": "Submit the final code review. Call this exactly once when done.",
+            "parameters": REVIEW_SCHEMA,
+        },
+    },
+]
 
 
 def read_file(repo_root: Path, rel_path: str) -> str:
@@ -80,52 +113,91 @@ def read_file(repo_root: Path, rel_path: str) -> str:
     return text
 
 
-def run_review(client: anthropic.Anthropic, diff_text: str, repo_root: Path) -> dict:
-    messages = [{
-        "role": "user",
-        "content": f"Review this diff:\n\n```diff\n{diff_text}\n```",
-    }]
+def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str) -> dict:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": f"Review this diff:\n\n```diff\n{diff_text}\n```"},
+    ]
     for step in range(1, MAX_STEPS + 1):
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=16000,
-            thinking={"type": "adaptive"},
-            system=SYSTEM,
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=8000,
             tools=TOOLS,
-            output_config={"format": {"type": "json_schema", "schema": REVIEW_SCHEMA}},
+            tool_choice="auto",
             messages=messages,
         )
-        if response.stop_reason == "tool_use":
-            messages.append({"role": "assistant", "content": response.content})
-            results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                path = block.input.get("path", "")
+        msg = response.choices[0].message
+        tool_calls = msg.tool_calls or []
+
+        # The model finished by submitting the review -> parse and return.
+        for tc in tool_calls:
+            if tc.function.name == "submit_review":
+                u = response.usage
+                print(f"[done] steps={step} tokens_in={u.prompt_tokens} "
+                      f"tokens_out={u.completion_tokens}", file=sys.stderr)
+                return json.loads(tc.function.arguments)
+
+        if not tool_calls:
+            raise RuntimeError(
+                "model stopped without calling submit_review; got:\n"
+                f"{msg.content!r}"
+            )
+
+        # Otherwise it asked to read files -> execute each and feed results back.
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [{
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            } for tc in tool_calls],
+        })
+        for tc in tool_calls:
+            try:
+                args = json.loads(tc.function.arguments)
+                path = args.get("path", "")
                 print(f"[step {step}] read_file({path})", file=sys.stderr)
-                try:
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": read_file(repo_root, path),
-                    })
-                except Exception as e:
-                    results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": f"Error: {e}",
-                        "is_error": True,
-                    })
-            messages.append({"role": "user", "content": results})
-            continue
-        if response.stop_reason != "end_turn":
-            raise RuntimeError(f"unexpected stop_reason: {response.stop_reason}")
-        u = response.usage
-        print(f"[done] steps={step} tokens_in={u.input_tokens} tokens_out={u.output_tokens}",
-              file=sys.stderr)
-        text = next(b.text for b in response.content if b.type == "text")
-        return json.loads(text)  # guaranteed valid JSON by output_config.format
+                content = read_file(repo_root, path)
+            except Exception as e:
+                content = f"Error: {e}"
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": content,
+            })
+
     raise RuntimeError(f"agent did not finish within {MAX_STEPS} steps")
+
+
+def load_dotenv() -> None:
+    """Load KEY=VALUE lines from .env next to this file (real env vars win)."""
+    env_file = Path(__file__).parent / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def make_client() -> tuple[OpenAI, str]:
+    """Build a provider-agnostic client + model id from LLM_PROVIDER env."""
+    load_dotenv()
+    provider = os.environ.get("LLM_PROVIDER", "deepseek").lower()
+    if provider not in PROVIDERS:
+        sys.exit(f"Unknown LLM_PROVIDER={provider!r}; choose one of {list(PROVIDERS)}")
+    cfg = PROVIDERS[provider]
+    api_key = next((os.environ[e] for e in cfg["key_envs"] if os.environ.get(e)), None)
+    if not api_key:
+        envs = " or ".join(cfg["key_envs"])
+        sys.exit(f"No credentials for provider {provider!r}: set the {envs} environment variable\n"
+                 f'  PowerShell:  $env:{cfg["key_envs"][0]} = "..."')
+    client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
+                    timeout=REQUEST_TIMEOUT, max_retries=2)
+    return client, cfg["model"]
 
 
 def main():
@@ -134,22 +206,18 @@ def main():
     parser.add_argument("--repo", default=".", help="Repo root for read_file context")
     args = parser.parse_args()
 
-    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-        sys.exit("No credentials: set the ANTHROPIC_API_KEY environment variable first\n"
-                 '  PowerShell:  $env:ANTHROPIC_API_KEY = "sk-ant-..."')
-
     diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
-    client = anthropic.Anthropic(timeout=REQUEST_TIMEOUT)
+    client, model = make_client()
     try:
-        review = run_review(client, diff_text, Path(args.repo))
-    except anthropic.AuthenticationError:
-        sys.exit("Invalid or missing API key — set ANTHROPIC_API_KEY")
-    except anthropic.RateLimitError:
-        sys.exit("Rate limited even after SDK retries — wait and rerun")
-    except anthropic.APIStatusError as e:
+        review = run_review(client, diff_text, Path(args.repo), model)
+    except openai.AuthenticationError:
+        sys.exit("Invalid or missing API key -- check your .env / environment variable")
+    except openai.RateLimitError:
+        sys.exit("Rate limited even after retries -- wait and rerun")
+    except openai.APIStatusError as e:
         sys.exit(f"API error {e.status_code}: {e.message}")
-    except anthropic.APIConnectionError:
-        sys.exit("Network error — check connection/proxy")
+    except openai.APIConnectionError:
+        sys.exit("Network error -- check connection/proxy")
 
     print(json.dumps(review, indent=2, ensure_ascii=False))
 
