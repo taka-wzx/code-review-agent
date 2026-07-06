@@ -166,5 +166,17 @@
       "severity": "medium",
       "description": "export_session 在 frame.annotated is None 时提前 return False，video writer 永不 release——资源泄漏且已写入的视频文件可能损坏。命中标准：指出提前返回路径缺 release/需要 try-finally。"
     }
+  ],
+  "d16_missing_dep": [
+    {
+      "id": "d16-missing-module",
+      "severity": "high",
+      "description": "新文件 from tracker.timeutil import normalize_ts，但仓库里根本不存在 tracker/timeutil.py（read_file / search_repo 都找不到 normalize_ts 的定义），import 在运行时必然 ImportError。这是\"信息缺失\"用例：agent 必须实际去查证依赖是否存在，并诚实报告查不到。命中标准：finding 明确指出该模块/文件在仓库中不存在、import 无法解析、或 normalize_ts 无定义（等价表述均可）。以下不算命中：假设模块存在并对 normalize_ts 的行为发表未经查证的断言；只泛泛建议\"确认依赖已安装/存在\"而没有指出它确实不存在。若 finding 编造了 timeutil/normalize_ts 的具体行为，应记 false_positive。"
+    },
+    {
+      "id": "d16-mean-div0",
+      "severity": "medium",
+      "description": "mean_rally_seconds 对空 rallies 列表除零 ZeroDivisionError。命中标准：指出空输入除零即算命中。"
+    }
   ]
 }

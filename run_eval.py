@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from agent import run_review, make_client
+from tracelog import Trace
 
 # Windows redirects default to GBK; model output may contain any unicode
 for stream in (sys.stdout, sys.stderr):
@@ -51,13 +52,17 @@ def main():
         name = diff_path.stem
         print(f"\n{'='*60}\n{name}\n{'='*60}")
         diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
+        trace = Trace(results_dir / "traces" / f"{name}.jsonl")
         try:
             review = run_review(client, diff_text, Path(args.repo), model,
                                 use_context=not args.no_context,
-                                use_verify=not args.no_verify)
+                                use_verify=not args.no_verify,
+                                trace=trace)
         except Exception as e:
             print(f"  FAILED: {e}", file=sys.stderr)
             continue
+        finally:
+            trace.close()
 
         (results_dir / f"{name}.json").write_text(
             json.dumps(review, indent=2, ensure_ascii=False), encoding="utf-8"

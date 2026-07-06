@@ -9,20 +9,33 @@ concrete defect with a plausible failure scenario in THIS code.
 Same cross-provider structured-output pattern as agent.py/judge.py:
 verdicts are delivered via a submit_verdicts tool call, structurally
 validated, with one retry that feeds the validation errors back.
+
+The verifier has the same read-only tools as the finder (read_file,
+search_repo): a Reflection pass without the means to check claims beyond
+the given context can only guess on findings whose truth lives in another
+file -- that is how d5 got wrongly dropped.
 """
 import json
 import sys
+
+from tools import READ_FILE_TOOL, SEARCH_REPO_TOOL, ToolSession
+from tracelog import tev
 
 VERIFIER_SYSTEM = """You are a strict code-review verifier. You receive a
 diff, repository context, and a numbered list of candidate findings from a
 first-pass reviewer. Decide KEEP or DROP for every finding.
 
+You have read_file and search_repo tools. When a finding's correctness
+depends on code you have not seen (another file, a caller, an import, a
+project convention), CHECK it with the tools before deciding. Never drop
+a finding as "unverifiable" without having tried to verify it.
+
 KEEP a finding only if ALL hold:
 - it identifies a concrete defect or high-risk behavior in the changed
   code: wrong result, crash, leak, dead code path, or a violated project
   convention that has a stated real consequence;
-- you can verify the claim yourself against the code shown -- do not
-  trust the finder; re-check the logic and the line it points at;
+- you can verify the claim yourself against the code shown or retrieved
+  -- do not trust the finder; re-check the logic and the line it points at;
 - it is not a duplicate/restatement of a finding you already kept.
 
 DROP a finding if ANY hold:
@@ -65,7 +78,8 @@ VERDICT_TOOL = {
     },
 }
 
-MAX_ATTEMPTS = 2
+MAX_STEPS = 6            # tool-use rounds before failing open
+MAX_SUBMIT_ATTEMPTS = 2  # invalid submit_verdicts payloads before failing open
 
 
 def validate_verdicts(verdicts: list, n_findings: int) -> list[str]:
@@ -104,9 +118,11 @@ def apply_verdicts(findings: list, verdicts: list) -> tuple[list, list]:
     return kept, dropped
 
 
-def verify_findings(client, model: str, review_input: str, findings: list) -> tuple[list, list]:
+def verify_findings(client, model: str, review_input: str, findings: list,
+                    repo_root, trace=None) -> tuple[list, list]:
     """Run the verifier pass. review_input is the exact user content the
-    finder saw (diff + retrieved context), so both passes share one view.
+    finder saw (diff + retrieved context), so both passes share one view;
+    the tools let the verifier check anything beyond that view itself.
 
     Returns (kept, dropped). On persistent verifier failure, fails open:
     keeps everything (a broken verifier must not silently eat findings).
@@ -121,39 +137,86 @@ def verify_findings(client, model: str, review_input: str, findings: list) -> tu
             + "\n\nCandidate findings to verify:\n\n"
             + json.dumps(numbered, ensure_ascii=False, indent=2)},
     ]
+    session = ToolSession(repo_root, trace=trace, component="verifier")
+    bad_submits = 0
     last_problems = []
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    for step in range(1, MAX_STEPS + 1):
+        # Graceful stop condition: on the last step, withdraw the explore
+        # tools and demand verdicts, instead of silently failing open.
+        final = step == MAX_STEPS
+        if final:
+            messages.append({"role": "user", "content":
+                "Step budget exhausted. Call submit_verdicts NOW, covering "
+                "every finding index exactly once, based on what you have "
+                "verified so far."})
         response = client.chat.completions.create(
             model=model, max_tokens=4000, temperature=0.0,
-            tools=[VERDICT_TOOL], tool_choice="auto", messages=messages,
+            tools=[VERDICT_TOOL] if final else [READ_FILE_TOOL, SEARCH_REPO_TOOL, VERDICT_TOOL],
+            tool_choice="auto", messages=messages,
         )
         msg = response.choices[0].message
-        call = next((tc for tc in (msg.tool_calls or [])
-                     if tc.function.name == "submit_verdicts"), None)
-        if call is None:
-            last_problems = ["verifier answered in text instead of calling submit_verdicts"]
-        else:
+        tool_calls = msg.tool_calls or []
+        tev(trace, "llm_response", component="verifier", step=step,
+            tool_calls=[tc.function.name for tc in tool_calls])
+        submit = next((tc for tc in tool_calls
+                       if tc.function.name == "submit_verdicts"), None)
+
+        problems = []
+        if submit is not None:
             try:
-                verdicts = json.loads(call.function.arguments).get("verdicts")
+                verdicts = json.loads(submit.function.arguments).get("verdicts")
             except json.JSONDecodeError as e:
-                last_problems = [f"malformed JSON in tool arguments: {e}"]
+                problems = [f"malformed JSON in tool arguments: {e}"]
             else:
-                last_problems = validate_verdicts(verdicts, len(findings))
-                if not last_problems:
-                    return apply_verdicts(findings, verdicts)
-        print(f"[verifier attempt {attempt}] invalid: {last_problems}", file=sys.stderr)
-        messages.append({"role": "assistant", "content": msg.content or "",
-                         **({"tool_calls": [{"id": call.id, "type": "function",
-                                             "function": {"name": "submit_verdicts",
-                                                          "arguments": call.function.arguments}}]}
-                            if call else {})})
-        if call:
-            messages.append({"role": "tool", "tool_call_id": call.id,
-                             "content": "Verdicts rejected: " + "; ".join(last_problems)})
-        else:
+                problems = validate_verdicts(verdicts, len(findings))
+                if not problems:
+                    kept, dropped = apply_verdicts(findings, verdicts)
+                    tev(trace, "verdicts", steps=step,
+                        kept=len(kept), dropped=len(dropped))
+                    return kept, dropped
+            bad_submits += 1
+            last_problems = problems
+            print(f"[verifier step {step}] invalid verdicts: {problems}", file=sys.stderr)
+            tev(trace, "submit_rejected", component="verifier", problems=problems)
+            if bad_submits >= MAX_SUBMIT_ATTEMPTS:
+                break
+
+        if not tool_calls:
+            # Answered in text: counts as a failed attempt, then nudge.
+            bad_submits += 1
+            last_problems = ["verifier answered in text instead of calling submit_verdicts"]
+            print(f"[verifier step {step}] {last_problems[0]}", file=sys.stderr)
+            if bad_submits >= MAX_SUBMIT_ATTEMPTS:
+                break
+            messages.append({"role": "assistant", "content": msg.content or ""})
             messages.append({"role": "user",
-                             "content": "You must call submit_verdicts. Problems: "
-                                        + "; ".join(last_problems)})
-    print(f"[verifier] FAILED after {MAX_ATTEMPTS} attempts, failing open "
-          f"(keeping all {len(findings)} findings)", file=sys.stderr)
+                             "content": "You must call submit_verdicts covering "
+                                        "every finding index exactly once."})
+            continue
+
+        # Execute this round's tool calls; a rejected submit gets its
+        # problem list back as the tool result.
+        messages.append({
+            "role": "assistant",
+            "content": msg.content or "",
+            "tool_calls": [{
+                "id": tc.id,
+                "type": "function",
+                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+            } for tc in tool_calls],
+        })
+        for tc in tool_calls:
+            if tc is submit:
+                content = "Verdicts rejected: " + "; ".join(problems)
+            else:
+                print(f"[verifier step {step}] {tc.function.name} "
+                      f"{tc.function.arguments[:120]}", file=sys.stderr)
+                content = session.execute(tc.function.name, tc.function.arguments)
+            messages.append({"role": "tool", "tool_call_id": tc.id,
+                             "content": content})
+
+    print(f"[verifier] FAILED (steps={MAX_STEPS} cap or {bad_submits} bad submits), "
+          f"failing open -- keeping all {len(findings)} findings; "
+          f"last problems: {last_problems}", file=sys.stderr)
+    tev(trace, "verifier_fail_open", n_findings=len(findings), problems=last_problems)
     return findings, []
