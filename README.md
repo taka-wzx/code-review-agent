@@ -153,12 +153,37 @@ drop+drop→dropped、**分歧→保留标 uncertain+附少数派理由**(两 pa
 代价 precision 0.83→0.74(uncertain 边界条目存活,已在呈现层隔离),F1 持平 0.795。
 剩余 0/3(d7×2、d10、d11)全是 **finder 没报**,uncertain 救不了"没报"——瓶颈正式换层。
 
+## W10：finder 类别清单 + verifier 证据规则(2026-07-10,对着 4 个 0/3 的两层瓶颈)
+
+立项前提经原始 run JSON 核查后修正:四个 0/3 里只有 d7-dead-flag、d11-origin 是 finder
+真没报;d7-gap、d10-cov 是 finder 间歇报出、被双复核 2/2 砍("投机建议"类理由)。两个改动:
+
+1. **finder 清单**(agent.py SYSTEM):三类常漏缺陷的主动检查提示——死路径(把旗标实际值
+   代入 guard 条件)、文档写明却未处理的输入、数值/统计缺陷。首句 guardrail:清单是待验证
+   假设,报出须指名具体代码路径+失败机制。措辞类别化零 eval 专名。
+2. **verifier 证据规则**(VERIFIER_SYSTEM,判据本体一字不动):文档写明的输入条件是"未处理"
+   类 finding 的支持证据而非"有意设计";指名了量+机理的慢性数值 finding 不算泛泛建议,
+   怀疑≠反驳;死路径可达性按 repo 内实际定义判,"假想的未来调用方"不是反驳,反向排除
+   "新增函数暂无调用方≠死代码"。节首优先级声明(与 DROP 列表冲突时以本节为准)。
+
+两项各经一次记录在案的措辞迭代(Stage A/B 靶向验收 + holdout 把关全程,过程见 cases.md)。
+
+**终测(V2×3)**:recall 0.856 持平(区间变宽 [.800–.900])、precision 0.743→0.777、
+F1 0.795→**0.811**、noise 8.3→**5.3**、陷阱均值 3.0→**1.0**、never_hit **4→2**
+(d7-gap 历史首次 2/3,d7-dead-flag 历史首次存活 1/3;剩 d10-cov、d11-origin)。
+代价:成本 +26.6%(870k in/轮)、unstable 1→4(其中 2 个是毕业爬升型)。预写门槛 5 过
+4 未达,未达项归因全指向方差/协议缺陷/成本——判**有保留通过**。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
-- 主动预取仍不追 import——现在靠 agent 用 search_repo 按需补,预取层缺口保留
-  （d7-dead-flag-path 三版 0/3 全 miss,是最硬的架构靶子,与 d11-origin-fit 并列）
-- verifier 的"投机建议"判据会系统性误伤两类真 bug（n=3 证据:d10-cov-asymmetry、
-  d7-gap-connect 在 v0/v1 偶中、v2 下 0/3——finder 找到了也被砍）;且 verifier 严格度
-  自身有方差（v2 noise [2–9]）。prompt 迭代的前置条件已就位:held-out 集
-  `eval/holdout/`（只在验收时跑）
+- **剩余两个 0/3 都卡在 finder 识别层**:d10-cov-asymmetry(识别率 ~56%,报出且表述正确
+  +新证据规则的组合尚未被采样到——规则二未经检验而非已失败)、d11-origin-fit(领域难档,
+  三代 0/x,挂起)。d5/d6/dead-flag 同属 finder 率问题——"报了被砍"已修,finder 采样
+  (温度>0 多采样/双跑并集)是 W11 的自然靶子,W10 立项时缓期它的理由已不成立
+- **verifier 无 scope 口径**:diff 外 [Pre-existing] 发现 W5 时代被砍、W10 经分歧通道
+  存活(终测 run1 四条,协议记 FP 但实为共享 fixture 的他用例埋点)——三代口径摇摆,
+  需要显式规则
+- **分歧率自身方差大**(uncertain 5–14 条/run):run 间 precision 波动的主因;共享 fixture
+  的评测协议把"顺路发现的真 bug"记 FP,压低 precision 读数
+- 成本 870k in/轮(+27% vs W9),未预算化

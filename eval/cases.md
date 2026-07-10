@@ -267,4 +267,28 @@ W9 候选(需先想清机制,不是改措辞):verifier 边界裁决方差——�
 - holdout(轮1/轮2):recall 7/7 / 6/7(h2 行数上限回到 miss,历史方差)、**h5 除零两轮 confirmed(规则收紧未误伤负向控制)**、h6 陷阱两轮各 1 条 uncertain(同一条 MAX_POLYLINE_POINTS 性能猜测:反对票理由每次都正确,经 W9 分歧保留通道存活;Stage A 两轮 finder 未产出它而 finder prompt 相同→finder 方差聚簇+keep 偏置合并的固有代价,非 Evidence rules 放行)、FP 1(=classify_bounce fixture 预存真 bug,同 Stage A 定性)、原始 precision 0.778/0.75(剔除 fixture 协议误伤后 0.875/0.857)。
 - **判定:Stage B 有保留通过**——两个 verifier 砍杀靶子攻破,无害面净改善(FP 回落、垃圾门未松、h5 未误伤);遗留:d10-cov 未证、h6 uncertain 噪音 1 条/run。迭代预算已尽,终测按预写门槛裁决,不过则回滚改动二。
 
-**主集终测与四代对比(待补)**
+**主集终测(V2×3)与四代对比:**
+
+| | recall | precision | F1 | noise | unstable | never-hit |
+|---|---|---|---|---|---|---|
+| W7 单复核 | 0.811 [.800–.833] | 0.833 [.727–.920] | 0.819 [.776–.856] | 4.7 [2–9] | 3 | 4 |
+| W8 单复核 | 0.778 [.767–.800] | 0.830 [.759–.885] | 0.803 [.763–.840] | 4.3 [3–7] | 2 | 6 |
+| W9 双复核 | **0.856 [.833–.867]** | 0.743 [.722–.781] | 0.795 [.776–.822] | 8.3 [7–9] | **1** | 4 |
+| **W10 清单+证据规则** | **0.856** [.800–.900] | 0.777 [.667–.852] | **0.811 [.754–.854]** | **5.3 [3–8]** | 4 | **2** |
+
+预写标准逐项判定(5 过 4 未达,未达项全部附归因):
+
+1. **never_hit 4→≤2 ✅**:剩 d10-cov-asymmetry、d11-origin-fit。d7-dead-flag-path(全历史 0/9 → 1/3)与 d7-gap-connect(v2 历史 0/6 → 2/3)双双毕业。子条款"{dead-flag,gap,cov} 至少 2 个 ≥2/3"✘:仅 gap 达标——dead-flag 卡在 finder 采样率(~50%,协议 6 run 报出 3 次),cov 卡在 finder 率(9 run 5 次)×"正确表述+新规则"组合未被采样(报出的 3 次里 2 次撞旧规则、1 次机理表述错误属合法砍杀)。
+2. **recall mean ≥0.856 ✅(持平);min ≥0.833 ✘(0.800)**。翻转表:全集仅 4 bug 变动,+dead-flag/+gap 对 -d5-window(2/3→1/3)/-d6-ghost(3/3→1/3)。d5/d6 是 W7 以来的历史 flapper(W8 双双 0/3);拆账:d6 run1=finder 深度(报了 asr 被忽略、没连到缺过滤→鬼弹跳),run3=verifier 边界砍(理由未引用新规则);d5 run2/3=finder 未产出——**非清单挤占**(run1 命中恰是清单 documented-unhandled 类+规则一协同:引调用方注释、uncertain 存活)。
+3. **precision mean ≥0.70 ✅(0.777,较 W9 +0.034);min ≥0.68 ✘(0.667,差 0.013,run1)**。
+4. **F1 ≥0.795 ✅(0.811)**;区间 [.754–.854] 较 W9 变宽——方差是本轮的真实代价。
+5. **noise ≤10 ✅(5.3 [3–8],较 W9 -36%)**;陷阱 d12+d13 **✅✅(2/0/1,均值 1.0 vs W9 的 3.0)**——立项最担心的"清单诱发陷阱误报"反向改善。
+6. FP ≤1.0 ✘(原始 2.33):run1 的 5 条里 4 条是**共享 fixture 的他用例埋点**被 d5 的 finder 顺路报出(gate.py=d14、bounce.py=d1、speed.py=d2 的埋点,finder 全部自觉标注 [Pre-existing],全走 uncertain 分歧通道存活)——真 bug 被协议记 FP,同 holdout classify_bounce 定性;剔除后 1.0 恰在线。无 3/3 系统性 FP ✅。**W5 时代 verifier 砍 [Pre-existing] 越界条目,现经分歧通道存活——scope 口径缺位是新暴露的真缺口**(W7 已有前兆观察)。
+7. unstable ≤3 ✘(4):其中 2 个(dead-flag 1/3、gap 2/3)是从 never_hit 毕业的**爬升型**;存量不稳定 d5、d6 各 1/3。
+8. 成本 ≤790k ✘(**870k,+26.6%**):弥散行为成本——更多探索轮次+更多 findings 过双复核,tokens_out 同步 +26%,非单纯 prompt 变长。
+
+**归因审计補遗**:交互项(清单类且 kept)3 run 共 ≈2 条(d15 percentile 数值断言 uncertain、d6 未引用常量 confirmed)——两改动恶性交互未成洪水;no-callers 排除条款在终测正确工作(d6 RallyState 三 run 全被正确 drop,run2/3 的 drop 理由逐字引用规则);uncertain 计数 14/8/5——分歧率自身方差大,run1 的 precision/FP 越线全部来自该轮分歧异常高。
+
+**一句话**:W10 把"verifier 系统性砍杀"这一族修掉了(gap 历史首次 2/3、dead-flag 历史首次存活),never_hit 减半、noise -36%、陷阱 -67%、F1 +0.016;代价是方差变宽(recall 区间 [.800–.900])与成本 +27%。**判定:有保留通过,不回滚**——未达项归因全指向方差/协议缺陷/成本,无一指向机制有害;若按噪声门回滚将重蹈 W8 的反向错误。
+
+**W11 候选**(机制先行):①verifier scope 规则——diff 外 [Pre-existing] 发现的处置口径(run1 四条越界 FP 的直接靶子,W5/W7/W10 三代口径摇摆);②finder 采样——d10-cov/d5/d6/dead-flag 现在全卡 finder 率,且"报了被砍"已修,**W10 立项时缓期双跑并集的反对理由(照样死在 verifier)已不成立**,温度>0 多采样或双跑并集重新入围;③成本回收(+27% 需要预算化)。d11-origin 维持领域难档挂起。
