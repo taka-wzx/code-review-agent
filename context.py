@@ -16,6 +16,8 @@ budgeted so the pack cannot blow up the prompt.
 import re
 from pathlib import Path
 
+from tools import SKIP_DIRS
+
 CONVENTION_FILES = ("CLAUDE.md", "CONVENTIONS.md", "CONTRIBUTING.md")
 CONVENTIONS_CAP = 6_000      # chars per conventions file
 CHANGED_FILE_CAP = 8_000     # chars per changed file
@@ -25,8 +27,6 @@ SNIPPET_CTX_LINES = 3        # lines of context around a caller line
 MAX_CALLER_FILES = 3         # caller files per symbol
 MAX_HITS_PER_FILE = 3        # snippets per caller file
 PACK_CAP = 28_000            # total chars for the whole pack
-
-SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules"}
 
 _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 _ADDED_DEF_RE = re.compile(r"^\+\s*def\s+(\w+)", re.MULTILINE)

@@ -29,7 +29,9 @@ $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY
 
 ## 结构
 
-- **agent loop**（agent.py）：`run_review()` — 调 API → 有 `tool_calls` 就执行、把 `role:"tool"` 结果回填 → 循环直到模型提交合法的 `submit_review`
+- **agent loop**（agentloop.py，finder/verifier 共用引擎）：`run_submit_loop()` — 调 API → 有 `tool_calls` 就执行、把 `role:"tool"` 结果回填 → 循环直到模型提交校验合法的 submit 载荷（末步撤探索工具催交）；agent.py `run_review()` / verifier.py `_verify_pass()` 只留 prompt、载荷校验和成败映射
+- **provider**（llm.py）：`make_client()` — `LLM_PROVIDER` 切 deepseek/glm，OpenAI 兼容端点（自 agent.py 抽出）
+- **测试**（tests/，零 API 调用）：FakeClient golden 测试锁定请求序列（消息/工具/催交与拒绝文案）和 trace 事件流——行为保持重构的安全网；外加校验/合并/指标纯函数单测。跑法：`python -m unittest discover -s tests`
 - **工具**（tools.py，finder/verifier 共用）：`read_file`（路径逃逸检查、大文件按 `start_line` 续读、文件不存在时返回候选路径/"仓库里确实没有"——错误信息可恢复）+ `search_repo`（字面量全仓 grep,追 import/查符号是否存在）+ `submit_review`
 - **结构化输出**：把「提交结果」做成 `submit_review` 工具、schema 当函数参数——不依赖任何厂商专有的 JSON 模式，跨 DeepSeek/GLM 通用；payload 过 `validate_review` 结构校验，非法则把问题回填重试（W6）
 - **护栏**：`MAX_STEPS=10`、坏 submit 上限 2、同参数重复工具调用短路、`temperature=0`、每次请求 120s 超时（SDK 自动重试两次）、工具失败回可恢复的 `Error:` 文本而不是崩

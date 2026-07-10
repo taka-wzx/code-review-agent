@@ -15,12 +15,9 @@ from pathlib import Path
 
 from agent import run_review
 from llm import make_client
-from tracelog import Trace
+from tracelog import Trace, force_utf8
 
-# Windows redirects default to GBK; model output may contain any unicode
-for stream in (sys.stdout, sys.stderr):
-    if hasattr(stream, "reconfigure"):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+force_utf8()
 
 HERE = Path(__file__).parent
 DIFFS = HERE / "eval" / "diffs"

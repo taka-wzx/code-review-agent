@@ -14,11 +14,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Windows redirects default to GBK; model output may contain any unicode
-for _stream in (sys.stdout, sys.stderr):
-    if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-
 from openai import OpenAI
 import openai
 
@@ -26,8 +21,10 @@ from agentloop import run_submit_loop
 from context import build_context
 from llm import make_client
 from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
-from tracelog import Trace, tev
+from tracelog import Trace, force_utf8, tev
 from verifier import verify_findings
+
+force_utf8()
 
 MAX_STEPS = 10           # hard cap on loop iterations
 MAX_SUBMIT_ATTEMPTS = 2  # invalid submit_review payloads before giving up

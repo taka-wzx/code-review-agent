@@ -6,10 +6,27 @@ rejected submit, the final outcome. That is what makes run-to-run variance
 debuggable and step-efficiency metrics (wasted/repeat calls) computable.
 
 Named tracelog (not trace) to avoid shadowing the stdlib trace module.
+Also hosts the two run-plumbing helpers every entry script needs:
+force_utf8() and iter_events().
 """
 import json
+import sys
 import time
 from pathlib import Path
+
+
+def force_utf8() -> None:
+    """Windows redirects default to GBK; model output may contain any
+    unicode. Entry scripts call this once at import time."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def iter_events(path):
+    """Yield the parsed event dicts of one JSONL trace file."""
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        yield json.loads(line)
 
 
 class Trace:

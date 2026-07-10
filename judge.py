@@ -16,11 +16,9 @@ import sys
 from pathlib import Path
 
 from llm import make_client
+from tracelog import force_utf8
 
-# Windows redirects default to GBK; judge reasons may contain any unicode
-for stream in (sys.stdout, sys.stderr):
-    if hasattr(stream, "reconfigure"):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+force_utf8()
 
 HERE = Path(__file__).parent
 TRUTH_PATH = HERE / "eval" / "truth.json"

@@ -13,14 +13,13 @@ Usage:
                           [--per-diff] [--price-in 2.0 --price-out 8.0]
 """
 import argparse
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-for stream in (sys.stdout, sys.stderr):
-    if hasattr(stream, "reconfigure"):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+from tracelog import force_utf8, iter_events
+
+force_utf8()
 
 
 def expand_run_dirs(target: Path) -> list[Path]:
@@ -51,8 +50,7 @@ def collect(trace_files) -> dict:
         "calls": 0, "tokens_in": 0, "tokens_out": 0, "tool_calls": 0}))
     for tf in trace_files:
         name = tf.stem
-        for line in tf.read_text(encoding="utf-8").splitlines():
-            e = json.loads(line)
+        for e in iter_events(tf):
             comp = e.get("component", "?")
             if e.get("kind") == "llm_response":
                 d = per_diff[name][comp]
@@ -88,8 +86,7 @@ def run_stats(run_dir) -> dict:
     for tf in iter_trace_files([str(run_dir)]):
         maxstep = defaultdict(int)
         streak = defaultdict(int)
-        for line in tf.read_text(encoding="utf-8").splitlines():
-            e = json.loads(line)
+        for e in iter_events(tf):
             comp = e.get("component", "?")
             d = stats[comp]
             if e.get("kind") == "llm_response":

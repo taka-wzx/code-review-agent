@@ -23,9 +23,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-for stream in (sys.stdout, sys.stderr):
-    if hasattr(stream, "reconfigure"):
-        stream.reconfigure(encoding="utf-8", errors="replace")
+from tracelog import force_utf8, iter_events
+
+force_utf8()
 
 HERE = Path(__file__).parent
 DIFFS = HERE / "eval" / "diffs"
@@ -83,8 +83,7 @@ def trace_tokens(run_dir: Path) -> dict:
     """Sum finder/verifier tokens over all traces in a run directory."""
     tot = {"tokens_in": 0, "tokens_out": 0, "llm_calls": 0}
     for tf in (run_dir / "traces").glob("*.jsonl"):
-        for line in tf.read_text(encoding="utf-8").splitlines():
-            e = json.loads(line)
+        for e in iter_events(tf):
             if e.get("kind") == "llm_response":
                 tot["tokens_in"] += e.get("tokens_in", 0)
                 tot["tokens_out"] += e.get("tokens_out", 0)
