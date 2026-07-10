@@ -210,11 +210,14 @@ def run_linter(repo_root: Path, rel_path: str) -> str:
 class ToolSession:
     """Executes read_file/search_repo/run_linter calls for one agent conversation."""
 
+    MISS_STREAK_NUDGE_AT = 3  # consecutive search misses before nudging
+
     def __init__(self, repo_root: Path, trace=None, component: str = ""):
         self.repo_root = Path(repo_root)
         self.trace = trace
         self.component = component
         self._seen: set[tuple] = set()
+        self._miss_streak = 0
 
     def execute(self, name: str, arguments_json: str) -> str:
         try:
@@ -248,7 +251,36 @@ class ToolSession:
                     result = f"Error: unknown tool {name!r}."
             except Exception as e:
                 result = f"Error: {e}"
+            result = self._apply_miss_streak(name, result)
+        extra = {}
+        if name == "search_repo" and not repeat:
+            extra = {"miss": result.startswith("No matches for"),
+                     "miss_streak": self._miss_streak}
         tev(self.trace, "tool", component=self.component, tool=name, args=args,
             repeat=repeat, result_chars=len(result),
-            error=result.startswith("Error:"))
+            error=result.startswith("Error:"), **extra)
+        return result
+
+    def _apply_miss_streak(self, name: str, result: str) -> str:
+        """Track consecutive search_repo misses; nudge instead of letting the
+        model burn its step budget on spelling/syntax variants of one symbol.
+        Absence stays a reportable conclusion (same stance as read_file's
+        missing-file message) -- the nudge only discourages variant retries."""
+        if name != "search_repo":
+            if not result.startswith("Error:"):
+                self._miss_streak = 0  # productive pivot to another tool
+            return result
+        # A regex-looking miss is a usage error the tool itself asks to retry
+        # once with plain text; that retry is legitimate, so don't count it.
+        if result.startswith("No matches for") and "search is literal" not in result:
+            self._miss_streak += 1
+            if self._miss_streak >= self.MISS_STREAK_NUDGE_AT:
+                result += (
+                    f"\nNOTE: {self._miss_streak} consecutive misses. One clean "
+                    "miss already proves absence in this repository -- record "
+                    "the conclusion (an unresolved reference may itself be a "
+                    "reportable defect) and move on; do not retry spelling or "
+                    "syntax variants of the same symbol.")
+        elif not result.startswith("Error:"):
+            self._miss_streak = 0
         return result

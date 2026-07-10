@@ -292,3 +292,30 @@ W9 候选(需先想清机制,不是改措辞):verifier 边界裁决方差——�
 **一句话**:W10 把"verifier 系统性砍杀"这一族修掉了(gap 历史首次 2/3、dead-flag 历史首次存活),never_hit 减半、noise -36%、陷阱 -67%、F1 +0.016;代价是方差变宽(recall 区间 [.800–.900])与成本 +27%。**判定:有保留通过,不回滚**——未达项归因全指向方差/协议缺陷/成本,无一指向机制有害;若按噪声门回滚将重蹈 W8 的反向错误。
 
 **W11 候选**(机制先行):①verifier scope 规则——diff 外 [Pre-existing] 发现的处置口径(run1 四条越界 FP 的直接靶子,W5/W7/W10 三代口径摇摆);②finder 采样——d10-cov/d5/d6/dead-flag 现在全卡 finder 率,且"报了被砍"已修,**W10 立项时缓期双跑并集的反对理由(照样死在 verifier)已不成立**,温度>0 多采样或双跑并集重新入围;③成本回收(+27% 需要预算化)。d11-origin 维持领域难档挂起。
+
+## W11(2026-07-10):成本优先——兔子洞刹车 + 计量固化 + 预算纪律
+
+用户定 W11 范围=成本优先,新机制(scope 规则/双跑并集)缓期 W12+。**离线归因先行**(W9/W10 全量 trace 对比,零 LLM 成本):
+
+- +183k/轮中 finder 占 +128k(70%):calls 73→90、步深 4.58→5.62、单 call 3.63k→4.38k(额外 calls ≈61k + 单 call 增长 ≈67k,其中清单 prompt ≈18k、其余为深轮次会话重放)。verifier +55k 全是单 call 增量(证据规则×102 calls+更长 findings),calls 持平——**验收过的措辞不为省 token 改写(W8 教训),不动**。
+- **兔子洞是长期洼地非 W10 新增**:finder not-found 搜索 W9 71/run、W10 79/run,3+ 连败变体链两代都 ~12.7 条/run(链内 calls 29→33)。样本:d7 的 draw_line→.draw_line→def draw_line→cv2→class.*Frame。
+
+**改动**:T1 工具层连败刹车(ToolSession 会话级计数,search_repo 连续 3 次 clean miss 起在结果尾注入 nudge:"一次未命中已证不存在,缺失本身可报告,勿再试变体";regex 用法错误类 miss 不计数——工具自己让它重试一次纯文本,合法;命中或其他工具成功即清零;prompt 零改动)。T2 cost_report 固化归因能力(repeat 根聚合/--baseline 对比/连败链计数)。T3 预算规则:**机制类改动 tokens_in 预算 ≤+10%/W,超出需当轮回收或明示豁免**。
+
+**预写验收(靶向为主;成本专项不跑 2M token 全量终测,全量口径留给 W12 重新基线化,记录在案)**:
+
+1. 靶向 trio×3(vs w10b2):tokens_in 降 ≥10%;行为无回退——d7-gap judge 层 ≥1/3、dead-flag finder 层 ≥1/3、noise ≤基线+1、FP ≤基线。
+2. d16 探针×2:d16-missing-module 2/2 命中、诚实无编造——**d16 正是靠"搜不到"下结论的用例,刹车不得误伤缺失检测**(nudge 措辞已内置"缺失可报告")。
+3. holdout×1:recall ≥6/7、h5 kept、h6 ≤1 uncertain、noise ≤2、FP ≤1(classify_bounce fixture 伪影)。
+4. 失败处置:行为回退→只回滚 T1(T2/T3 零风险保留),nudge 措辞迭代预算 1 次。
+
+T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 不计/其他工具成功清零/repeat 短路不受扰);trace 事件补显式 miss/miss_streak 字段(旧 trace 用 result_chars 启发,W11 起精确)。
+
+**验收结果(2026-07-10)**:
+
+1. **行为门全过**:d16 探针 2/2 confirmed、表述诚实零编造(刹车未误伤缺失检测);holdout recall 6/7(唯一 miss 仍是 h2 行数上限)、h5 2/2、**h6 陷阱 0 条**(W10-B 的性能猜测未复现,佐证其方差定性)、FP 0、noise 1;trio 无回退——dead-flag finder 层 **1/3→3/3**、gap 3/3,judge 层持平(1/3、2/3),noise 2.33、FP 0.33 均在线。
+2. **机制指标达成**:连败链 calls 三组件一致下降——finder 10.3→9.0、verifierA 4.3→2.3、verifierB 5.0→3.3(合计 **-27%~-46%**;ToolSession 共享,verifier 侧同获刹车,全量口径链存量 ~83 calls/run)。
+3. **成本门 ✗,记为门槛设计失误**:trio tokens_in +3.3%(163.6k vs 158.4k)而非 -10%。归因:①效应量(全量估 -4~7%)在 3-diff 切片 σ±16%(历史 130-183k)下不可分辨——**预写门槛在该切片上统计不可达成,W8 的 n=1 教训在门槛设计侧重演**;②读数被收益推高——d7 finder 32.2k→47.6k 正是因为三轮全执行了旗标核查(dead-flag 3/3 的代价),小切片上成本与收益读数纠缠。真实全量成本效果留待 W12 重新基线化时 `cost_report --baseline` 一条命令校验(记录在案)。
+4. **判定:T1 保留**——无害已证+机制指标一致下降;回滚一个行为无害、机制有效的改动去满足统计不可达成的门,是 W8 教训的反向重演。T2 复现 W9→W10 归因表逐位一致(finder +128,109/总 +183,281=+26.7%)后固化。
+
+**预算规则(T3,即日生效)**:机制类改动 tokens_in 预算 **≤+10%/W**(全量 V2×3 口径),超出需当轮专项回收或在 cases.md 明示豁免及理由;每轮 W 终测必须跑 `cost_report --baseline <上代 results_repeat>` 出对比表入档。成本门槛今后只在全量口径上设定,靶向切片只看机制指标(如链 calls)。
