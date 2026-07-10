@@ -230,3 +230,35 @@ W9 候选(需先想清机制,不是改措辞):verifier 边界裁决方差——�
 5. **d7 uncertain 回收 ✘**:d7-dead-flag、d7-gap、d10、d11-origin 仍 0/3——这四个的瓶颈在 **finder 根本没报**(uncertain 机制救的是"报了被砍",救不了"没报"),如实记录。顺带:d4-magic 3/3(run1 经 uncertain 通道存活——分歧兜底在主集的实战首秀)。
 
 **一句话**:双复核把 verifier 从"抛硬币"修成"可预测":recall +0.078 且区间最窄、unstable 归一,代价 precision -0.087(全部来自被隔离呈现的 uncertain 边界条目)。剩余四个 0/3 全是 finder 识别问题,W10 的靶子换层了。
+
+## W10（2026-07-10）：finder 类别提示 + verifier 证据规则——对着 4 个 0/3 的两层瓶颈
+
+**归因修正(立项前提)**:W9 结论"四个 0/3 全是 finder 没报"经原始 run JSON(results_repeat_w9/v2_run1..3)核查后**修正为两类失败模式**:
+
+- 真·finder 盲区(kept 和 dropped_findings 里都从未出现):d7-dead-flag-path、d11-origin-fit。
+- finder 报了、被双复核 2/2 砍:d7-gap-connect(run3 报出,drop 理由"docstring explicitly documents that gaps exist … intentional design choice"——推理错误:文档写明输入条件≠代码处理了它)、d10-cov-asymmetry(run3 报出 Joseph form,drop 理由"Generic best-practice advice … speculative robustness advice"——但 truth.json 明说报出即算)。W5 失败分析早有预警:verifier 证据标准对"慢性数值问题"天然不利。uncertain 机制救不了它们是因为两 pass **一致**砍——分歧兜底根本没触发。
+
+**设计**(两个改动,均为 prompt 增量,判据本体一字不动):
+
+1. **finder SYSTEM 加三类缺陷清单**(死路径旗标组合/文档化未处理输入/数值统计缺陷),插在 coverage 段与 step-budget 段之间。首句 guardrail:清单是待验证假设,报出须指名具体代码路径+失败机制——防清单诱发投机 findings 的第一道闸。措辞类别化零 eval 专名(无 Kalman/Joseph/旗标名),防过拟合。
+2. **VERIFIER_SYSTEM DROP 列表后加 Evidence rules 两条**:①文档写明的输入条件是"代码未处理该条件"类 finding 的**支持证据**,不是"有意设计"的证据(括号句显式封死 w8a 反向解读——"无文档"也不自动=投机,那次教训砍了 h5 除零);②指名了"哪个量如何变错+机制"的数值 finding 不算泛泛建议,无法反驳机制则 keep;"X 比 Y 更稳"仍是 DROP。W8 改动一的失败模式是**重写判据本体**,本次只加限定范围的澄清,且 W9 下 drop 需 2/2 票,措辞残余误差被平方压制。
+
+**不做**:finder 双跑并集(缓期)——真盲区 3 次独立 run 出现率≈0 并集救不了;间歇报出的照样死在 verifier 2/2;需新增去重机制且成本约 +60%。
+
+**预写验收标准(跑之前落笔)**:
+
+- **Stage A(仅改动一,靶向 d7_display,d10_filter,d11_cor ×3 + holdout)**:finder 层(kept∪dropped)报出 ≥2 个此前从未报出的目标 finding,其中 d7-dead-flag/d11-origin 至少一个;holdout recall≥6/7、h6=0、noise≤2、每 diff finder 总 findings(kept+dropped)≤W9 同 diff +3。此阶段 d7-gap/d10-cov 被旧判据 verifier 砍属预期,不算失败。失败处置:holdout 噪音超标→收紧 guardrail 措辞,最多迭代 1 次;finder 仍不报→回滚改动一记 negative result,只带改动二继续。
+- **Stage B(合体,同靶向 ×3 + holdout)**:目标 findings 以 confirmed/uncertain 存活;**d10 的五条已知垃圾(inv-vs-solve、docstring 完整性、type hints、list-vs-ndarray、单位约定)仍须被 drop**——噪音闸门未炸的直接判据;holdout recall≥6/7、**h5 除零 kept**(Evidence rules 括号句的负向控制)、h6=0、noise≤2、precision≥0.85。失败只回滚改动二,保留已验收的改动一。
+- **主集终测(V2×3,锚定 results_repeat_w9)**:never_hit 4→≤2 且 {d7-dead-flag,d7-gap,d10-cov} 至少 2 个 ≥2/3;recall mean≥0.856 且 min≥0.833(成功目标 ≥0.89);precision mean≥0.70、min≥0.68;F1 mean≥0.795(净收益要求);noise mean≤10、max≤12;陷阱 d12+d13 合计 kept 每轮≤4、均值≤3.0(W9 基线本就非零:4/2/3);unstable≤3;tokens_in mean≤790k(+15%)。d11-origin-fit 为 stretch 不作硬门槛(领域难档,勿为单点过拟合措辞)。
+- **归因审计(必做,数字过线也不能省)**:4 个目标 bug 逐个走 finder→verifier→judge 链路;相对 W9 每条新增 noise 三分类——(i)属清单三类且 kept=**两改动交互项**(最危险),(ii)非清单类、按 W9 drop 模式本会被砍=verifier 放宽独立效应,(iii)其余=方差;查 d12/d13 与 3/3 系统性 FP。
+
+**Stage A 结果(2026-07-10,含一次措辞迭代)**:
+
+- 轮1(靶向 d7/d10/d11 ×3):finder 层 d10-cov 2/3、d7-gap 1/3(kept 的 d10-dt-zero finding 直接用了清单词汇"Documented-but-unhandled input"——清单在被执行);但 **d7-dead-flag 0/3**(改动前冒烟 run 曾完整报出=能力在,率不足)、d11-origin 0/3。trace 归因:config 值经预取已在 pack 里,finder 却被 `frame.draw_line` 外部接口吸走预算(搜 cv2/class Frame/def draw_line),从未把旗标值代入 guard;run2/3 还把"死路径"退化成"无调用方=死代码"。holdout 全绿(recall 6/7、h6=0、noise 0、FP 0)。
+- 预写规则只给"噪音超标"留迭代预算、"仍不报"应回滚;但归因显示这是措辞可修的机制问题(非能力缺失),按 W8 教训(归因优先于数字)做了**一次记录在案的措辞迭代**:死路径条目改为"把实际值代入 guard 条件(常已在 pack 里),强于'无调用方'"——迭代对着机制,不提任何用例专名。
+- 轮2(d7×3 + holdout 重跑):**dead-flag finder 层 2/3**(run3 完整命中:两旗标齐名+"predicted trajectory is never drawn";run2 弱形式),全被旧 verifier 砍——drop 理由"eventual callers are unknown, we cannot verify the dead-path claim"=**用假想的未来调用方否决 config.py:7 的文档证据**('wiring is not enabled yet')。第三种砍杀模式,Evidence rules 需补第三条(死路径可达性按 repo 内实际存在的定义/接线判,计划偏差记录在案)。holdout:recall **7/7**(h2 行数上限这个历史稳定 miss 也抓到了)、h6 陷阱=0、noise=0、FP=1——**经核查为 fixture 预存真 bug**(holdout bounce.py classify_bounce 忽略 vy_at_snap,§5.1 违例,fixture 从主集复制带入、未埋点;judge"埋点之外即 FP"的协议口径误伤,且 W7 已记录同款"报 diff 外预存 bug"行为,非 checklist 新增害处)。
+- **判定:Stage A 通过**——dead-flag finder 识别率 0→2/3,d10-cov 2/3,d7-gap 2/3(轮2),无害门全绿;d11-origin 维持 stretch,不为它迭代。
+
+**Stage B 结果(待补)**
+
+**主集终测与四代对比(待补)**

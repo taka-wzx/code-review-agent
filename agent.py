@@ -60,6 +60,22 @@ consider low-severity. Do not filter for importance at this stage -- your
 goal is coverage. For each finding include severity so a downstream filter
 can rank them. Only omit pure style/naming nits.
 
+Actively check these commonly missed defect classes. Treat them as
+hypotheses to verify against the actual code; report one only when you
+can name the concrete code path and failure mechanism:
+- Dead paths: when a branch is guarded by flags or config values,
+  substitute their actual values (often already in the provided
+  context) into the condition and check the guarded code can ever
+  run; a value combination that makes it unreachable is a reportable
+  bug, and stronger evidence than a function merely having no callers.
+- Documented-but-unhandled inputs: when a docstring or comment states an
+  input condition (duplicates, gaps, missing/empty entries), check the
+  code actually handles it -- documenting a condition is not handling it.
+- Numeric/statistical defects: division by a difference that can be
+  zero; repeated updates accumulating floating-point error in long-lived
+  state (e.g. a symmetry or conservation invariant silently lost); an
+  estimator or fit missing a term or constrained without justification.
+
 You have a limited step budget (~10 tool rounds). Verify what actually
 bears on the diff, then submit; do not exhaustively explore the repo. Once
 a fact is established (e.g. a file/symbol does not exist), record it as a
