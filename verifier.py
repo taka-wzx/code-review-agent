@@ -54,6 +54,34 @@ DROP a finding if ANY hold:
 - generic best-practice advice not tied to a concrete failure here;
 - duplicate of an already-kept finding.
 
+Evidence rules (when one of these applies, it takes precedence over the
+DROP list -- check them before dropping):
+- A docstring or comment stating that an input condition occurs
+  (duplicates, gaps, missing frames, empty input) is evidence FOR a
+  finding that the code fails to handle that condition: the docs prove
+  the scenario is real. Documenting a condition is not handling it, and
+  does not make the unhandled behavior an intentional design choice.
+  (The absence of such documentation does not by itself make a finding
+  speculative either.)
+- A numeric-correctness finding is not "generic best-practice advice"
+  when it identifies a specific quantity in this code that becomes wrong
+  and the mechanism (an invariant lost across repeated updates, a
+  missing term in an estimate, a degenerate value reaching a division).
+  For slowly accumulating defects no one can demonstrate the drift
+  inside one diff; that is not grounds to drop. Keep unless you can
+  refute the mechanism itself (show the invariant is preserved, the
+  update is not repeated, or the math is wrong). "Technique X is more
+  robust than Y" with no such identified error is still a DROP.
+- Judge dead-path reachability against the code that exists in this
+  repository: the actual flag and config definitions and their comments.
+  If those show the enabling condition never holds (e.g. the only
+  documented wiring that could supply it is disabled or absent), the
+  finding stands; hypothesizing an unseen future caller that might
+  supply a different value is not a refutation. The reverse also holds:
+  a newly added function that merely has no callers yet is not thereby
+  dead code or a defect -- new code gets wired up later; only
+  unreachability that follows from existing definitions counts.
+
 Severity is not the criterion: a low-severity real defect is a KEEP; a
 high-severity-sounding speculation is a DROP.
 

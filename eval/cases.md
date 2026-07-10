@@ -259,6 +259,12 @@ W9 候选(需先想清机制,不是改措辞):verifier 边界裁决方差——�
 - 轮2(d7×3 + holdout 重跑):**dead-flag finder 层 2/3**(run3 完整命中:两旗标齐名+"predicted trajectory is never drawn";run2 弱形式),全被旧 verifier 砍——drop 理由"eventual callers are unknown, we cannot verify the dead-path claim"=**用假想的未来调用方否决 config.py:7 的文档证据**('wiring is not enabled yet')。第三种砍杀模式,Evidence rules 需补第三条(死路径可达性按 repo 内实际存在的定义/接线判,计划偏差记录在案)。holdout:recall **7/7**(h2 行数上限这个历史稳定 miss 也抓到了)、h6 陷阱=0、noise=0、FP=1——**经核查为 fixture 预存真 bug**(holdout bounce.py classify_bounce 忽略 vy_at_snap,§5.1 违例,fixture 从主集复制带入、未埋点;judge"埋点之外即 FP"的协议口径误伤,且 W7 已记录同款"报 diff 外预存 bug"行为,非 checklist 新增害处)。
 - **判定:Stage A 通过**——dead-flag finder 识别率 0→2/3,d10-cov 2/3,d7-gap 2/3(轮2),无害门全绿;d11-origin 维持 stretch,不为它迭代。
 
-**Stage B 结果(待补)**
+**Stage B 结果(2026-07-10,含一次规则迭代)**:
+
+- 轮1(三条规则原版,靶向×3):**d7-gap 0/3→2/3(run1 confirmed——W9 系统性砍杀首次被攻破)、d7-dead-flag 0/3→1/3(uncertain 存活)**;但 FP 0.33→1.33——run1/2 把"新增函数无调用方=死代码"以 confirmed 保留×4。归因修正:旧 verifier 在 Stage A 同样保留过此类(原始 KEEP 判据本含"dead code path"),非新规则肇因——checklist 放大了产出频率+judge 对同类 finding 的 FP/noise 口径抖动(W2 已记录)把它顶成了 FP。d10-cov:finder 3/3 报出、verifier 3/3 砍,drop 理由仍是"speculative robustness advice"(run3 一次属合法砍杀:finder 机理表述确实错了);run2 连 d7-gap 也被砍,理由"defensible design choice"逐字撞规则一禁止的说法。**结构性归因:Evidence rules 排在 DROP 列表后,模型先匹配 DROP 条目就不再看澄清。**
+- 迭代(一次,打包,对着结构性归因):①节首加优先级声明("与 DROP 列表冲突时以本节为准,砍前先查");②规则二补"慢性缺陷没人能在单 diff 内演示漂移,怀疑≠反驳,反驳须驳机理本身";③规则三补反向排除("新增函数暂无调用方≠死代码,只有既有定义推出的不可达才算")。
+- 轮2:**FP 1.33→0.33(no-callers keeps 消失)**、noise 2.67→2.0;d7-dead-flag 1/3 uncertain、d7-gap 1/3 confirmed(方差,轮1 为 2/3);垃圾探针全 drop——inv-vs-solve 在优先级声明下仍被正确砍,"X 比 Y 稳"式 DROP 未松动;d10-cov 本轮 finder 0/3 未产出(9 run 累计 finder 率 5/9≈56%,"正确表述+新规则"组合尚未被采样——规则二**未经检验**而非已失败)。
+- holdout(轮1/轮2):recall 7/7 / 6/7(h2 行数上限回到 miss,历史方差)、**h5 除零两轮 confirmed(规则收紧未误伤负向控制)**、h6 陷阱两轮各 1 条 uncertain(同一条 MAX_POLYLINE_POINTS 性能猜测:反对票理由每次都正确,经 W9 分歧保留通道存活;Stage A 两轮 finder 未产出它而 finder prompt 相同→finder 方差聚簇+keep 偏置合并的固有代价,非 Evidence rules 放行)、FP 1(=classify_bounce fixture 预存真 bug,同 Stage A 定性)、原始 precision 0.778/0.75(剔除 fixture 协议误伤后 0.875/0.857)。
+- **判定:Stage B 有保留通过**——两个 verifier 砍杀靶子攻破,无害面净改善(FP 回落、垃圾门未松、h5 未误伤);遗留:d10-cov 未证、h6 uncertain 噪音 1 条/run。迭代预算已尽,终测按预写门槛裁决,不过则回滚改动二。
 
 **主集终测与四代对比(待补)**
