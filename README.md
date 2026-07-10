@@ -174,6 +174,25 @@ F1 0.795→**0.811**、noise 8.3→**5.3**、陷阱均值 3.0→**1.0**、never_
 代价:成本 +26.6%(870k in/轮)、unstable 1→4(其中 2 个是毕业爬升型)。预写门槛 5 过
 4 未达,未达项归因全指向方差/协议缺陷/成本——判**有保留通过**。
 
+## W11：成本优先——兔子洞刹车 + 计量固化 + 预算纪律(2026-07-10)
+
+离线归因先行(W9/W10 全量 trace 对比,零 LLM 成本):W10 的 +183k/轮中 finder 占 70%
+(更多轮次+更深会话重放);**not-found 搜索变体链是长期洼地非 W10 新增**(两代都 ~12.7
+条 3+连败链/run,样本:draw_line→.draw_line→def draw_line→cv2→class.*Frame)。
+
+1. **T1 连败刹车**(tools.py ToolSession,prompt 零改动):search_repo 连续 3 次 clean miss
+   起在结果尾注入 nudge("一次未命中已证不存在,缺失本身可报告,勿再试变体");regex 用法
+   错误类 miss 不计数;命中或其他工具成功清零。trace 补显式 miss/miss_streak 字段。
+2. **T2 计量固化**(cost_report.py):repeat 根聚合、`--baseline` 组件级对比、连败链计数。
+3. **T3 预算纪律**:机制类改动 tokens_in 预算 ≤+10%/W(全量口径),超出需当轮回收或明示
+   豁免;每轮 W 终测跑 `cost_report --baseline` 入档。**成本门槛只在全量口径设定,靶向
+   切片只看机制指标**(本轮教训:-10% 门在 3-diff 切片 σ±16% 下统计不可达成,且被
+   dead-flag 探索率 1/3→3/3 的收益推高读数——成本与收益在小切片纠缠)。
+
+验收:d16 探针 2/2 无误伤、holdout 全绿(h6 陷阱 0)、trio 行为无回退(dead-flag finder 层
+1/3→**3/3**);连败链 calls 三组件一致 **-27%~-46%**;切片 tokens_in +3.3%(σ内,见上)。
+T1 保留,全量成本效果留待 W12 重新基线化校验。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
@@ -186,4 +205,5 @@ F1 0.795→**0.811**、noise 8.3→**5.3**、陷阱均值 3.0→**1.0**、never_
   需要显式规则
 - **分歧率自身方差大**(uncertain 5–14 条/run):run 间 precision 波动的主因;共享 fixture
   的评测协议把"顺路发现的真 bug"记 FP,压低 precision 读数
-- 成本 870k in/轮(+27% vs W9),未预算化
+- 成本 870k in/轮(+27% vs W9)。W11 起预算化(≤+10%/W 全量口径,cost_report --baseline
+  入档);兔子洞刹车的全量节省额待 W12 重新基线化时校验
