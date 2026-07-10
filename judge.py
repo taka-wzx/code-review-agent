@@ -15,7 +15,7 @@ import json
 import sys
 from pathlib import Path
 
-from agent import make_client
+from llm import make_client
 
 # Windows redirects default to GBK; judge reasons may contain any unicode
 for stream in (sys.stdout, sys.stderr):

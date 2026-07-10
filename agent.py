@@ -3,16 +3,13 @@
 Feed a unified diff -> the model reviews it, reading repo files for context
 via a read_file tool when it wants to -> prints a structured JSON review.
 
-Works on any OpenAI-compatible API. Pick the provider with LLM_PROVIDER:
-    deepseek (default)  needs DEEPSEEK_API_KEY
-    glm                 needs GLM_API_KEY (or ZHIPUAI_API_KEY)
+Works on any OpenAI-compatible API (provider selection lives in llm.py).
 
 Usage:
     python agent.py sample.diff [--repo path/to/repo]
 """
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -25,29 +22,15 @@ for _stream in (sys.stdout, sys.stderr):
 from openai import OpenAI
 import openai
 
+from agentloop import run_submit_loop
 from context import build_context
+from llm import make_client
 from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from tracelog import Trace, tev
 from verifier import verify_findings
 
-# --- provider config ---------------------------------------------------------
-# Both DeepSeek and Zhipu/GLM expose OpenAI-compatible endpoints, so one client
-# works for both -- only the base_url, model id, and key env var change.
-PROVIDERS = {
-    "deepseek": {
-        "base_url": "https://api.deepseek.com",
-        "model": "deepseek-v4-pro",
-        "key_envs": ("DEEPSEEK_API_KEY",),
-    },
-    "glm": {
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4.6",
-        "key_envs": ("GLM_API_KEY", "ZHIPUAI_API_KEY"),
-    },
-}
 MAX_STEPS = 10           # hard cap on loop iterations
 MAX_SUBMIT_ATTEMPTS = 2  # invalid submit_review payloads before giving up
-REQUEST_TIMEOUT = 120.0  # seconds per API call
 
 SYSTEM = """You are a code reviewer. You are given a unified diff.
 Use the read_file tool when you need context beyond the diff (the full
@@ -114,7 +97,7 @@ SUBMIT_TOOL = {
         "parameters": REVIEW_SCHEMA,
     },
 }
-TOOLS = [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL, SUBMIT_TOOL]
+EXPLORE_TOOLS = [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL]
 
 SEVERITIES = ("high", "medium", "low")
 
@@ -161,127 +144,49 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": user},
     ]
-    session = ToolSession(repo_root, trace=trace, component="finder")
-    bad_submits = 0
-    for step in range(1, MAX_STEPS + 1):
-        # Graceful stop condition: on the last step, withdraw the explore
-        # tools and demand the review, instead of crashing at the cap.
-        final = step == MAX_STEPS
-        if final:
-            messages.append({"role": "user", "content":
-                "Step budget exhausted. Call submit_review NOW with the "
-                "findings you have established so far."})
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=8000,
-            temperature=0.0,
-            tools=[SUBMIT_TOOL] if final else TOOLS,
-            tool_choice="auto",
-            messages=messages,
-        )
-        msg = response.choices[0].message
-        tool_calls = msg.tool_calls or []
-        u = response.usage
-        tev(trace, "llm_response", component="finder", step=step,
-            tool_calls=[tc.function.name for tc in tool_calls],
-            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens)
 
-        if not tool_calls:
-            raise RuntimeError(
-                "model stopped without calling submit_review; got:\n"
-                f"{msg.content!r}"
-            )
+    def parse_submit(raw: str):
+        try:
+            review = json.loads(raw)
+        except json.JSONDecodeError as e:
+            return None, [f"malformed JSON in submit_review arguments: {e}"]
+        return review, validate_review(review)
 
-        # A submit_review call only ends the run if its payload validates;
-        # otherwise the problems are fed back as the tool result and the
-        # loop continues (same validate-and-retry pattern as the verifier).
-        submit = next((tc for tc in tool_calls
-                       if tc.function.name == "submit_review"), None)
-        problems: list[str] = []
-        if submit is not None:
-            try:
-                review = json.loads(submit.function.arguments)
-            except json.JSONDecodeError as e:
-                problems = [f"malformed JSON in submit_review arguments: {e}"]
-            else:
-                problems = validate_review(review)
-            if not problems:
-                print(f"[done] steps={step} tokens_in={u.prompt_tokens} "
-                      f"tokens_out={u.completion_tokens}", file=sys.stderr)
-                if use_verify:
-                    kept, dropped = verify_findings(client, model, user,
-                                                    review.get("findings", []),
-                                                    repo_root, trace=trace)
-                    print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",
-                          file=sys.stderr)
-                    review["findings"] = kept
-                    review["dropped_findings"] = dropped
-                tev(trace, "review", steps=step, findings=len(review["findings"]),
-                    dropped=len(review.get("dropped_findings", [])))
-                return review
-            bad_submits += 1
-            print(f"[step {step}] submit_review rejected: {problems}", file=sys.stderr)
-            tev(trace, "submit_rejected", component="finder", problems=problems)
-            if bad_submits >= MAX_SUBMIT_ATTEMPTS:
-                raise RuntimeError(
-                    f"submit_review still invalid after {bad_submits} attempts: {problems}")
+    result = run_submit_loop(
+        client, model, messages,
+        explore_tools=EXPLORE_TOOLS, submit_tool=SUBMIT_TOOL,
+        parse=parse_submit,
+        session=ToolSession(repo_root, trace=trace, component="finder"),
+        max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
+        max_tokens=8000,
+        budget_msg="Step budget exhausted. Call submit_review NOW with the "
+                   "findings you have established so far.",
+        reject_msg=lambda problems: (
+            "Review rejected -- fix these problems and call "
+            "submit_review again: " + "; ".join(problems)),
+        trace=trace, component="finder",
+        on_text_answer="raise",
+    )
+    if result.reason == "bad_submits":
+        raise RuntimeError(f"submit_review still invalid after "
+                           f"{MAX_SUBMIT_ATTEMPTS} attempts: {result.problems}")
+    if result.reason != "ok":
+        raise RuntimeError(f"agent did not finish within {MAX_STEPS} steps")
 
-        # Execute this round's tool calls; a rejected submit gets its
-        # problem list back as the tool result.
-        messages.append({
-            "role": "assistant",
-            "content": msg.content or "",
-            "tool_calls": [{
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-            } for tc in tool_calls],
-        })
-        for tc in tool_calls:
-            if tc is submit:
-                content = ("Review rejected -- fix these problems and call "
-                           "submit_review again: " + "; ".join(problems))
-            else:
-                print(f"[step {step}] {tc.function.name} "
-                      f"{tc.function.arguments[:120]}", file=sys.stderr)
-                content = session.execute(tc.function.name, tc.function.arguments)
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": content,
-            })
-
-    raise RuntimeError(f"agent did not finish within {MAX_STEPS} steps")
-
-
-def load_dotenv() -> None:
-    """Load KEY=VALUE lines from .env next to this file (real env vars win)."""
-    env_file = Path(__file__).parent / ".env"
-    if not env_file.is_file():
-        return
-    for line in env_file.read_text(encoding="utf-8-sig").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def make_client() -> tuple[OpenAI, str]:
-    """Build a provider-agnostic client + model id from LLM_PROVIDER env."""
-    load_dotenv()
-    provider = os.environ.get("LLM_PROVIDER", "deepseek").lower()
-    if provider not in PROVIDERS:
-        sys.exit(f"Unknown LLM_PROVIDER={provider!r}; choose one of {list(PROVIDERS)}")
-    cfg = PROVIDERS[provider]
-    api_key = next((os.environ[e] for e in cfg["key_envs"] if os.environ.get(e)), None)
-    if not api_key:
-        envs = " or ".join(cfg["key_envs"])
-        sys.exit(f"No credentials for provider {provider!r}: set the {envs} environment variable\n"
-                 f'  PowerShell:  $env:{cfg["key_envs"][0]} = "..."')
-    client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
-                    timeout=REQUEST_TIMEOUT, max_retries=2)
-    return client, cfg["model"]
+    review, u = result.payload, result.usage
+    print(f"[done] steps={result.steps} tokens_in={u.prompt_tokens} "
+          f"tokens_out={u.completion_tokens}", file=sys.stderr)
+    if use_verify:
+        kept, dropped = verify_findings(client, model, user,
+                                        review.get("findings", []),
+                                        repo_root, trace=trace)
+        print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",
+              file=sys.stderr)
+        review["findings"] = kept
+        review["dropped_findings"] = dropped
+    tev(trace, "review", steps=result.steps, findings=len(review["findings"]),
+        dropped=len(review.get("dropped_findings", [])))
+    return review
 
 
 def _git_diff_text(args) -> str:

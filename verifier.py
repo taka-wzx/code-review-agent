@@ -26,6 +26,7 @@ is the boundary-case detector -- no prompt self-reports doubt.
 import json
 import sys
 
+from agentloop import run_submit_loop
 from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from tracelog import tev
 
@@ -200,92 +201,44 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
             + "\n\nCandidate findings to verify:\n\n"
             + json.dumps(numbered, ensure_ascii=False, indent=2)},
     ]
-    session = ToolSession(repo_root, trace=trace, component=f"verifier{pass_id}")
-    bad_submits = 0
-    last_problems = []
-    for step in range(1, MAX_STEPS + 1):
-        # Graceful stop condition: on the last step, withdraw the explore
-        # tools and demand verdicts, instead of silently failing open.
-        final = step == MAX_STEPS
-        if final:
-            messages.append({"role": "user", "content":
-                "Step budget exhausted. Call submit_verdicts NOW, covering "
-                "every finding index exactly once, based on what you have "
-                "verified so far."})
-        response = client.chat.completions.create(
-            model=model, max_tokens=4000, temperature=0.0,
-            tools=([VERDICT_TOOL] if final else
-                   [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL, VERDICT_TOOL]),
-            tool_choice="auto", messages=messages,
-        )
-        msg = response.choices[0].message
-        tool_calls = msg.tool_calls or []
-        u = response.usage
-        tev(trace, "llm_response", component=f"verifier{pass_id}", step=step,
-            tool_calls=[tc.function.name for tc in tool_calls],
-            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens)
-        submit = next((tc for tc in tool_calls
-                       if tc.function.name == "submit_verdicts"), None)
 
-        problems = []
-        if submit is not None:
-            try:
-                verdicts = json.loads(submit.function.arguments).get("verdicts")
-            except json.JSONDecodeError as e:
-                problems = [f"malformed JSON in tool arguments: {e}"]
-            else:
-                problems = validate_verdicts(verdicts, len(findings))
-                if not problems:
-                    tev(trace, "verifier_pass", pass_id=pass_id, steps=step,
-                        drops=sum(1 for v in verdicts if v["verdict"] == "drop"))
-                    return verdicts
-            bad_submits += 1
-            last_problems = problems
-            print(f"[verifier{pass_id} step {step}] invalid verdicts: {problems}",
-                  file=sys.stderr)
-            tev(trace, "submit_rejected", component=f"verifier{pass_id}",
-                problems=problems)
-            if bad_submits >= MAX_SUBMIT_ATTEMPTS:
-                break
+    def parse_verdicts(raw: str):
+        try:
+            verdicts = json.loads(raw).get("verdicts")
+        except json.JSONDecodeError as e:
+            return None, [f"malformed JSON in tool arguments: {e}"]
+        return verdicts, validate_verdicts(verdicts, len(findings))
 
-        if not tool_calls:
-            # Answered in text: counts as a failed attempt, then nudge.
-            bad_submits += 1
-            last_problems = ["verifier answered in text instead of calling submit_verdicts"]
-            print(f"[verifier{pass_id} step {step}] {last_problems[0]}", file=sys.stderr)
-            if bad_submits >= MAX_SUBMIT_ATTEMPTS:
-                break
-            messages.append({"role": "assistant", "content": msg.content or ""})
-            messages.append({"role": "user",
-                             "content": "You must call submit_verdicts covering "
-                                        "every finding index exactly once."})
-            continue
+    component = f"verifier{pass_id}"
+    result = run_submit_loop(
+        client, model, messages,
+        explore_tools=[READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL],
+        submit_tool=VERDICT_TOOL, parse=parse_verdicts,
+        session=ToolSession(repo_root, trace=trace, component=component),
+        max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
+        max_tokens=4000,
+        budget_msg="Step budget exhausted. Call submit_verdicts NOW, covering "
+                   "every finding index exactly once, based on what you have "
+                   "verified so far.",
+        reject_msg=lambda problems: "Verdicts rejected: " + "; ".join(problems),
+        trace=trace, component=component, label=component,
+        on_text_answer="count",
+        text_answer_problem="verifier answered in text instead of calling "
+                            "submit_verdicts",
+        text_answer_nudge="You must call submit_verdicts covering "
+                          "every finding index exactly once.",
+    )
+    if result.reason == "ok":
+        verdicts = result.payload
+        tev(trace, "verifier_pass", pass_id=pass_id, steps=result.steps,
+            drops=sum(1 for v in verdicts if v["verdict"] == "drop"))
+        return verdicts
 
-        # Execute this round's tool calls; a rejected submit gets its
-        # problem list back as the tool result.
-        messages.append({
-            "role": "assistant",
-            "content": msg.content or "",
-            "tool_calls": [{
-                "id": tc.id,
-                "type": "function",
-                "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-            } for tc in tool_calls],
-        })
-        for tc in tool_calls:
-            if tc is submit:
-                content = "Verdicts rejected: " + "; ".join(problems)
-            else:
-                print(f"[verifier{pass_id} step {step}] {tc.function.name} "
-                      f"{tc.function.arguments[:120]}", file=sys.stderr)
-                content = session.execute(tc.function.name, tc.function.arguments)
-            messages.append({"role": "tool", "tool_call_id": tc.id,
-                             "content": content})
-
-    print(f"[verifier{pass_id}] pass FAILED (steps={MAX_STEPS} cap or "
-          f"{bad_submits} bad submits); last problems: {last_problems}",
+    print(f"[{component}] pass FAILED ({result.reason} at step "
+          f"{result.steps}); last problems: {result.problems}",
           file=sys.stderr)
-    tev(trace, "verifier_pass_failed", pass_id=pass_id, problems=last_problems)
+    tev(trace, "verifier_pass_failed", pass_id=pass_id,
+        problems=result.problems)
     return None
 
 

@@ -13,7 +13,8 @@ import json
 import sys
 from pathlib import Path
 
-from agent import run_review, make_client
+from agent import run_review
+from llm import make_client
 from tracelog import Trace
 
 # Windows redirects default to GBK; model output may contain any unicode
