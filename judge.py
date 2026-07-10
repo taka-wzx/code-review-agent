@@ -218,11 +218,13 @@ def main():
     parser = argparse.ArgumentParser(description="LLM-judge auto-scorer")
     parser.add_argument("--results-dir", default=str(DEFAULT_RESULTS),
                         help="Directory with run_eval.py outputs to score")
+    parser.add_argument("--truth", default=str(TRUTH_PATH),
+                        help="Ground-truth JSON (e.g. eval/holdout/truth.json)")
     args = parser.parse_args()
     results_dir = Path(args.results_dir)
     scores_path = results_dir / "scores.json"
 
-    truth = json.loads(TRUTH_PATH.read_text(encoding="utf-8"))
+    truth = json.loads(Path(args.truth).read_text(encoding="utf-8"))
     client, model = make_client()
 
     verdicts = {}

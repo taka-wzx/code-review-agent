@@ -10,6 +10,8 @@ executes tool calls with two guardrails from the failure-mode playbook:
     a stub answer instead of re-burning tokens (loop guard).
 """
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from tracelog import tev
@@ -46,6 +48,28 @@ READ_FILE_TOOL = {
     },
 }
 
+RUN_LINTER_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "run_linter",
+        "description": (
+            "Run a static linter (pyflakes) on one Python file in the "
+            "repository. Catches undefined names, unused imports, "
+            "redefinitions, and syntax errors without executing any code. "
+            "Use it to confirm suspicions like 'is this name actually "
+            "imported/defined in this file?'"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string",
+                         "description": "Repo-relative path of a .py file"},
+            },
+            "required": ["path"],
+        },
+    },
+}
+
 SEARCH_REPO_TOOL = {
     "type": "function",
     "function": {
@@ -75,6 +99,21 @@ def _iter_text_files(root: Path):
             yield p
 
 
+def _missing_file_msg(root: Path, rel_path: str) -> str:
+    """Recoverable error text for a path that is not a file in the repo."""
+    name = Path(rel_path).name
+    candidates = [p.relative_to(root).as_posix() for p in _iter_text_files(root)
+                  if p.name == name][:MAX_CANDIDATES]
+    if candidates:
+        return (f"Error: file not found: {rel_path}. Files with the same "
+                f"name do exist -- did you mean: {', '.join(candidates)}?")
+    return (f"Error: file not found: {rel_path}, and no file named "
+            f"{name!r} exists anywhere in this repo. If the diff imports "
+            "or references it, that unresolved reference may itself be a "
+            "defect worth reporting. Use search_repo to look for the "
+            "symbols you expected it to contain.")
+
+
 def read_file(repo_root: Path, rel_path: str, start_line: int = 1) -> str:
     root = Path(repo_root).resolve()
     target = (root / rel_path).resolve()
@@ -86,17 +125,7 @@ def read_file(repo_root: Path, rel_path: str, start_line: int = 1) -> str:
         return (f"Error: {rel_path or '.'} is a directory, not a file. "
                 "Files under it: " + (", ".join(listing) or "(none)"))
     if not target.is_file():
-        name = Path(rel_path).name
-        candidates = [p.relative_to(root).as_posix() for p in _iter_text_files(root)
-                      if p.name == name][:MAX_CANDIDATES]
-        if candidates:
-            return (f"Error: file not found: {rel_path}. Files with the same "
-                    f"name do exist -- did you mean: {', '.join(candidates)}?")
-        return (f"Error: file not found: {rel_path}, and no file named "
-                f"{name!r} exists anywhere in this repo. If the diff imports "
-                "or references it, that unresolved reference may itself be a "
-                "defect worth reporting. Use search_repo to look for the "
-                "symbols you expected it to contain.")
+        return _missing_file_msg(root, rel_path)
     lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
     start = max(1, int(start_line))
     if start > len(lines):
@@ -145,8 +174,41 @@ def search_repo(repo_root: Path, pattern: str) -> str:
     return "\n".join(hits)
 
 
+LINT_TIMEOUT_S = 30
+LINT_OUTPUT_CAP = 4_000
+
+
+def run_linter(repo_root: Path, rel_path: str) -> str:
+    """Static lint (pyflakes) of one repo .py file; never executes it."""
+    root = Path(repo_root).resolve()
+    target = (root / rel_path).resolve()
+    if not target.is_relative_to(root):
+        return f"Error: path escapes repo root: {rel_path}. Use repo-relative paths only."
+    if not target.is_file():
+        return _missing_file_msg(root, rel_path)
+    if target.suffix.lower() != ".py":
+        return (f"Error: run_linter only lints Python files; {rel_path} "
+                "is not a .py file.")
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pyflakes", str(target)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=LINT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return f"Error: linter timed out after {LINT_TIMEOUT_S}s on {rel_path}."
+    out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if "No module named pyflakes" in out:
+        return "Error: pyflakes is not installed in this environment; lint unavailable."
+    if not out:
+        return f"No lint findings in {rel_path}."
+    out = out.replace(str(target), rel_path)
+    if len(out) > LINT_OUTPUT_CAP:
+        out = out[:LINT_OUTPUT_CAP] + "\n...[truncated]"
+    return out
+
+
 class ToolSession:
-    """Executes read_file/search_repo calls for one agent conversation."""
+    """Executes read_file/search_repo/run_linter calls for one agent conversation."""
 
     def __init__(self, repo_root: Path, trace=None, component: str = ""):
         self.repo_root = Path(repo_root)
@@ -180,6 +242,8 @@ class ToolSession:
                                        int(args.get("start_line", 1) or 1))
                 elif name == "search_repo":
                     result = search_repo(self.repo_root, args.get("pattern", ""))
+                elif name == "run_linter":
+                    result = run_linter(self.repo_root, args.get("path", ""))
                 else:
                     result = f"Error: unknown tool {name!r}."
             except Exception as e:

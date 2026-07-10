@@ -1,0 +1,14 @@
+diff --git a/tracker/geometry.py b/tracker/geometry.py
+--- a/tracker/geometry.py
++++ b/tracker/geometry.py
+@@ -20,3 +20,10 @@
+     if _outside_band(x_mm, margin_mm, TABLE_WIDTH_MM - margin_mm):
+         return True
+     return _outside_band(y_mm, margin_mm, TABLE_LENGTH_MM - margin_mm)
++
++
++def snap_inside(x_mm, y_mm, margin_mm):
++    """Clamp a table-plane point to at least margin from every edge."""
++    x = min(max(x_mm, margin_mm), TABLE_LENGTH_MM - margin_mm)
++    y = min(max(y_mm, margin_mm), TABLE_WIDTH_MM - margin_mm)
++    return x, y

@@ -1,0 +1,14 @@
+"""Step gates for candidate 3D points entering the tracker."""
+
+MAX_STEP_MM = 300.0
+
+
+def accept_step(prev_pos, new_pos, dt_s):
+    """Reject candidates that jump implausibly far from the last point."""
+    dx = new_pos[0] - prev_pos[0]
+    dy = new_pos[1] - prev_pos[1]
+    dz = new_pos[2] - prev_pos[2]
+    step_mm = (dx * dx + dy * dy + dz * dz) ** 0.5
+    if step_mm > 300.0:
+        return False
+    return True

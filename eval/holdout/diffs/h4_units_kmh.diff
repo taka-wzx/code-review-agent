@@ -1,0 +1,12 @@
+diff --git a/tracker/report.py b/tracker/report.py
+--- a/tracker/report.py
++++ b/tracker/report.py
+@@ -21,3 +21,8 @@
+ def summarize(throws):
+     errors = [abs(bounce_error_mm(t["pred_y"], t["actual_y"])) for t in throws]
+     return {"n": len(errors), "mean_abs_error_mm": mean_error(errors)}
++
++
++def mean_speed_kmh(dist_mm_total, elapsed_s):
++    """Average rally speed over a whole rally, for the session HUD."""
++    return dist_mm_total / elapsed_s * 3.6

@@ -139,3 +139,94 @@ F1：V0 0.57 → V1 **0.49** → V2 **0.80**（旧 28 埋点口径 0.57/0.59/0.8
 
 - 陷阱用例：d12 归零（0 findings，与 W5 V2 持平）；d13 kept 2 条 noise（W5 为 0，轻微回退）。
 - **不做的事（纪律同 W5）**：不针对 d1 错杀、V1 反转去改 prompt——那是在测试集上过拟合。W7 立项顺序：①每版 n≥3 重复跑把方差和真效应分开；②建 held-out 集；③再动"step budget"提示词与预取的交互。
+
+## W7（进行中,2026-07-09）：测量仪器 + 外围功能
+
+按"先仪器后迭代"的顺序落地（W6 重跑的两个开放问题——V1 伤 recall 是否为真、verifier 错杀率——都只能由重复跑裁决）：
+
+1. **repeat_eval.py**：每版 n 次重复跑,断点续跑（scores.json 存在即跳过）,聚合 mean [min–max] + **per-bug 翻转表**（hit x/n = 方差,0/n = 真 miss）。冒烟即抓到聚合 bug：陷阱切片 recall=None 未处理（已修）。3 版 × 3 次全量扫描后台运行中。
+2. **held-out 集** `eval/holdout/`（6 diffs / 7 埋点 + 1 陷阱,独立 fixture 副本）：h1 轴混用（x/y 对 WIDTH/LENGTH 颠倒）、h2 违反 §6 裸 print + HUD 超 6 行、h3 append 用 'w' 每次清空日志、h4 mm/s×3.6 差 1000 倍（§5.2）、h5 可变默认参数跨调用累积 + 重复时间戳除零、h6 config 纯重构陷阱。**纪律：只在 prompt/判据迭代验收时跑。** 造集时自查出一个错误 ground truth：h5 除零原设计在 t1==t0 时根本不触发（n_missing=-1 空循环）——重写为 hoist 除法后才成立;教训:埋点必须先自证可触发。
+3. **git 集成**（--commit/--uncommitted/--pr）+ **--format md**（PR comment,dropped 收 details 审计块）+ **cost_report.py**（trace 聚合 token/成本;d12 单用例全流程约 4.2 万 token 入 / 4.7 千 token 出,verifier 占约一半）。迷你 repo 端到端冒烟通过。
+
+**观察（不据此调 prompt）**：git 冒烟里 finder 报了 diff 之外同文件的预存 bug（hours_to_ms 单位错）,verifier 判 keep——与 W5 曾 drop 跨文件"[Pre-existing]"条目的口径不完全一致,同文件/跨文件的作用域边界值得在 held-out 验收时一并观察。
+
+**W7 完结（2026-07-09）：3 版 × 3 次全量重复跑,方差数据落地**
+
+| 版本(n=3) | recall | precision | F1 | FP | noise |
+|---|---|---|---|---|---|
+| v0 | 0.844 [0.800–0.900] | 0.403 [0.391–0.417] | 0.545 [0.532–0.554] | 1.0 [0–2] | 36.7 [34–39] |
+| v1 | 0.844 [0.833–0.867] | 0.388 [0.353–0.424] | 0.531 [0.496–0.569] | 0.3 [0–1] | 39.7 [37–44] |
+| v2 | 0.811 [0.800–0.833] | 0.833 [0.727–0.920] | 0.819 [0.776–0.856] | 0.3 [0–1] | 4.7 [2–9] |
+
+三个裁决：
+
+1. **"V1 预取伤 recall"不成立**。v0/v1 均值同为 0.844;W6 单次的 0.90→0.80 是 v0 幸运上沿 vs v1 普通一轮。v1 区间更窄——预取实际**稳定**了 recall 并压低 FP。开放问题①关闭,step-budget×预取 prompt 不动。仪器阻止了一次针对噪声的修复。
+2. **verifier recall 代价收敛**：v2 vs v1 均值差 -0.033（≈1 个埋点）,远轻于 W5 单次的 -0.107 印象;F1 0.819 [0.776–0.856],W6 单次 0.80 有代表性。
+3. **方差与真 miss 分离**（per-bug 翻转表）：
+   - 真 miss（三版 0/3 或 v2 0/3）：d11-origin-fit、d7-dead-flag-path（全版本 0/9,架构靶子）;d10-cov-asymmetry、d7-gap-connect（v0/v1 偶中,v2 0/3——**verifier 系统性砍杀确认**,不再是单例轶事）
+   - 方差型：d5-window-deadzone（v0 1/3,v1 0/3,v2 2/3——有趣:verifier 带工具后反而比 v1 稳）、d6-ghost-bounce、d4-magic-number
+   - verifier 严格度自身有方差:v2 noise [2–9]
+4. 成本（cost_report,v2 全集单轮均值）：47 万 tok 入 / 7.7 万 tok 出,finder:verifier ≈ 6:4。
+
+下一步（W8 才动手,全部要过 held-out 验收）：verifier 投机判据（对着 d10/d7-gap 系统性砍杀）、预取层追 import 或引导 finder 主动 search（对着 d7-dead-flag/d11-origin 双 0/9）、run_linter 工具。
+
+## W8（2026-07-09）：verifier 判据 → 预取追 import → run_linter,每项过 held-out 验收
+
+held-out 首次实战。基线(改动前 V2 单轮):recall 6/7、precision 0.875、noise 1、h6 陷阱 0。验收线:recall≥基线、h6=0、noise≤基线+2。
+
+**改动一:verifier 投机判据——验收失败,已回滚。** 设计:KEEP 侧加"可验证的错误结果机制不要求崩溃",DROP 侧把"投机"重定义为"约定/注释/调用方里都找不到证据"。w8a 结果 recall 5/7:新判据把 h5 除零砍了,drop 理由与新措辞逐字呼应("没有调用方、没有约定或注释表明重复时间戳会发生")——**判据救有文档证据的慢性 bug,却处决无文档触发证据的崩溃类 bug**(新文件天然无调用方)。按预先写死的规则回滚,不二次迭代。
+
+**后续 w8b 揭示更深一层:凶手不(只)是措辞。** w8b 用基线措辞的 verifier 又把同一条 h5 除零砍了,drop 理由甚至编造"docstring 要求时间戳互异"(原文只说 sorted)。即 **verifier 对边界 bug 的裁决本身就是抛硬币**(W7 量到的 noise [2–9] 方差,同样作用于 hit),基线 run 里它被 keep 才是运气。教训两条:①改动一的失败归因当时过度指向措辞;②**n=1 验收门会被 verifier 方差假触发——归因(查 drop_reason + pack 对比)必须是验收判定的一部分,不能只看数字**。
+
+**改动二:context.py 预取追 import——通过(附因果归因)。** 机制自检:d7 的 pack 直接出现 config.py 旗标定义、d16 出"import 无法解析"note、stdlib 静默。w8b 数字面 recall 5/7 低于基线,但 h5 是无 import 文件、pack 与基线逐字节一致,差异物理上与本改动无关(见上);本改动自己的验收面全部干净(h2 预取 config 生效、FP 0、h6=0、noise 0)。
+
+**改动三:run_linter 工具(pyflakes,静态不执行)——通过,满分。** w8c:**recall 7/7(1.000)**、precision 0.778、FP 0、noise 2、h6=0;两个"惯性 miss"(h2 行数上限、h5 除零)全部抓到,6 diff 里 linter 被调用 4 次。诚实注脚:7/7 也含方差的顺风面,但所有验收指标全部在线。离线自测:linter 在 fixture detect.py 上准确报 undefined 'json'(d3 埋点)。
+
+主集终测(V2×3,用户定的范围)后台运行中,表格与 d10/d7-gap/d7-dead-flag 翻转对比待补。
+
+**W8 终测(V2×3,主集 30 埋点)与 W7 对比:**
+
+| | recall | precision | F1 | noise |
+|---|---|---|---|---|
+| W7 V2 | 0.811 [0.800–0.833] | 0.833 [0.727–0.920] | 0.819 [0.776–0.856] | 4.7 [2–9] |
+| W8 V2 | 0.778 [0.767–0.800] | 0.830 [0.759–0.885] | 0.803 [0.763–0.840] | 4.3 [3–7] |
+
+**如实结论:主集指标在方差区间内持平**(F1 区间大幅重叠),W8 的净收益在能力面(linter 工具、import 预取、held-out 机制跑通)而非主集分数。翻转表变化:
+
+- d7-dead-flag-path 仍 0/3,但**性质变了**:run2 finder 首次报出旗标问题(import 预取生效)、被 verifier 砍;run1/3 未报。可见性已解决,识别+复核是剩余瓶颈。
+- d10/d7-gap 仍 0/3——判据改动回滚后无修复入场,符合预期,如实记录为未解决。
+- d5-window-deadzone、d6-ghost-bounce 从 W7 的偶中滑入 0/3;d4-magic 1/3→2/3——边界埋点在方差里晃,与 h5 在 held-out 的表现同源:**verifier 对边界 bug 的裁决方差是当前系统的主要不稳定源**。
+
+W9 候选(需先想清机制,不是改措辞):verifier 边界裁决方差——多数投票/双复核/降置信保留(标记 uncertain 而非 drop);finder 对"死路径"类 bug 的识别提示;d11-origin 领域难档挂起。
+
+## W9（2026-07-09）：双复核 + 分歧→uncertain——治 verifier 边界裁决方差(新机制,零措辞)
+
+**设计**:判据 prompt 与 VERDICT_TOOL 一字不动。verifier 跑两个独立 pass(B 倒序呈现 findings,显式 index 保证映射;倒序=确定性去相关,不引入 temperature 变量),`merge_verdicts` 纯函数合并:keep+keep→confirmed、drop+drop→dropped(理由前缀 2/2)、分歧→保留并标 uncertain+附少数派理由。单 pass 失败退化单复核(trace 记 degraded),双失败 fail-open。关键洞察:**让模型自报 uncertain 还是措辞工程且标定不可信;两个独立 pass 的分歧本身就是边界探测器**。机制数学:drop 需 2/2 票——若单 pass 误砍率 p,双 pass 误砍率 p²,keep 偏置的合并结构性压制随机砍杀。成本:verifier ×2,pipeline ≈ +40%。
+
+**held-out 验收 ×2(w9a/w9b,预写标准全过)**:
+
+| | recall | precision | noise | h5 除零 | h6 陷阱 |
+|---|---|---|---|---|---|
+| 基线(W8 前) | 6/7 | 0.875 | 1 | keep(运气) | 0 |
+| w8a/w8b(单复核) | 5/7 / 5/7 | 1.0 / 1.0 | 0 / 0 | **drop / drop** | 0 / 0 |
+| **w9a/w9b(双复核)** | **6/7 / 6/7** | 1.0 / 1.0 | 0 / 0 | **confirmed / confirmed** | 0 / 0 |
+
+翻转消失的直接证据:h5 除零从"三轮两砍"变成两轮双票 confirmed(甚至无需 uncertain 兜底)。两轮指标完全一致——方差塌缩。唯一 miss 仍是 h2 行数上限(finder 层稳定 miss,非本改动靶子)。两轮 uncertain 计数均为 0:held-out 的 6 条 kept 全是双票一致,分歧兜底还没被触发,它的实战表现看主集终测(V2×3 运行中,表格待补)。
+
+**W9 终测(V2×3,主集 30 埋点)三代对比:**
+
+| | recall | precision | F1 | noise | unstable | never-hit |
+|---|---|---|---|---|---|---|
+| W7 单复核 | 0.811 [.800–.833] | 0.833 [.727–.920] | 0.819 [.776–.856] | 4.7 [2–9] | 3 | 4 |
+| W8 单复核 | 0.778 [.767–.800] | 0.830 [.759–.885] | 0.803 [.763–.840] | 4.3 [3–7] | 2 | 6 |
+| **W9 双复核** | **0.856 [.833–.867]** | 0.743 [.722–.781] | 0.795 [.776–.822] | 8.3 [7–9] | **1** | **4** |
+
+预写标准逐项判定:
+
+1. **翻转表 unstable 下降 ✅**:3→2→**1**(仅剩 d5-window-deadzone 2/3)。
+2. **d5/d6 回收 ✅**:d5-window-deadzone 0/3→2/3;d6-ghost-bounce 0/3→**3/3**。W8 滑走的两个边界埋点全部回来。
+3. **noise 区间收窄 ✅ 但均值上移**:[2–9]→[7–9](宽度 7→2),代价是均值 4.3→8.3——drop 需 2/2 票,边界噪音条目更多存活(每 run uncertain 5–6 条,约占 kept 的 1/6)。呈现层已隔离(uncertain 单独成节),但 judge 口径下 precision 0.83→0.74。
+4. **F1 持平 ✅**:0.795 [.776–.822] vs W8 0.803 [.763–.840],且区间宽度 0.077→0.046;recall 大幅回升 0.778→**0.856**,区间 [.833–.867] 是三代最窄。
+5. **d7 uncertain 回收 ✘**:d7-dead-flag、d7-gap、d10、d11-origin 仍 0/3——这四个的瓶颈在 **finder 根本没报**(uncertain 机制救的是"报了被砍",救不了"没报"),如实记录。顺带:d4-magic 3/3(run1 经 uncertain 通道存活——分歧兜底在主集的实战首秀)。
+
+**一句话**:双复核把 verifier 从"抛硬币"修成"可预测":recall +0.078 且区间最窄、unstable 归一,代价 precision -0.087(全部来自被隔离呈现的 uncertain 边界条目)。剩余四个 0/3 全是 finder 识别问题,W10 的靶子换层了。

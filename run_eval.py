@@ -36,14 +36,24 @@ def main():
                         help="Skip the verifier second pass (ablation)")
     parser.add_argument("--results-dir", default=str(RESULTS),
                         help="Where to write per-diff review JSONs")
+    parser.add_argument("--diffs-dir", default=str(DIFFS),
+                        help="Directory of *.diff files (e.g. eval/holdout/diffs)")
+    parser.add_argument("--only", default="",
+                        help="Comma-separated diff stems to run (default: all)")
     args = parser.parse_args()
     results_dir = Path(args.results_dir)
     print(f"repo={args.repo}  context={'OFF' if args.no_context else 'ON'}  "
           f"verify={'OFF' if args.no_verify else 'ON'}  results={results_dir}")
 
-    diffs = sorted(DIFFS.glob("*.diff"))
+    diffs = sorted(Path(args.diffs_dir).glob("*.diff"))
+    if args.only:
+        wanted = {s.strip() for s in args.only.split(",") if s.strip()}
+        diffs = [d for d in diffs if d.stem in wanted]
+        missing = wanted - {d.stem for d in diffs}
+        if missing:
+            sys.exit(f"--only names not found in {args.diffs_dir}: {sorted(missing)}")
     if not diffs:
-        sys.exit(f"No diffs found in {DIFFS}")
+        sys.exit(f"No diffs found in {args.diffs_dir}")
 
     results_dir.mkdir(parents=True, exist_ok=True)
     client, model = make_client()

@@ -5,7 +5,10 @@ front, instead of having to discover everything through read_file calls:
 
   1. project conventions (CLAUDE.md / CONVENTIONS.md at repo root)
   2. full post-change content of every file the diff touches
-  3. callers of every function the diff adds or modifies (incl. tests)
+  3. modules those changed files import (W8: flag/constant definitions the
+     diff depends on -- the d7 dead-flag gap), plus an explicit note when
+     an in-project import cannot resolve (feeds missing-dep detection)
+  4. callers of every function the diff adds or modifies (incl. tests)
 
 Retrieval is symbol-level string search -- no embeddings. Everything is
 budgeted so the pack cannot blow up the prompt.
@@ -16,6 +19,8 @@ from pathlib import Path
 CONVENTION_FILES = ("CLAUDE.md", "CONVENTIONS.md", "CONTRIBUTING.md")
 CONVENTIONS_CAP = 6_000      # chars per conventions file
 CHANGED_FILE_CAP = 8_000     # chars per changed file
+IMPORT_FILE_CAP = 5_000      # chars per imported-module file
+MAX_IMPORT_FILES = 4         # imported modules prefetched per pack
 SNIPPET_CTX_LINES = 3        # lines of context around a caller line
 MAX_CALLER_FILES = 3         # caller files per symbol
 MAX_HITS_PER_FILE = 3        # snippets per caller file
@@ -26,6 +31,8 @@ SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules"}
 _DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 _ADDED_DEF_RE = re.compile(r"^\+\s*def\s+(\w+)", re.MULTILINE)
 _HUNK_DEF_RE = re.compile(r"^@@[^@]*@@\s*def\s+(\w+)", re.MULTILINE)
+_IMPORT_RE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))",
+                        re.MULTILINE)
 
 
 def parse_diff(diff_text: str) -> tuple[list[str], list[str]]:
@@ -101,6 +108,42 @@ def build_context(diff_text: str, repo: Path, log=lambda msg: None) -> str:
             log(f"changed file: {rel}")
         else:
             log(f"changed file MISSING in repo: {rel}")
+
+    # Chase imports of the changed files (post-state): flag/constant
+    # definitions the diff depends on become visible without a tool call.
+    seen_mods: set[str] = set()
+    n_imports = 0
+    for rel in files:
+        p = repo / rel
+        if not p.is_file():
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        for m in _IMPORT_RE.finditer(text):
+            mod = m.group(1) or m.group(2)
+            if not mod or mod.startswith(".") or mod in seen_mods:
+                continue
+            seen_mods.add(mod)
+            mod_rel = mod.replace(".", "/") + ".py"
+            if mod_rel in files:
+                continue   # full content already in the pack
+            mp = repo / mod_rel
+            if mp.is_file():
+                if n_imports >= MAX_IMPORT_FILES:
+                    log(f"import cap reached; skipping {mod_rel}")
+                    continue
+                sections.append(f"## Imported module: {mod_rel} (imported by {rel})\n\n"
+                                "```python\n" + _read_capped(mp, IMPORT_FILE_CAP) + "\n```")
+                n_imports += 1
+                log(f"import: {mod_rel} (from {rel})")
+            else:
+                top = mod.split(".")[0]
+                if (repo / top).is_dir() or (repo / (top + ".py")).is_file():
+                    sections.append(f"## Import note\n\n`{mod}` is imported by {rel} "
+                                    f"but `{mod_rel}` does not exist in this "
+                                    "repository -- the import cannot resolve.")
+                    log(f"import MISSING: {mod} (from {rel})")
+                else:
+                    log(f"import external/stdlib: {mod}")
 
     exclude = set(files)
     for sym in symbols:

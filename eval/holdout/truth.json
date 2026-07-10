@@ -1,0 +1,48 @@
+{
+  "h1_clamp": [
+    {
+      "id": "h1-axis-swap",
+      "severity": "high",
+      "description": "snap_inside 把坐标轴限值用反了：x 用 TABLE_LENGTH_MM、y 用 TABLE_WIDTH_MM 夹取，而同文件 near_table_edge 和项目坐标系约定都是 x 对应 WIDTH(1525)、y 对应 LENGTH(2740)。结果 x 可以被'合法'夹在远超桌宽的位置、y 被错误压进桌宽。命中标准：指出 x/y 与 WIDTH/LENGTH 对应关系颠倒（或与 near_table_edge/坐标系不一致）即算命中。仅泛泛说'边界处理可能有误'不算。"
+    }
+  ],
+  "h2_hud": [
+    {
+      "id": "h2-bare-print",
+      "severity": "medium",
+      "description": "draw_hud 用裸 print 输出调试信息，违反项目约定 §6'调试打印用 dbg()，禁止裸 print（发布版要能一键静音）'；且它在每帧渲染路径里，发布版会刷屏无法静音。命中标准：指出裸 print 违反 dbg() 约定（或指出每帧 print 无法静音的后果）即算命中。"
+    },
+    {
+      "id": "h2-hud-line-cap",
+      "severity": "low",
+      "description": "约定 §6 规定 HUD 不超过 6 行，draw_hud 对 lines 不做截断，调用方传多少画多少。命中标准：指出未按约定限制 6 行/缺截断即算命中。"
+    }
+  ],
+  "h3_append": [
+    {
+      "id": "h3-truncate-on-append",
+      "severity": "high",
+      "description": "append_jsonl 名义是追加，实际用 mode='w' 打开——每次调用都把整个会话日志清空重写为单条记录，历史数据丢失。命中标准：指出 'w' 应为 'a'/每次覆盖导致丢历史即算命中。"
+    }
+  ],
+  "h4_units_kmh": [
+    {
+      "id": "h4-kmh-1000x",
+      "severity": "high",
+      "description": "mean_speed_kmh：dist_mm_total/elapsed_s 得到 mm/s，直接 ×3.6 得出的'km/h'大 1000 倍（应先 /1000 到 m/s）。项目约定 §5.2 明确记录过这类事故且要求换算处写明中间单位。命中标准：指出 mm/s 与 m/s 混淆或结果大 1000 倍即算命中。仅说'建议写明单位'而没指出数值错误的不算。"
+    }
+  ],
+  "h5_interp": [
+    {
+      "id": "h5-mutable-default",
+      "severity": "high",
+      "description": "fill_gaps 用可变默认参数 out=[]，跨调用累积：第二次及以后调用会把上一次的全部点带进结果（同一进程处理多段轨迹时数据串段）。命中标准：指出可变默认参数跨调用累积即算命中。"
+    },
+    {
+      "id": "h5-dup-ts-div0",
+      "severity": "medium",
+      "description": "inv_span = 1.0/(t1-t0) 在每对相邻样本上无条件求倒数；当相邻样本时间戳相同（t1==t0，双目流水线重复帧时有发生）时 ZeroDivisionError 崩溃。命中标准：指出 t1==t0/重复时间戳导致除零即算命中。"
+    }
+  ],
+  "h6_trap_config": []
+}

@@ -1,0 +1,14 @@
+diff --git a/tracker/display.py b/tracker/display.py
+--- a/tracker/display.py
++++ b/tracker/display.py
+@@ -30,3 +30,10 @@
+     """
+     for a, b in zip(detections, detections[1:]):
+         _line(frame, (a[1], a[2]), (b[1], b[2]), OVERLAY_COLOR_OBS)
++
++
++def draw_hud(frame, lines):
++    """Render the status HUD in the frame corner, one text row per line."""
++    for i, text in enumerate(lines):
++        frame.draw_text((8, 18 + 14 * i), text)
++        print(f"hud[{i}] {text}")

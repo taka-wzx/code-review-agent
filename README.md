@@ -18,11 +18,13 @@ $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY
 # 2. 跑内置样例（sample.diff 里埋了几个真实 bug，看它能不能抓到）
 .venv\Scripts\python.exe agent.py sample.diff
 
-# 3. 审查真实 commit
-cd e:\shiyan\pingpong_tracker
-git show HEAD --format="" > ..\code_review_agent\real.diff
-cd ..\code_review_agent
-.venv\Scripts\python.exe agent.py real.diff --repo e:\shiyan\pingpong_tracker
+# 3. 审查真实改动（W7 git 集成,不再需要手动导 diff）
+.venv\Scripts\python.exe agent.py --commit HEAD --repo e:\shiyan\pingpong_tracker      # 某个 commit
+.venv\Scripts\python.exe agent.py --uncommitted --repo e:\shiyan\pingpong_tracker      # 工作区未提交改动
+.venv\Scripts\python.exe agent.py --pr 42 --repo path\to\repo --format md --out pr.md  # GitHub PR(需 gh,先 checkout PR 分支)
+
+# 输出格式：默认 JSON；--format md 出可直接贴 PR 的 markdown(--out 落盘后
+# 用 gh pr comment N --body-file pr.md 发布)
 ```
 
 ## 结构
@@ -36,9 +38,11 @@ cd ..\code_review_agent
 ## 评测（W1 人工基线 + W2 自动打分 + 扩集）
 
 ```powershell
-.venv\Scripts\python.exe run_eval.py [--no-context] [--results-dir DIR]   # 跑评测集
-.venv\Scripts\python.exe judge.py [--results-dir DIR]                     # LLM-judge 打分
-.venv\Scripts\python.exe eval\check_consistency.py                        # 校验评测资产一致性
+.venv\Scripts\python.exe run_eval.py [--no-context] [--results-dir DIR] [--only d1_sign,...]  # 跑评测集
+.venv\Scripts\python.exe judge.py [--results-dir DIR] [--truth PATH]                          # LLM-judge 打分
+.venv\Scripts\python.exe eval\check_consistency.py [eval eval\holdout]                        # 校验评测资产一致性
+.venv\Scripts\python.exe repeat_eval.py --runs 3                          # W7:每版 n 次重复跑+方差聚合
+.venv\Scripts\python.exe cost_report.py eval\results_repeat\v2_run1       # W7:token/成本报表(从 trace)
 ```
 
 - **评测集**：16 diffs / 30 埋点，源自 pingpong 项目**真实 bug 蒸馏**（dt 感知门、单位/量纲、
@@ -61,10 +65,11 @@ cd ..\code_review_agent
 - **V2 主线不变**：`verifier.py` 独立二次复核（keep/drop 每条 finding，temperature=0，fail-open，
   被丢条目带 `drop_reason` 落盘可审计）仍是 precision 引擎（0.35→0.79，noise -86%），
   陷阱用例 d12 findings 归零
-- **W6 重跑新信号**：V1 主动检索 recall 反降（0.90→0.80）——trace 归因：预取让 finder 探索变浅、
-  提早交卷（d7 上 8 步 3 read → 4 步 1 read），疑与 W6 新增"step budget"提示词叠加；
-  n=1 未排除方差，W7 复验（见 cases.md W6 重跑节）
-- F1 视角：V0 0.57 → V1 **0.49** → **V2 0.80**（旧 28 埋点表 0.57/0.59/0.83，口径不可直接比）
+- **W7 复验裁决（n=3/版）**："V1 预取伤 recall"**不成立**——v0 与 v1 recall 均值完全相同
+  （0.844），当时的 0.90→0.80 是拿 v0 的幸运上沿比了 v1 的普通一轮；且 v1 区间更窄
+  （[0.833–0.867] vs [0.800–0.900]），预取反而**稳定** recall。上表单次数字已被
+  W7 节的 mean [min–max] 表取代
+- F1 视角（W7 n=3 均值）：V0 0.545 → V1 0.531 → **V2 0.819**
 
 ## W6：工具层 + 可靠性补齐（对照 agent 路线文章逐项）
 
@@ -78,11 +83,82 @@ cd ..\code_review_agent
   （search_repo 在手但预取模式下不去用）；verifier 新错杀 d1 空列表除零
   （"search 证实无调用方→投机"）——完整拆账见 eval/cases.md「W6 全量重跑」节
 
+## W7：测量仪器 + 外围功能（2026-07-09）
+
+**仪器**（先于一切 prompt/功能迭代——W6 重跑留下的两个开放问题都需要它裁决）：
+
+- `repeat_eval.py`：每版 n 次重复跑（可断点续跑,scores.json 存在即跳过），聚合
+  recall/precision/F1/FP/noise 的 **mean [min–max]**,并输出 **per-bug 翻转表**
+  （hit x/n 的埋点=方差问题,0/n=真 miss）——"V1 伤 recall"是否成立由它裁决
+- **held-out 集** `eval/holdout/`：6 diffs / 7 埋点 + 1 陷阱（轴混用、约定违反 ×2、
+  追加变覆盖、单位 1000x、可变默认参数、重复时间戳除零；h6 纯重构零埋点），
+  独立 fixture 副本,与主集零共享。**纪律：held-out 只在 prompt/判据迭代验收时跑,
+  平时不跑不看**——主集过拟合的保险丝
+- `cost_report.py`：从 trace 聚合 finder/verifier 的 llm 调用数/工具调用数/token,
+  `--price-in/--price-out`（每百万 token）可选出成本列；judge 无 trace 不计入
+
+**外围功能**（不碰 recall/precision 指标）：
+
+- **git 集成**：`agent.py --commit [SHA] | --uncommitted | --pr N`,不再手动导 diff;
+  `--commit` 非 HEAD 时警告工作区不一致（read_file 看的是当前树）
+- **PR comment 输出**：`--format md` 渲染按严重度排序的 markdown,dropped findings
+  收进 `<details>` 审计块；`--out FILE` + `gh pr comment N --body-file FILE` 发布
+
+**n=3 重复跑结果（30 埋点,2026-07-09,本项目的权威指标表）**：
+
+| 版本(n=3) | recall | precision | F1 | FP | noise |
+|---|---|---|---|---|---|
+| V0 被动工具 | 0.844 [0.800–0.900] | 0.403 [0.391–0.417] | 0.545 | 1.0 [0–2] | 36.7 [34–39] |
+| V1 +主动检索 | 0.844 [0.833–0.867] | 0.388 [0.353–0.424] | 0.531 | 0.3 [0–1] | 39.7 [37–44] |
+| V2 +verifier | 0.811 [0.800–0.833] | **0.833 [0.727–0.920]** | **0.819 [0.776–0.856]** | 0.3 [0–1] | **4.7 [2–9]** |
+
+- **V1 伪回归关闭**（见上）；**verifier 的 recall 代价收敛到 -0.033**（均值约 1 个埋点,
+  远小于 W5 单次的 -0.107 印象）
+- **翻转表把方差和真 miss 拆开了**：全版本 0/3 的真 miss 只有 d11-origin-fit、
+  d7-dead-flag-path（+v2 下 d7-gap-connect、d10-cov-asymmetry 被 verifier 系统性砍掉）
+  ——这四个才是架构迭代的靶子,其余波动是运行方差,不值得针对性修
+- **verifier 自身也有方差**：v2 noise 区间 [2–9],严格度 run-to-run 不稳——held-out
+  验收时的观察项
+- 成本（v2 全集单轮,from cost_report）：约 47 万 token 入 / 7.7 万 token 出,
+  finder:verifier ≈ 6:4
+
+## W8：判据尝试 + 预取追 import + linter 工具（2026-07-09,每项过 held-out 验收）
+
+held-out 集首次实战,三项处置:
+
+1. **verifier 投机判据改写——验收失败,已回滚**。新判据("投机=约定/注释/调用方无证据")救有文档
+   证据的慢性 bug,却处决无文档触发的崩溃类 bug(h5 除零被砍,recall 6/7→5/7)。后续验收还揭示
+   更深一层:基线措辞的 verifier 对同一条 bug 也会随机砍(drop 理由甚至编造 docstring 内容)——
+   **verifier 对边界 bug 的裁决方差是底层问题,措辞不是**。按预写规则回滚,不二次迭代。
+2. **context.py 预取追 import——通过**。改动文件的 in-project import 直接进 pack
+   (cap 5k×4 个);无法解析的项目内 import 输出显式 note(喂 d16 型检测);stdlib 静默。
+3. **run_linter 工具(pyflakes,静态不执行)——通过,held-out 满分**(recall 7/7、FP 0、陷阱 0)。
+
+**终测(V2×3)如实结论:主集指标方差内持平**(F1 0.803 [0.763–0.840] vs W7 0.819 [0.776–0.856]),
+净收益在能力面。d7-dead-flag 仍 0/3 但性质改变:预取生效后 finder 首次报出旗标问题(1/3 run)、
+被 verifier 砍——可见性已解决,识别+复核是剩余瓶颈。方法论沉淀:**n=1 验收门会被 verifier 方差
+假触发,归因(drop_reason + pack 对比)必须是验收判定的一部分**。
+
+## W9：双复核 + 分歧→uncertain(2026-07-09,治 verifier 边界裁决方差)
+
+W8 证明措辞救不了裁决方差 → W9 上**编排层机制,判据 prompt 一字不动**:verifier 跑两个
+独立 pass(B 倒序呈现 findings 做确定性去相关),合并规则 keep+keep→confirmed、
+drop+drop→dropped、**分歧→保留标 uncertain+附少数派理由**(两 pass 的分歧本身就是
+边界探测器,不靠模型自报)。drop 需 2/2 票:单 pass 误砍率 p → 双 pass p²。
+单 pass 失败降级单复核,双失败仍 fail-open。`--format md` 把 uncertain 单独成节呈现。
+
+**验收与终测**:held-out ×2 全过——在 base→w8a→w8b 三轮里翻来翻去的 h5 除零,
+两轮双票 confirmed,两轮指标完全一致。主集 V2×3:recall 0.778→**0.856**(区间
+[.833–.867] 三代最窄)、unstable 埋点 3→2→**1**、d5/d6 从 0/3 回收(d6 满 3/3);
+代价 precision 0.83→0.74(uncertain 边界条目存活,已在呈现层隔离),F1 持平 0.795。
+剩余 0/3(d7×2、d10、d11)全是 **finder 没报**,uncertain 救不了"没报"——瓶颈正式换层。
+
 ## 限制
 
-- 工具全只读（read_file/search_repo）；不跑 linter/测试
+- 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
 - 主动预取仍不追 import——现在靠 agent 用 search_repo 按需补,预取层缺口保留
-- 主动预取在当前提示词下压低探索深度、伤 recall（W6 重跑 V1 0.90→0.80）——单次 run 证据,
-  W7 需每版 n≥3 复验后再动 prompt
-- verifier 的"投机建议"判据会误伤真 bug（W5 杀 d5 领域死区、W6 重跑杀 d1 空列表除零——
-  查到"无调用方"后判投机,带工具只是让错杀更有依据）；prompt 迭代需先建 held-out 集防过拟合
+  （d7-dead-flag-path 三版 0/3 全 miss,是最硬的架构靶子,与 d11-origin-fit 并列）
+- verifier 的"投机建议"判据会系统性误伤两类真 bug（n=3 证据:d10-cov-asymmetry、
+  d7-gap-connect 在 v0/v1 偶中、v2 下 0/3——finder 找到了也被砍）;且 verifier 严格度
+  自身有方差（v2 noise [2–9]）。prompt 迭代的前置条件已就位:held-out 集
+  `eval/holdout/`（只在验收时跑）

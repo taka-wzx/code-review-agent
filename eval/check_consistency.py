@@ -10,16 +10,17 @@ Verifies three-way agreement between eval/diffs/*.diff, the fixture repo
   3. truth.json keys == the set of diff names (no orphans either way)
 
 Run it after adding or editing any eval asset:
-    python eval/check_consistency.py
+    python eval/check_consistency.py [BASE_DIR ...]
+
+BASE_DIR defaults to eval/; pass eval/holdout to check the held-out set,
+or several dirs to check them all. Each must contain diffs/, repo/,
+truth.json.
 """
 import json
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent          # eval/
-DIFFS = HERE / "diffs"
-REPO = HERE / "repo"
-TRUTH = HERE / "truth.json"
 
 
 def iter_hunks(diff_text):
@@ -46,7 +47,8 @@ def iter_hunks(diff_text):
         yield path, hunk
 
 
-def check() -> int:
+def check(base: Path = HERE) -> int:
+    DIFFS, REPO, TRUTH = base / "diffs", base / "repo", base / "truth.json"
     errors = []
 
     diff_files = sorted(DIFFS.glob("*.diff"))
@@ -89,14 +91,15 @@ def check() -> int:
             errors.append(f"{diff_path.stem}: no hunks parsed")
 
     if errors:
-        print(f"FAIL ({len(errors)} problem(s)):")
+        print(f"FAIL [{base}] ({len(errors)} problem(s)):")
         for e in errors:
             print(f"  - {e}")
         return 1
-    print(f"OK: {len(diff_files)} diffs consistent with fixture repo and truth.json "
-          f"({sum(len(v) for v in truth.values())} planted bugs total)")
+    print(f"OK [{base}]: {len(diff_files)} diffs consistent with fixture repo and "
+          f"truth.json ({sum(len(v) for v in truth.values())} planted bugs total)")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(check())
+    bases = [Path(a) for a in sys.argv[1:]] or [HERE]
+    sys.exit(max(check(b) for b in bases))

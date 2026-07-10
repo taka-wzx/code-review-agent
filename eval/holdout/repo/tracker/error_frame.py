@@ -1,0 +1,12 @@
+"""Flight-frame error reduction for bounce prediction (see CLAUDE.md 5.1)."""
+
+
+def flight_frame_errors(dx_mm, dy_mm, vx_at_snap, vy_at_snap):
+    """Project axis-aligned bounce errors onto the flight direction.
+
+    Positive returned values mean OVERSHOOT along that axis.
+    """
+    sign_y = 1.0 if vy_at_snap >= 0 else -1.0
+    along_y = sign_y * dy_mm
+    along_x = dx_mm
+    return along_x, along_y

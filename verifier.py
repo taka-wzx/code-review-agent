@@ -14,11 +14,19 @@ The verifier has the same read-only tools as the finder (read_file,
 search_repo): a Reflection pass without the means to check claims beyond
 the given context can only guess on findings whose truth lives in another
 file -- that is how d5 got wrongly dropped.
+
+W9: verdicts on boundary bugs proved to be a coin flip run-to-run (W8
+record), and rewording the criteria demonstrably cannot fix that. So the
+verifier now runs TWO independent passes with the unchanged prompt (pass
+B sees the findings in reverse order for deterministic decorrelation) and
+merges: agreement applies, disagreement keeps the finding marked
+"uncertain" with the dissenting reason attached. The split between passes
+is the boundary-case detector -- no prompt self-reports doubt.
 """
 import json
 import sys
 
-from tools import READ_FILE_TOOL, SEARCH_REPO_TOOL, ToolSession
+from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from tracelog import tev
 
 VERIFIER_SYSTEM = """You are a strict code-review verifier. You receive a
@@ -118,18 +126,45 @@ def apply_verdicts(findings: list, verdicts: list) -> tuple[list, list]:
     return kept, dropped
 
 
-def verify_findings(client, model: str, review_input: str, findings: list,
-                    repo_root, trace=None) -> tuple[list, list]:
-    """Run the verifier pass. review_input is the exact user content the
-    finder saw (diff + retrieved context), so both passes share one view;
-    the tools let the verifier check anything beyond that view itself.
+def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[list, list]:
+    """Merge two independent passes (W9). Agreement applies; disagreement
+    keeps the finding marked uncertain -- the split between two passes IS
+    the boundary-case detector, so no prompt has to self-report doubt.
+    Pure function, unit-testable offline.
 
-    Returns (kept, dropped). On persistent verifier failure, fails open:
-    keeps everything (a broken verifier must not silently eat findings).
+    Returns (kept, dropped): kept items carry verification "confirmed" or
+    "uncertain" (+ dissent_reason); dropped need 2/2 drop votes.
     """
-    if not findings:
-        return [], []
+    ma = {v["finding_index"]: v for v in verdicts_a}
+    mb = {v["finding_index"]: v for v in verdicts_b}
+    kept, dropped = [], []
+    for i, f in enumerate(findings):
+        va, vb = ma[i], mb[i]
+        if va["verdict"] == "keep" and vb["verdict"] == "keep":
+            kept.append({**f, "verification": "confirmed"})
+        elif va["verdict"] == "drop" and vb["verdict"] == "drop":
+            dropped.append({**f, "drop_reason": "2/2: " + va["reason"]})
+        else:
+            dissent = va if va["verdict"] == "drop" else vb
+            kept.append({**f, "verification": "uncertain",
+                         "dissent_reason": dissent["reason"]})
+    return kept, dropped
+
+
+def _verify_pass(client, model: str, review_input: str, findings: list,
+                 repo_root, trace=None, pass_id: str = "A",
+                 reverse_order: bool = False):
+    """One independent verifier conversation (unchanged baseline prompt).
+
+    reverse_order presents the numbered findings back-to-front -- explicit
+    index fields keep the mapping intact -- giving the two passes
+    deterministic decorrelation without touching temperature.
+
+    Returns a validated verdicts list, or None when this pass failed.
+    """
     numbered = [{"index": i, **f} for i, f in enumerate(findings)]
+    if reverse_order:
+        numbered = list(reversed(numbered))
     messages = [
         {"role": "system", "content": VERIFIER_SYSTEM},
         {"role": "user", "content":
@@ -137,7 +172,7 @@ def verify_findings(client, model: str, review_input: str, findings: list,
             + "\n\nCandidate findings to verify:\n\n"
             + json.dumps(numbered, ensure_ascii=False, indent=2)},
     ]
-    session = ToolSession(repo_root, trace=trace, component="verifier")
+    session = ToolSession(repo_root, trace=trace, component=f"verifier{pass_id}")
     bad_submits = 0
     last_problems = []
     for step in range(1, MAX_STEPS + 1):
@@ -151,13 +186,16 @@ def verify_findings(client, model: str, review_input: str, findings: list,
                 "verified so far."})
         response = client.chat.completions.create(
             model=model, max_tokens=4000, temperature=0.0,
-            tools=[VERDICT_TOOL] if final else [READ_FILE_TOOL, SEARCH_REPO_TOOL, VERDICT_TOOL],
+            tools=([VERDICT_TOOL] if final else
+                   [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL, VERDICT_TOOL]),
             tool_choice="auto", messages=messages,
         )
         msg = response.choices[0].message
         tool_calls = msg.tool_calls or []
-        tev(trace, "llm_response", component="verifier", step=step,
-            tool_calls=[tc.function.name for tc in tool_calls])
+        u = response.usage
+        tev(trace, "llm_response", component=f"verifier{pass_id}", step=step,
+            tool_calls=[tc.function.name for tc in tool_calls],
+            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens)
         submit = next((tc for tc in tool_calls
                        if tc.function.name == "submit_verdicts"), None)
 
@@ -170,14 +208,15 @@ def verify_findings(client, model: str, review_input: str, findings: list,
             else:
                 problems = validate_verdicts(verdicts, len(findings))
                 if not problems:
-                    kept, dropped = apply_verdicts(findings, verdicts)
-                    tev(trace, "verdicts", steps=step,
-                        kept=len(kept), dropped=len(dropped))
-                    return kept, dropped
+                    tev(trace, "verifier_pass", pass_id=pass_id, steps=step,
+                        drops=sum(1 for v in verdicts if v["verdict"] == "drop"))
+                    return verdicts
             bad_submits += 1
             last_problems = problems
-            print(f"[verifier step {step}] invalid verdicts: {problems}", file=sys.stderr)
-            tev(trace, "submit_rejected", component="verifier", problems=problems)
+            print(f"[verifier{pass_id} step {step}] invalid verdicts: {problems}",
+                  file=sys.stderr)
+            tev(trace, "submit_rejected", component=f"verifier{pass_id}",
+                problems=problems)
             if bad_submits >= MAX_SUBMIT_ATTEMPTS:
                 break
 
@@ -185,7 +224,7 @@ def verify_findings(client, model: str, review_input: str, findings: list,
             # Answered in text: counts as a failed attempt, then nudge.
             bad_submits += 1
             last_problems = ["verifier answered in text instead of calling submit_verdicts"]
-            print(f"[verifier step {step}] {last_problems[0]}", file=sys.stderr)
+            print(f"[verifier{pass_id} step {step}] {last_problems[0]}", file=sys.stderr)
             if bad_submits >= MAX_SUBMIT_ATTEMPTS:
                 break
             messages.append({"role": "assistant", "content": msg.content or ""})
@@ -209,14 +248,56 @@ def verify_findings(client, model: str, review_input: str, findings: list,
             if tc is submit:
                 content = "Verdicts rejected: " + "; ".join(problems)
             else:
-                print(f"[verifier step {step}] {tc.function.name} "
+                print(f"[verifier{pass_id} step {step}] {tc.function.name} "
                       f"{tc.function.arguments[:120]}", file=sys.stderr)
                 content = session.execute(tc.function.name, tc.function.arguments)
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": content})
 
-    print(f"[verifier] FAILED (steps={MAX_STEPS} cap or {bad_submits} bad submits), "
-          f"failing open -- keeping all {len(findings)} findings; "
-          f"last problems: {last_problems}", file=sys.stderr)
-    tev(trace, "verifier_fail_open", n_findings=len(findings), problems=last_problems)
-    return findings, []
+    print(f"[verifier{pass_id}] pass FAILED (steps={MAX_STEPS} cap or "
+          f"{bad_submits} bad submits); last problems: {last_problems}",
+          file=sys.stderr)
+    tev(trace, "verifier_pass_failed", pass_id=pass_id, problems=last_problems)
+    return None
+
+
+def verify_findings(client, model: str, review_input: str, findings: list,
+                    repo_root, trace=None) -> tuple[list, list]:
+    """Double-verification orchestrator (W9). review_input is the exact
+    user content the finder saw, so all passes share one view; the tools
+    let each pass check anything beyond that view itself.
+
+    Two independent passes (B sees the findings in reverse order); their
+    agreement applies, their disagreement keeps the finding as
+    "uncertain". One failed pass degrades to single-pass verdicts; both
+    failed fails open (a broken verifier must not silently eat findings).
+    """
+    if not findings:
+        return [], []
+    va = _verify_pass(client, model, review_input, findings, repo_root,
+                      trace=trace, pass_id="A", reverse_order=False)
+    vb = _verify_pass(client, model, review_input, findings, repo_root,
+                      trace=trace, pass_id="B", reverse_order=True)
+
+    if va is None and vb is None:
+        print(f"[verifier] both passes FAILED, failing open -- keeping all "
+              f"{len(findings)} findings", file=sys.stderr)
+        tev(trace, "verifier_fail_open", n_findings=len(findings))
+        return findings, []
+    if va is None or vb is None:
+        failed = "A" if va is None else "B"
+        print(f"[verifier] pass {failed} failed -- degrading to single-pass "
+              "verdicts (no uncertainty detection this run)", file=sys.stderr)
+        kept, dropped = apply_verdicts(findings, va or vb)
+        tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
+            degraded=True, failed_pass=failed)
+        return kept, dropped
+
+    kept, dropped = merge_verdicts(findings, va, vb)
+    n_unc = sum(1 for f in kept if f.get("verification") == "uncertain")
+    print(f"[verifier] merged: {len(kept)} kept "
+          f"({len(kept) - n_unc} confirmed, {n_unc} uncertain), "
+          f"{len(dropped)} dropped", file=sys.stderr)
+    tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
+        confirmed=len(kept) - n_unc, uncertain=n_unc)
+    return kept, dropped

@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from openai import OpenAI
 import openai
 
 from context import build_context
-from tools import READ_FILE_TOOL, SEARCH_REPO_TOOL, ToolSession
+from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from tracelog import Trace, tev
 from verifier import verify_findings
 
@@ -97,7 +98,7 @@ SUBMIT_TOOL = {
         "parameters": REVIEW_SCHEMA,
     },
 }
-TOOLS = [READ_FILE_TOOL, SEARCH_REPO_TOOL, SUBMIT_TOOL]
+TOOLS = [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL, SUBMIT_TOOL]
 
 SEVERITIES = ("high", "medium", "low")
 
@@ -267,19 +268,67 @@ def make_client() -> tuple[OpenAI, str]:
     return client, cfg["model"]
 
 
+def _git_diff_text(args) -> str:
+    """Resolve the diff to review from git / gh instead of a file.
+
+    The repo working tree is what read_file and the context pack see, so
+    it must be checked out at the post-change state of whatever diff is
+    reviewed (HEAD for --commit HEAD, the PR branch for --pr, the current
+    tree for --uncommitted).
+    """
+    if args.pr:
+        cmd = ["gh", "pr", "diff", str(args.pr)]
+    elif args.uncommitted:
+        cmd = ["git", "diff", "HEAD", "--no-color", "--unified=3"]
+    else:
+        cmd = ["git", "show", args.commit, "--format=", "--no-color", "--unified=3"]
+        if args.commit != "HEAD":
+            print(f"[warn] reviewing {args.commit} but read_file sees the current "
+                  "working tree -- check out that commit for consistent context",
+                  file=sys.stderr)
+    try:
+        proc = subprocess.run(cmd, cwd=args.repo, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        sys.exit(f"{cmd[0]!r} not found on PATH")
+    if proc.returncode != 0:
+        sys.exit(f"{' '.join(cmd)} failed:\n{proc.stderr.strip()}")
+    if not proc.stdout.strip():
+        sys.exit(f"{' '.join(cmd)} produced an empty diff -- nothing to review")
+    return proc.stdout
+
+
 def main():
     parser = argparse.ArgumentParser(description="Minimal code-review agent")
-    parser.add_argument("diff", help="Path to a unified diff file")
+    parser.add_argument("diff", nargs="?",
+                        help="Path to a unified diff file (or use --commit/--uncommitted/--pr)")
     parser.add_argument("--repo", default=".", help="Repo root for read_file context")
+    parser.add_argument("--commit", metavar="SHA", nargs="?", const="HEAD",
+                        help="Review a git commit in --repo (default HEAD)")
+    parser.add_argument("--uncommitted", action="store_true",
+                        help="Review uncommitted changes in --repo (git diff HEAD)")
+    parser.add_argument("--pr", metavar="N",
+                        help="Review GitHub PR #N in --repo (needs gh; check out the PR branch first)")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip proactive context retrieval (ablation)")
     parser.add_argument("--no-verify", action="store_true",
                         help="Skip the verifier second pass (ablation)")
     parser.add_argument("--trace", metavar="PATH",
                         help="Write a JSONL run trace to this path")
+    parser.add_argument("--format", choices=["json", "md"], default="json",
+                        help="Output format: json (default) or md (PR-comment markdown)")
+    parser.add_argument("--out", metavar="PATH",
+                        help="Also write the formatted review to this file")
     args = parser.parse_args()
 
-    diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    sources = [bool(args.diff), bool(args.commit), args.uncommitted, bool(args.pr)]
+    if sum(sources) != 1:
+        parser.error("give exactly one diff source: a diff file, --commit, "
+                     "--uncommitted, or --pr")
+    if args.diff:
+        diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
+    else:
+        diff_text = _git_diff_text(args)
     client, model = make_client()
     trace = Trace(args.trace) if args.trace else None
     try:
@@ -299,7 +348,20 @@ def main():
         if trace:
             trace.close()
 
-    print(json.dumps(review, indent=2, ensure_ascii=False))
+    if args.format == "md":
+        from render import render_markdown
+        src = args.diff or (f"PR #{args.pr}" if args.pr else
+                            "uncommitted changes" if args.uncommitted else args.commit)
+        output = render_markdown(review, title=f"Code review: {src}")
+    else:
+        output = json.dumps(review, indent=2, ensure_ascii=False)
+    if args.out:
+        Path(args.out).write_text(output, encoding="utf-8")
+        print(f"[out] review written to {args.out}", file=sys.stderr)
+        if args.pr and args.format == "md":
+            print(f"[hint] post it with: gh pr comment {args.pr} "
+                  f"--body-file {args.out}", file=sys.stderr)
+    print(output)
 
 
 if __name__ == "__main__":
