@@ -195,17 +195,39 @@ F1 0.795→**0.811**、noise 8.3→**5.3**、陷阱均值 3.0→**1.0**、never_
 1/3→**3/3**);连败链 calls 三组件一致 **-27%~-46%**;切片 tokens_in +3.3%(σ内,见上)。
 T1 保留,全量成本效果留待 W12 重新基线化校验。
 
+## W12:finder 双跑并集 + 文件级 scope 口径(2026-07-11~12)
+
+**重新基线化先行**(T0,改代码前从 `git archive` 冻结副本跑 V2×3):W11 全量
+tokens_in 870k→**795k(-8.6%)**、连败链 calls **-83%**——W11 悬置的成本裁决兑现,切片门
+"失败"确系门槛设计失误。质量面 F1 持平 0.811;**d5-window/d7-dead-flag 恶化为 0/3**,
+采样层缺口坐实。
+
+1. **双跑并集**(agent.py/findings.py):run1 保持 temp=0 锚点(失败语义不变),run2 temp=0.7
+   采样、失败 fail-open 降级;并集结构化去重(issue 文本 token-set Jaccard 双档:≥.40 任意
+   行距 / ≥.25 且 Δ行≤4,阈值实测自 w10 跨 run 对;单向合并,锚点措辞永不动),残余重复靠
+   verifier duplicate→DROP 兜底;run2 新增项带 `origin:"finder2"` 溯源。
+2. **文件级 scope**(findings.py/judge.py):并集后、验证前,diff 外发现降级
+   `out_of_scope_findings`——不验证、不计 precision(judge 侧 `n_out_of_scope` 单列);
+   verifier prompt 一字不动。**W12 起 precision 换分母,与前代不直接可比。**
+3. **成本豁免**:全额双跑,实测 +69.7%(795k→1349k in,预估包络顶格),cases.md 明示豁免;
+   连败链在 temp=0.7 下维持低位(刹车依然有效)。
+
+**终测(V2×3)**:recall 0.845→**0.900 [.867–.933]**、F1 0.811→**0.830**(区间五代最窄)、
+**FP 三轮全 0**、noise 8.0、陷阱 1.0、never_hit 4→**2**(d5 毕业 2/3、dead-flag 历史首次
+judge 层存活;剩 d10-cov、d11-origin);oos 5.3 条/轮。holdout **7/7 满分**、h6 陷阱 kept=0、
+classify_bounce 伪影如预期落 oos——三代协议 FP 摇摆终结。预写闸门 **7/7 全过,判定通过**。
+切片归因:dead-flag/cov finder 层 0/3→**3/3**(双跑达成立项目标),但 verifier 2/2 砍、
+drop 理由逐字复现证据规则明令禁止的话术——"报了被砍"回归为 W13 头号候选。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
-- **剩余两个 0/3 都卡在 finder 识别层**:d10-cov-asymmetry(识别率 ~56%,报出且表述正确
-  +新证据规则的组合尚未被采样到——规则二未经检验而非已失败)、d11-origin-fit(领域难档,
-  三代 0/x,挂起)。d5/d6/dead-flag 同属 finder 率问题——"报了被砍"已修,finder 采样
-  (温度>0 多采样/双跑并集)是 W11 的自然靶子,W10 立项时缓期它的理由已不成立
-- **verifier 无 scope 口径**:diff 外 [Pre-existing] 发现 W5 时代被砍、W10 经分歧通道
-  存活(终测 run1 四条,协议记 FP 但实为共享 fixture 的他用例埋点)——三代口径摇摆,
-  需要显式规则
-- **分歧率自身方差大**(uncertain 5–14 条/run):run 间 precision 波动的主因;共享 fixture
-  的评测协议把"顺路发现的真 bug"记 FP,压低 precision 读数
-- 成本 870k in/轮(+27% vs W9)。W11 起预算化(≤+10%/W 全量口径,cost_report --baseline
-  入档);兔子洞刹车的全量节省额待 W12 重新基线化时校验
+- **verifier 证据规则触发率**(W13 头号候选):dead-flag/cov 现在 finder 层 3/3 报出,但
+  两 pass 一致砍,drop 理由逐字撞规则禁止的推理("hypothesizing a future caller"、
+  "generic best-practice, no concrete failure")——优先级声明在场但不生效,uncertain
+  通道救不了 2/2
+- d11-origin-fit 领域难档,四代 0/x,维持挂起
+- **成本 1349k in/轮(+69.7%,豁免周)**:双跑翻倍 finder、verifier 随并集增长——W13 需
+  预算化消化(候选:run2 步预算减半/条件二跑/共享上下文前缀)
+- uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起
+  单独入档,精读时与 precision 并看

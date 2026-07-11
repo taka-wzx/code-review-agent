@@ -319,3 +319,56 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 4. **判定:T1 保留**——无害已证+机制指标一致下降;回滚一个行为无害、机制有效的改动去满足统计不可达成的门,是 W8 教训的反向重演。T2 复现 W9→W10 归因表逐位一致(finder +128,109/总 +183,281=+26.7%)后固化。
 
 **预算规则(T3,即日生效)**:机制类改动 tokens_in 预算 **≤+10%/W**(全量 V2×3 口径),超出需当轮专项回收或在 cases.md 明示豁免及理由;每轮 W 终测必须跑 `cost_report --baseline <上代 results_repeat>` 出对比表入档。成本门槛今后只在全量口径上设定,靶向切片只看机制指标(如链 calls)。
+
+## W12(2026-07-11):finder 双跑并集 + 文件级 scope 口径——对着采样层缺口与三代 FP 摇摆
+
+**重新基线化(T0,W12 代码落地前跑,commit f263e70)**:
+
+- 质量面:recall 0.845 [.800–.867]、precision 0.787 [.694–.885]、F1 0.811 [.771–.840]、FP 0.3 [0–1]、noise 6.7 [3–10];unstable:d4-magic 2/3、d7-gap 2/3;never_hit:d10-cov、d11-origin、**d5-window、d7-dead-flag**——后两个从 W10 的间歇命中(1/3)恶化为 0/3,采样层缺口坐实,双跑立项前提成立。陷阱 d12+d13 kept 1/3/1(均值 1.67)。
+- **W11 悬置的成本裁决(√)**:tokens_in 870.0k→**795.0k(-8.6%)**、tokens_out -10.4%;3+连败链 calls finder 35.7→6.3、verifierA 21.7→2.0、verifierB 25.7→2.0(**合计 -83%**)。W11 切片门"+3.3% 不达 -10%"确系门槛设计失误——刹车在全量口径效果显著且三组件一致。
+- 事故记录:首次基线跑中途发现被并行的 W12 开发代码污染(进程管理事故:被停止的 repeat_eval 进程树实际存活,重新拉起的子进程从磁盘读到了半成品新代码;run2/3 trace 含 finder2 事件,作废重跑;run1 的 16 个结果文件经三重核查——无 oos 字段、无 finder2 事件、每 trace 恰一个 review 事件——为纯 W11 产物,保留重评)。防复发:**基线/对照一律从 `git archive` 冻结副本执行**,开发树与评测树物理隔离。
+
+**设计**(四取舍均为用户预先裁决):
+
+1. **双跑**:run1 保持 temperature=0(锚点,失败照旧致命、错误文案不变);run2 temperature=0.7(采样多样性),任何失败 fail-open 降级为仅锚点(镜像 verifier 的降级语义,采样跑永远不能弄坏 review)。
+2. **结构化去重**(findings.py 纯函数,零额外 LLM):issue 文本 token-set Jaccard 双档判定——jac ≥.40 任意行距,或 jac ≥.25 且 |Δ行|≤4;阈值实测自 results_repeat_w10 跨 run 对(同 bug 对 .26–.67 @ Δ0–7,异 bug 同行对 ≤.22),宁漏合不错合(错合只可能吞 run2 副本,锚点发现永不被动)。残余重复靠 verifier 既有 duplicate→DROP 规则兜底(冒烟已证:4 条实际重复结构层合 1、verifier 兜 3)。run2 新增项打 `origin:"finder2"` 溯源键供归因审计。
+3. **文件级 scope 代码判定**:并集后、验证前,file 不在 diff 改动文件集(context.parse_diff)内的发现降级 `out_of_scope_findings`——不验证(其 verdict 三代都是抛硬币,这正是要消除的摇摆)、不计 precision。行级 scope 被否(同 bug 行号跨 run 漂移 ±1–7,合法发现常引 hunk 内上下文行);verifier prompt scope 条款被否(scope 是确定性集合成员问题,摇摆恰因让 LLM 判;VERIFIER_SYSTEM 一字不动,TestVerifierGolden 零改动通过=反向证明)。d16 安全性已验:缺失模块发现三 run 全引改动文件本身,文件级 scope 不误伤,unit test 钉死该模式。
+4. **成本豁免(本条即记录)**:全额双跑,预估 tokens_in +50~70%,超出 ≤+10%/W 预算——W12 定性为召回主题周,明示豁免;实际增幅照常 `cost_report --baseline results_repeat_w11` 入档,scope 降级免验证部分回收 verifier 成本。
+
+**协议变更(显式标注,自 W12 起)**:precision 分母不再包含被降级的 diff 外发现(judge 侧 `n_out_of_scope` 单列入档)——W12 的 precision 与 W10/W11 不直接可比;比较时同时看 oos 列。共享 fixture 真 bug 被记 FP 的历史协议缺陷同步消除。
+
+**预写验收(跑之前落笔,锚定 T0=results_repeat_w11)**:
+
+1. **定向切片**:trio(d5,d6,d7)×3 + d10×3——d5-window/d6-ghost judge 层各 ≥2/3;d7-dead-flag finder 层 ≥2/3、judge 层 ≥1/3;d10-cov finder 层 ≥2/3(单跑率 ~56%→双跑期望 ~80%);每 diff 总产出(kept+dropped+oos)≤ T0 同 diff 均值 +4(d5≤8.0、d6≤8.0、d7≤6.7、d10≤10.0);run2 须至少贡献 1 条并集新发现(查 origin);d16×2:2/2 命中、零编造、缺失模块发现 in-scope。
+2. **全量 V2×3**(results_repeat_w12,`cost_report --baseline results_repeat_w11`):recall mean ≥0.865(T0+0.02)且 min ≥0.833;FP mean ≤1.0 且 d5 型越界移入 oos(oos 预期在受影响轮 ≥2);noise mean ≤8.7(T0+2);陷阱 d12+d13 kept 均值 ≤1.67;never_hit 不增(d11 挂起豁免);F1 mean ≥0.801(注明换分母)。成本无 ≤+10% 门(豁免见上),如实记录。
+3. **holdout**(仅验收):recall ≥6/7、h5 kept、h6 ≤1 uncertain 且 0 confirmed FP;classify_bounce fixture 伪影应现身 out_of_scope_findings 而非 FP。
+4. **失败处置(预写)**:recall 未达→先按 origin 标签归因 run2 实际贡献,再考虑动阈值;precision/noise 爆→先查 run2-only 发现在 uncertain 通道的存活占比(备用杠杆:origin=finder2 须 2/2 confirmed 才保留——本周不实现,只记录);疑似错合→只调 sim_far/sim_near,迭代预算 1 次。
+
+**定向切片结果(2026-07-11,commit 08cc291)**:
+
+- **采样层目标全数攻克(finder 层)**:d5-window-deadzone judge 层 **0/3→2/3**(唯一 miss 轮属方差)、d6-ghost 3/3;**d7-dead-flag finder 层 0/3→3/3、d10-cov finder 层 ~56%→3/3**——双跑每轮都把两者送进 verifier(dead-flag 常常 run1+run2 各报一条,cov 的 Joseph form 三轮齐报)。run2 并集贡献遍布(14 个切片 13 个 ≥1 条新发现;d6 run2 一条 finder2 发现以 kept 存活)。产出量均值全部在线(d5 5.0/d6 5.3/d7 6.7/d10 8.7 vs 门 8.0/8.0/6.7/10.0,d7 压线)。d16 探针 2/2、零编造、缺失模块发现 in-scope(oos=0)——文件级 scope 与刹车均未误伤缺失检测。scope 降级实战首秀:d5/d6 各轮 0–1 条越界发现落 oos(gate.py/speed.py 他用例埋点,正是 W10 终测的 FP 来源)。
+- **dead-flag/cov judge 层 0/3 ✘——"报了被砍"回归,归因至 verifier 证据规则不触发**:两者三轮全部 2/2 砍。drop 理由逐字复现三代砍杀话术:dead-flag run2"no call sites … depends on hypothesizing a future caller"(撞规则三明令禁止的推理)、run1/run3"documented in config comments = intentional design / live kill-switch"(撞规则一);cov 三轮"generic numerical best-practice, no concrete failure identified"(撞规则二"怀疑≠反驳,须驳机理本身")。两 pass 一致砍,分歧兜底不触发。**定性:W12 机制(采样层)达成立项目标;残余瓶颈换层至 verifier 规则执行率,与 W10 Stage B 轮2 的"规则未被采样"同源——verifier prompt 本周界定不动(TestVerifierGolden 零改动=反向证明),记 W13 候选:证据规则触发率(优先级声明已存在,考虑规则内嵌反例措辞或 DROP 条目交叉引用)。**
+- 切片判定:**通过(带 dead-flag judge 层保留)**,按预写处置不动阈值、不迭代 prompt,进入全量终测。
+
+**主集终测(V2×3,2026-07-12)与五代对比:**
+
+| | recall | precision | F1 | noise | FP | unstable | never-hit |
+|---|---|---|---|---|---|---|---|
+| W9 双复核 | 0.856 [.833–.867] | 0.743 [.722–.781] | 0.795 [.776–.822] | 8.3 [7–9] | — | 1 | 4 |
+| W10 清单+证据规则 | 0.856 [.800–.900] | 0.777 [.667–.852] | 0.811 [.754–.854] | 5.3 [3–8] | 2.3 | 4 | 2 |
+| W11 重基线(T0) | 0.845 [.800–.867] | 0.787 [.694–.885] | 0.811 [.771–.840] | 6.7 [3–10] | 0.3 | 2 | 4 |
+| **W12 双跑+scope** | **0.900 [.867–.933]** | 0.770 [.757–.788]* | **0.830 [.813–.840]** | 8.0 [7–9] | **0.0 [0–0]** | 2 | **2** |
+
+\* W12 起 precision 换分母(oos 移出),与前代不直接可比;oos 5.3 [2–9] 条/轮单列。
+
+**预写闸门逐项判定(7/7 全过)**:recall mean 0.900 ≥0.865 ✅、min 0.867 ≥0.833 ✅;FP 0.0 ≤1.0 ✅(scope 降级后三轮全 0——W10 终测 run1 四条越界 FP 这一族整体消失,d5 型越界稳定现身 oos);noise 8.0 ≤8.7 ✅;陷阱 d12+d13 kept 1/0/2(均值 1.0 ≤1.67)✅;never_hit 4→2 不增 ✅(**d5-window 毕业至 2/3、d7-dead-flag 历史首次 judge 层存活 1/3**;剩 d10-cov、d11-origin);F1 0.830 ≥0.801 ✅ 且区间 [.813–.840] 为五代最窄。
+
+**成本(豁免周,如实入档)**:tokens_in 795.0k→**1348.8k(+69.7%)**,在预估 +50~70% 包络顶格。构成:finder2 +407k(与 finder 几乎等重:calls 90 vs 92、步深 5.62 vs 5.75——采样跑并未更浅);verifier +102k(并集变大:A/B calls 各 +7.3/+5.3);oos 免验证的回收被并集增量吞没。连败链 calls 维持低位(finder 8.0/finder2 8.3 vs W10 时代 35.7)——W11 刹车在温度 0.7 下依然有效。
+
+**origin 归因审计(必做项)**:finder2 judge 层直接产出=d5-window@run2(**独立命中,立项头号靶**)+d11-ukf-vz@run2、d15-writer-leak@run3(协同);其余增益(d4-magic、d7-gap 归稳,d5@run1、dead-flag@run2 经锚点跑命中)为锚点侧方差红利——temp=0 的 provider 非确定性本轮站在收益侧,不据此夸大机制贡献,机制的硬证据在 finder 层(切片 dead-flag/cov 0/3→3/3)。run2 kept 中 6 条 finder2 发现全走 uncertain 通道(风险清单预判命中),noise 仍在门内,"origin=finder2 须 2/2"备用杠杆未启用、维持记录在案。
+
+**holdout(仅验收,×1)**:recall **7/7**(h2 行数上限这个历史 flapper 也命中)、precision 8/8、FP 0、noise 0;h5 除零 kept(负向控制连续三代未误伤);**h6 陷阱 kept=0**(优于 ≤1 门)——W10-B 的 MAX_POLYLINE_POINTS 性能猜测本轮由 finder2 报出、被 scope 降级接走落 oos,不再走 uncertain 通道;**classify_bounce fixture 伪影如闸门预期现身 out_of_scope_findings**(h4,finder2 报出)——三代协议 FP 摇摆在设计好的通道里终结。
+
+**一句话**:W12 把"finder 采样层"这一族修掉了(d5 毕业、dead-flag 历史首次 judge 层存活、切片 finder 层 dead-flag/cov 双双 0/3→3/3),文件级 scope 把三代摇摆的越界发现引入专用通道(主集 FP 三轮全 0、holdout 双伪影落 oos),recall 0.845→**0.900**、F1 0.811→**0.830** 且区间五代最窄;代价是成本 +69.7%(豁免入档)与 verifier 砍杀模式在 dead-flag/cov 上的回归暴露(证据规则不触发,W13 头号候选)。**判定:通过,不回滚。**
+
+**W13 候选**(机制先行):①verifier 证据规则触发率——dead-flag/cov 现在 finder 层 3/3 但 2/2 被砍,drop 理由逐字复现规则明令禁止的话术(优先级声明在但不生效;考虑规则内嵌反例或 DROP 条目处交叉引用);②成本回收——双跑 +69.7% 需预算化消化(候选:run2 步预算减半/共享锚点会话前缀/条件二跑);③uncertain 通道容量——run 间 oos 2–9 与 uncertain 波动仍是 precision 方差主源。d11-origin 维持领域难档挂起。
