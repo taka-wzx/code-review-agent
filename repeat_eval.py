@@ -107,6 +107,7 @@ def aggregate(out: Path, versions: list[str], runs: int) -> dict:
                 "recall": t["recall"], "precision": t["precision"],
                 "f1": f1(t["recall"], t["precision"]),
                 "fp": t["false_positives"], "noise": t["noise"],
+                "out_of_scope": t.get("out_of_scope", 0),
                 "hits": t["hits"], "findings": t["findings"],
                 **trace_tokens(run_dir),
             })
@@ -133,6 +134,7 @@ def aggregate(out: Path, versions: list[str], runs: int) -> dict:
             "completed_runs": n,
             "recall": stat("recall"), "precision": stat("precision"),
             "f1": stat("f1"), "fp": stat("fp"), "noise": stat("noise"),
+            "out_of_scope": stat("out_of_scope"),
             "tokens_in": stat("tokens_in"), "tokens_out": stat("tokens_out"),
             "runs": rows,
             "unstable_bugs": flappers,   # hit in some runs, missed in others
@@ -143,7 +145,7 @@ def aggregate(out: Path, versions: list[str], runs: int) -> dict:
 
 def print_summary(summary: dict) -> None:
     print(f"\n{'ver':<4} {'n':>2} {'recall':>18} {'precision':>18} "
-          f"{'F1':>18} {'FP':>7} {'noise':>9}")
+          f"{'F1':>18} {'FP':>7} {'noise':>9} {'oos':>9}")
     for ver, s in summary.items():
         if not s.get("completed_runs"):
             print(f"{ver:<4}  0  (no completed runs)")
@@ -154,7 +156,8 @@ def print_summary(summary: dict) -> None:
                             else f"{st['mean']:.1f} [{st['min']}-{st['max']}]")
         print(f"{ver:<4} {s['completed_runs']:>2} {fmt(s['recall']):>18} "
               f"{fmt(s['precision']):>18} {fmt(s['f1']):>18} "
-              f"{fmt_i(s['fp']):>7} {fmt_i(s['noise']):>9}")
+              f"{fmt_i(s['fp']):>7} {fmt_i(s['noise']):>9} "
+              f"{fmt_i(s['out_of_scope']):>9}")
     for ver, s in summary.items():
         if s.get("unstable_bugs"):
             print(f"\n{ver} unstable bugs (variance, hit x/n): {s['unstable_bugs']}")

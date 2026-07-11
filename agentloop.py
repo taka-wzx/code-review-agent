@@ -35,7 +35,7 @@ def run_submit_loop(client, model: str, messages: list, *,
                     parse: Callable[[str], tuple[Any, list]],
                     session,
                     max_steps: int, max_submit_attempts: int,
-                    max_tokens: int,
+                    max_tokens: int, temperature: float = 0.0,
                     budget_msg: str,
                     reject_msg: Callable[[list], str],
                     trace=None, component: str = "",
@@ -64,7 +64,7 @@ def run_submit_loop(client, model: str, messages: list, *,
         if final:
             messages.append({"role": "user", "content": budget_msg})
         response = client.chat.completions.create(
-            model=model, max_tokens=max_tokens, temperature=0.0,
+            model=model, max_tokens=max_tokens, temperature=temperature,
             tools=[submit_tool] if final else explore_tools + [submit_tool],
             tool_choice="auto", messages=messages,
         )

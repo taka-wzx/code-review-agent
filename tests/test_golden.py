@@ -30,11 +30,22 @@ USER_MSG = f"Review this diff:\n\n```diff\n{DIFF}\n```"
 VALID_REVIEW = {"summary": "ok", "findings": [
     {"file": "mod.py", "line": 1, "severity": "low",
      "issue": "i", "suggestion": "s"}]}
+# What the second (sampling) finder run submits: a near-duplicate of the
+# anchor finding, so the union collapses back to the anchor's copy.
+DUP_REVIEW = {"summary": "ok2", "findings": [
+    {"file": "mod.py", "line": 2, "severity": "low",
+     "issue": "i", "suggestion": "s2"}]}
 # Missing severity -> exactly one validation problem.
 BAD_REVIEW = {"summary": "ok", "findings": [
     {"file": "mod.py", "line": 1, "issue": "i", "suggestion": "s"}]}
 BAD_REVIEW_PROBLEM = ("finding 0: 'severity' must be one of "
                       "['high', 'medium', 'low'], got None")
+
+
+def reviewed(review, out_of_scope=()):
+    """A finder payload as run_review returns it post-W12: the
+    out_of_scope_findings field is always present."""
+    return {**review, "out_of_scope_findings": list(out_of_scope)}
 
 EXPLORE_AND_SUBMIT = [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL,
                       SUBMIT_TOOL]
@@ -63,14 +74,17 @@ class TestFinderGolden(RepoCase):
 
     def test_happy_path(self):
         client = FakeClient([
+            # run 1 (anchor, temperature 0)
             response([tool_call("c1", "read_file", {"path": "mod.py"})]),
             response([tool_call("c2", "submit_review", VALID_REVIEW)],
                      tokens_in=200, tokens_out=30),
+            # run 2 (sampling): submits a near-duplicate immediately
+            response([tool_call("c3", "submit_review", DUP_REVIEW)]),
         ])
         trace = FakeTrace()
         review = self.run_finder(client, trace)
-        self.assertEqual(review, VALID_REVIEW)
-        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
+        self.assertEqual(len(client.requests), 3)
 
         r1 = client.requests[0]
         self.assertEqual(r1["model"], "test-model")
@@ -88,6 +102,15 @@ class TestFinderGolden(RepoCase):
             assistant_msg("c1", "read_file", {"path": "mod.py"}),
             {"role": "tool", "tool_call_id": "c1", "content": "VALUE = 3"},
         ])
+        # run 2 is a fresh conversation at FINDER2_TEMPERATURE, same tools
+        r3 = client.requests[2]
+        self.assertEqual(r3["temperature"], agent.FINDER2_TEMPERATURE)
+        self.assertEqual(r3["max_tokens"], 8000)
+        self.assertEqual(r3["tools"], EXPLORE_AND_SUBMIT)
+        self.assertEqual(r3["messages"], [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": USER_MSG},
+        ])
         self.assertEqual(trace.events, [
             {"kind": "llm_response", "component": "finder", "step": 1,
              "tool_calls": ["read_file"], "tokens_in": 100, "tokens_out": 20},
@@ -97,17 +120,24 @@ class TestFinderGolden(RepoCase):
             {"kind": "llm_response", "component": "finder", "step": 2,
              "tool_calls": ["submit_review"], "tokens_in": 200,
              "tokens_out": 30},
-            {"kind": "review", "steps": 2, "findings": 1, "dropped": 0},
+            {"kind": "llm_response", "component": "finder2", "step": 1,
+             "tool_calls": ["submit_review"], "tokens_in": 100,
+             "tokens_out": 20},
+            {"kind": "finder_union", "n_run1": 1, "n_run2": 1,
+             "n_merged": 1, "n_union": 1},
+            {"kind": "review", "steps": 3, "findings": 1, "dropped": 0,
+             "out_of_scope": 0},
         ])
 
     def test_invalid_submit_feeds_problems_back(self):
         client = FakeClient([
             response([tool_call("c1", "submit_review", BAD_REVIEW)]),
             response([tool_call("c2", "submit_review", VALID_REVIEW)]),
+            response([tool_call("c3", "submit_review", DUP_REVIEW)]),
         ])
         trace = FakeTrace()
         review = self.run_finder(client, trace)
-        self.assertEqual(review, VALID_REVIEW)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
         self.assertEqual(client.requests[1]["messages"][-2:], [
             assistant_msg("c1", "submit_review", BAD_REVIEW),
             {"role": "tool", "tool_call_id": "c1",
@@ -126,21 +156,26 @@ class TestFinderGolden(RepoCase):
             self.run_finder(client)
         self.assertIn("submit_review still invalid after 2 attempts",
                       str(cm.exception))
+        # a fatal anchor run never launches the sampling run
+        self.assertEqual(len(client.requests), 2)
 
     def test_budget_exhaustion_withdraws_tools_and_nudges(self):
         client = FakeClient([
             response([tool_call("c1", "read_file", {"path": "mod.py"})]),
             response([tool_call("c2", "submit_review", VALID_REVIEW)]),
+            response([tool_call("c3", "submit_review", DUP_REVIEW)]),
         ])
         with mock.patch.object(agent, "MAX_STEPS", 2):
             review = self.run_finder(client)
-        self.assertEqual(review, VALID_REVIEW)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
         r2 = client.requests[1]
         self.assertEqual(r2["tools"], [SUBMIT_TOOL])
         self.assertEqual(r2["messages"][-1], {
             "role": "user",
             "content": "Step budget exhausted. Call submit_review NOW with "
                        "the findings you have established so far."})
+        # run 2 submitted at its step 1 (not final), so full tools again
+        self.assertEqual(client.requests[2]["tools"], EXPLORE_AND_SUBMIT)
 
     def test_step_cap_raises(self):
         client = FakeClient([
@@ -153,6 +188,7 @@ class TestFinderGolden(RepoCase):
                       str(cm.exception))
         # Step 1 is already the final step: submit-only tools + nudge.
         self.assertEqual(client.requests[0]["tools"], [SUBMIT_TOOL])
+        self.assertEqual(len(client.requests), 1)
 
     def test_text_answer_raises(self):
         client = FakeClient([response(content="looks fine to me")])
@@ -160,6 +196,68 @@ class TestFinderGolden(RepoCase):
             self.run_finder(client)
         self.assertIn("model stopped without calling submit_review",
                       str(cm.exception))
+        self.assertEqual(len(client.requests), 1)
+
+    def test_run2_bad_submits_degrade_to_anchor(self):
+        client = FakeClient([
+            response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+            response([tool_call("c2", "submit_review", BAD_REVIEW)]),
+            response([tool_call("c3", "submit_review", BAD_REVIEW)]),
+        ])
+        trace = FakeTrace()
+        review = self.run_finder(client, trace)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
+        self.assertIn({"kind": "finder2_failed", "reason": "bad_submits"},
+                      trace.events)
+        self.assertIn({"kind": "finder_union", "n_run1": 1, "n_run2": 0,
+                       "n_merged": 0, "n_union": 1}, trace.events)
+
+    def test_run2_text_answer_degrades_to_anchor(self):
+        client = FakeClient([
+            response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+            response(content="all good"),
+        ])
+        trace = FakeTrace()
+        review = self.run_finder(client, trace)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
+        self.assertIn({"kind": "finder2_failed", "reason": "text_answer"},
+                      trace.events)
+
+    def test_union_dedup_and_scope(self):
+        # run 2 contributes one duplicate (merged away) and one new finding
+        # on a file the diff does not touch (demoted, never verified).
+        out_finding = {"file": "other.py", "line": 9, "severity": "high",
+                       "issue": "leaks handle", "suggestion": "close it"}
+        run2 = {"summary": "ok2", "findings": [
+            DUP_REVIEW["findings"][0], out_finding]}
+        client = FakeClient([
+            response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+            response([tool_call("c2", "submit_review", run2)]),
+            # verifier passes A and B: keep the single in-scope finding
+            response([tool_call("v1", "submit_verdicts", verdicts_payload(
+                (0, "keep", "a0")))]),
+            response([tool_call("v2", "submit_verdicts", verdicts_payload(
+                (0, "keep", "b0")))]),
+        ])
+        trace = FakeTrace()
+        review = run_review(client, DIFF, self.repo, "test-model",
+                            use_context=False, use_verify=True, trace=trace)
+        anchor = VALID_REVIEW["findings"][0]
+        self.assertEqual(review["findings"],
+                         [{**anchor, "verification": "confirmed"}])
+        self.assertEqual(review["dropped_findings"], [])
+        self.assertEqual(review["out_of_scope_findings"],
+                         [{**out_finding, "origin": "finder2"}])
+        # the verifier saw ONLY the in-scope finding
+        va_user = client.requests[2]["messages"][1]["content"]
+        self.assertIn(USER_MSG, va_user)
+        self.assertIn(json.dumps([{"index": 0, **anchor}],
+                                 ensure_ascii=False, indent=2), va_user)
+        self.assertNotIn("other.py", va_user)
+        self.assertIn({"kind": "finder_union", "n_run1": 1, "n_run2": 2,
+                       "n_merged": 1, "n_union": 2}, trace.events)
+        self.assertIn({"kind": "review", "steps": 2, "findings": 1,
+                       "dropped": 0, "out_of_scope": 1}, trace.events)
 
 
 FINDINGS = [

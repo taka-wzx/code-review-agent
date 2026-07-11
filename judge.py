@@ -149,7 +149,7 @@ def compute_metrics(verdicts: dict) -> dict:
     """Aggregate per-diff verdicts into hit/fp/noise counts and totals.
     verdicts: {diff_name: {"verdict": ..., "n_findings": int}}"""
     per_diff, tot = {}, {"bugs": 0, "hits": 0, "findings": 0, "matched": 0,
-                         "false_positives": 0, "noise": 0}
+                         "false_positives": 0, "noise": 0, "out_of_scope": 0}
     for name, entry in sorted(verdicts.items()):
         v, n = entry["verdict"], entry["n_findings"]
         hits = sum(1 for b in v["bugs"] if b["hit"])
@@ -157,11 +157,16 @@ def compute_metrics(verdicts: dict) -> dict:
         matched = len({i for b in v["bugs"] for i in b["matched_finding_indices"]})
         fp = sum(1 for e in v["unmatched_findings"] if e["classification"] == "false_positive")
         noise = sum(1 for e in v["unmatched_findings"] if e["classification"] == "noise")
+        # W12: demoted out-of-diff findings, reported but outside the
+        # precision denominator (.get keeps old result dirs re-judgeable)
+        oos = entry.get("n_out_of_scope", 0)
         per_diff[name] = {"bugs": len(v["bugs"]), "hits": hits, "findings": n,
-                          "matched_findings": matched, "false_positives": fp, "noise": noise}
+                          "matched_findings": matched, "false_positives": fp,
+                          "noise": noise, "out_of_scope": oos}
         tot["bugs"] += len(v["bugs"]); tot["hits"] += hits
         tot["findings"] += n; tot["matched"] += matched
         tot["false_positives"] += fp; tot["noise"] += noise
+        tot["out_of_scope"] += oos
     tot["recall"] = round(tot["hits"] / tot["bugs"], 3) if tot["bugs"] else None
     tot["precision"] = round(tot["matched"] / tot["findings"], 3) if tot["findings"] else None
     return {"per_diff": per_diff, "total": tot}
@@ -231,12 +236,15 @@ def main():
         if not result_path.is_file():
             print(f"SKIP {name}: no result file (run run_eval.py first)", file=sys.stderr)
             continue
-        findings = json.loads(result_path.read_text(encoding="utf-8"))["findings"]
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+        findings = data["findings"]
         indexed = [{"index": i, **f} for i, f in enumerate(findings)]
         print(f"judging {name} ({len(bugs)} bugs vs {len(findings)} findings)...",
               file=sys.stderr)
         verdict = judge_one(client, model, name, bugs, indexed)
-        verdicts[name] = {"verdict": verdict, "n_findings": len(findings)}
+        verdicts[name] = {"verdict": verdict, "n_findings": len(findings),
+                          "n_out_of_scope":
+                              len(data.get("out_of_scope_findings", []))}
 
     if not verdicts:
         sys.exit("nothing judged")
@@ -247,10 +255,12 @@ def main():
                    indent=2, ensure_ascii=False), encoding="utf-8")
 
     t = metrics["total"]
-    print(f"\n{'diff':<12} {'hits':>6} {'findings':>9} {'FP':>4} {'noise':>6}")
+    print(f"\n{'diff':<12} {'hits':>6} {'findings':>9} {'FP':>4} {'noise':>6} "
+          f"{'oos':>4}")
     for name, d in metrics["per_diff"].items():
         print(f"{name:<12} {d['hits']:>3}/{d['bugs']:<3} {d['findings']:>7} "
-              f"{d['false_positives']:>4} {d['noise']:>6}")
+              f"{d['false_positives']:>4} {d['noise']:>6} "
+              f"{d['out_of_scope']:>4}")
     print(f"\nrecall    = {t['hits']}/{t['bugs']} = {t['recall']}")
     print(f"precision = {t['matched']}/{t['findings']} = {t['precision']}  "
           f"(matched findings / all findings)")

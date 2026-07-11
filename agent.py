@@ -18,7 +18,8 @@ from openai import OpenAI
 import openai
 
 from agentloop import run_submit_loop
-from context import build_context
+from context import build_context, parse_diff
+from findings import dedup_union, split_by_scope
 from llm import make_client
 from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from tracelog import Trace, force_utf8, tev
@@ -28,6 +29,7 @@ force_utf8()
 
 MAX_STEPS = 10           # hard cap on loop iterations
 MAX_SUBMIT_ATTEMPTS = 2  # invalid submit_review payloads before giving up
+FINDER2_TEMPERATURE = 0.7  # second finder run samples; run 1 stays at 0.0
 
 SYSTEM = """You are a code reviewer. You are given a unified diff.
 Use the read_file tool when you need context beyond the diff (the full
@@ -126,17 +128,11 @@ def validate_review(review) -> list[str]:
     return problems
 
 
-def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
-               use_context: bool = True, use_verify: bool = True,
-               trace: Trace | None = None) -> dict:
-    user = f"Review this diff:\n\n```diff\n{diff_text}\n```"
-    if use_context:
-        pack = build_context(diff_text, Path(repo_root),
-                             log=lambda m: print(f"[context] {m}", file=sys.stderr))
-        if pack:
-            user += ("\n\nRepository context retrieved automatically (conventions, "
-                     "changed files in full, callers). You can still use read_file "
-                     "for anything not covered:\n\n" + pack)
+def _finder_pass(client, model: str, user: str, repo_root: Path, *,
+                 trace, component: str, temperature: float):
+    """One finder conversation: fresh messages and a fresh ToolSession per
+    pass (run_submit_loop mutates messages in place, and the repeat-call
+    cache / miss-streak state are per-conversation by design)."""
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": user},
@@ -149,21 +145,39 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
             return None, [f"malformed JSON in submit_review arguments: {e}"]
         return review, validate_review(review)
 
-    result = run_submit_loop(
+    return run_submit_loop(
         client, model, messages,
         explore_tools=EXPLORE_TOOLS, submit_tool=SUBMIT_TOOL,
         parse=parse_submit,
-        session=ToolSession(repo_root, trace=trace, component="finder"),
+        session=ToolSession(repo_root, trace=trace, component=component),
         max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
-        max_tokens=8000,
+        max_tokens=8000, temperature=temperature,
         budget_msg="Step budget exhausted. Call submit_review NOW with the "
                    "findings you have established so far.",
         reject_msg=lambda problems: (
             "Review rejected -- fix these problems and call "
             "submit_review again: " + "; ".join(problems)),
-        trace=trace, component="finder",
+        trace=trace, component=component,
+        label="" if component == "finder" else component,
         on_text_answer="raise",
     )
+
+
+def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
+               use_context: bool = True, use_verify: bool = True,
+               trace: Trace | None = None) -> dict:
+    user = f"Review this diff:\n\n```diff\n{diff_text}\n```"
+    if use_context:
+        pack = build_context(diff_text, Path(repo_root),
+                             log=lambda m: print(f"[context] {m}", file=sys.stderr))
+        if pack:
+            user += ("\n\nRepository context retrieved automatically (conventions, "
+                     "changed files in full, callers). You can still use read_file "
+                     "for anything not covered:\n\n" + pack)
+
+    # Anchor run (temperature 0): its failure is fatal, exactly as before.
+    result = _finder_pass(client, model, user, repo_root, trace=trace,
+                          component="finder", temperature=0.0)
     if result.reason == "bad_submits":
         raise RuntimeError(f"submit_review still invalid after "
                            f"{MAX_SUBMIT_ATTEMPTS} attempts: {result.problems}")
@@ -173,16 +187,55 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
     review, u = result.payload, result.usage
     print(f"[done] steps={result.steps} tokens_in={u.prompt_tokens} "
           f"tokens_out={u.completion_tokens}", file=sys.stderr)
+
+    # Sampling run (W12): temperature>0 buys recall on intermittently-found
+    # bugs. Any failure degrades to the anchor run alone -- the second run
+    # must never be able to break a review (mirrors the verifier fail-open).
+    steps = result.steps
+    extra = []
+    try:
+        result2 = _finder_pass(client, model, user, repo_root, trace=trace,
+                               component="finder2",
+                               temperature=FINDER2_TEMPERATURE)
+        reason2 = result2.reason
+    except RuntimeError:
+        result2, reason2 = None, "text_answer"
+    if result2 is not None and reason2 == "ok":
+        u2 = result2.usage
+        print(f"[finder2 done] steps={result2.steps} "
+              f"tokens_in={u2.prompt_tokens} tokens_out={u2.completion_tokens}",
+              file=sys.stderr)
+        steps += result2.steps
+        extra = result2.payload.get("findings", [])
+    else:
+        print(f"[finder2] FAILED ({reason2}) -- degrading to the anchor run "
+              "alone", file=sys.stderr)
+        tev(trace, "finder2_failed", reason=reason2)
+
+    union, n_merged = dedup_union(review.get("findings", []), extra)
+    tev(trace, "finder_union", n_run1=len(review.get("findings", [])),
+        n_run2=len(extra), n_merged=n_merged, n_union=len(union))
+
+    # Scope (W12): findings outside the diff's changed files are demoted to
+    # out_of_scope_findings, unverified -- decided in code, not by prompt.
+    in_scope, out_of_scope = split_by_scope(union, parse_diff(diff_text)[0])
+    if out_of_scope:
+        print(f"[scope] {len(out_of_scope)} finding(s) outside the diff's "
+              "changed files -> out_of_scope_findings (unverified)",
+              file=sys.stderr)
+    review["findings"] = in_scope
+    review["out_of_scope_findings"] = out_of_scope
+
     if use_verify:
-        kept, dropped = verify_findings(client, model, user,
-                                        review.get("findings", []),
+        kept, dropped = verify_findings(client, model, user, in_scope,
                                         repo_root, trace=trace)
         print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",
               file=sys.stderr)
         review["findings"] = kept
         review["dropped_findings"] = dropped
-    tev(trace, "review", steps=result.steps, findings=len(review["findings"]),
-        dropped=len(review.get("dropped_findings", [])))
+    tev(trace, "review", steps=steps, findings=len(review["findings"]),
+        dropped=len(review.get("dropped_findings", [])),
+        out_of_scope=len(out_of_scope))
     return review
 
 

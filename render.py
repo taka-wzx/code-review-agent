@@ -23,6 +23,7 @@ def render_markdown(review: dict, title: str = "Code review") -> str:
                     key=lambda f: _SEV_ORDER.get(f.get("severity"), 3))
     findings = [f for f in ranked if f.get("verification") != "uncertain"]
     uncertain = [f for f in ranked if f.get("verification") == "uncertain"]
+    out_of_scope = review.get("out_of_scope_findings", [])
     dropped = review.get("dropped_findings", [])
 
     lines = [f"## 🤖 {title}", "", review.get("summary", "").strip(), ""]
@@ -45,6 +46,16 @@ def render_markdown(review: dict, title: str = "Code review") -> str:
             if dissent:
                 lines.append(f"  - 🗳️ dissenting verdict: {dissent}")
         lines.append("")
+
+    if out_of_scope:
+        lines.append("<details>")
+        lines.append(f"<summary>📎 {len(out_of_scope)} out-of-diff finding(s) — "
+                     "pre-existing issues outside this diff, not verified"
+                     "</summary>")
+        lines.append("")
+        for f in out_of_scope:
+            lines.append(f"- `{f['file']}:{f['line']}` {f['issue'].strip()}")
+        lines += ["", "</details>", ""]
 
     if dropped:
         lines.append("<details>")
