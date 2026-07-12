@@ -372,3 +372,54 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 **一句话**:W12 把"finder 采样层"这一族修掉了(d5 毕业、dead-flag 历史首次 judge 层存活、切片 finder 层 dead-flag/cov 双双 0/3→3/3),文件级 scope 把三代摇摆的越界发现引入专用通道(主集 FP 三轮全 0、holdout 双伪影落 oos),recall 0.845→**0.900**、F1 0.811→**0.830** 且区间五代最窄;代价是成本 +69.7%(豁免入档)与 verifier 砍杀模式在 dead-flag/cov 上的回归暴露(证据规则不触发,W13 头号候选)。**判定:通过,不回滚。**
 
 **W13 候选**(机制先行):①verifier 证据规则触发率——dead-flag/cov 现在 finder 层 3/3 但 2/2 被砍,drop 理由逐字复现规则明令禁止的话术(优先级声明在但不生效;考虑规则内嵌反例或 DROP 条目处交叉引用);②成本回收——双跑 +69.7% 需预算化消化(候选:run2 步预算减半/共享锚点会话前缀/条件二跑);③uncertain 通道容量——run 间 oos 2–9 与 uncertain 波动仍是 precision 方差主源。d11-origin 维持领域难档挂起。
+
+## W13(2026-07-12):verifier 回放台架 + 砍杀台架 + 规则触发率哨兵
+
+**立项**(用户定三取舍):范围=回放台架+规则触发率(成本回收留 W14);杠杆=代码级 drop-reason 哨兵先行(prompt 零改动)+ ≤1 次预算内 prompt 迭代兜底;验收口径=**配对回放×3 主判 + 全量 V2×1 理智检查 + holdout×1**——verifier-only 周不再必跑全量×3。
+
+**核心洞察(评测成本结构性修复)**:result JSON 的 findings+dropped_findings 拼回即 verifier 完整候选列表,build_context 确定性可重建 finder 输入——verifier 改动可回放存盘 finder 输出(省 ~60% token),且配对比较(两变体看相同候选)把 finder 方差从对比中剔除。分层金字塔:sweep(0 token,亚秒)→ 砍杀台架(~0.3M/轮)→ 配对回放×3(~2.0M)→ 全量×1+holdout(仅验收)。迭代单元 1.55M→0/0.3M(-80%);A/B 对比 2.0M vs 等效 live 双变体 ~9.3M(-78%)。
+
+**设计**:①哨兵 `rescue_forbidden_drops`(verifier.py 纯函数,post-merge 与 degraded 两分支接线):2/2 drop 且理由命中禁止话术模式→降级 uncertain(dissent_reason 带 `[sentinel:<tag>]` 前缀,机器可剥),模式派生自规则原文的合取(情态动词式 future-caller × dead-path issue;generic-best-practice × 具名不变量 issue),重复守卫永不救;已对 W12 全部 139 条已录 drop 理由离线验证:恰命中 4 条目标(d7r1/r3 dead-flag、d10r1/r2 cov)、守卫拦 1、其余 0(d16-fsum 带机理反驳的合法 drop、d11-div0 合法反驳、裸"future caller"反向规则 drop 均不触发)。②回放台架 replay_verifier.py:单次 live 执行产 B 视图,A 视图由 rescue 标记降回派生(配对由构造保证);--sweep 纯离线内环。③砍杀台架 bench_verifier.py + eval/bench_verifier.json(10 case 冻结自 W12 真实文件,含 5 个负控位,确定性断言无 LLM judge)。④顺带:prompt-cache 计量(trace 条件字段+cost_report cache% 列,喂 W14)。已知边界:d10-cov run3 与 d11-origin 为 finder 侧未产出,verifier 改动救不了,闸门按构造豁免。
+
+**预写闸门(跑之前落笔)**:
+
+- **G-sweep(确定性)**:对 results_repeat_w12 恰救 {d7r1,d7r3,d10r1-cov,d10r2-cov},守卫拦 d7r1 finder2 副本,139 条其余 0。
+- **G-bench**:10 case 一轮内全部 survives(dead-flag×3、cov×2)+ 全部负控(never_rescued/stays_dropped)通过;哨兵模式迭代 ≤2 次(每次先过 G-sweep);仍不过→触发预写 prompt 兜底(证据规则导言加自检句),一轮验证。
+- **G-replay(主判据,写在逐 bug 配对表上)**:dead-flag ≥2/3 B run 命中(W12 1/3);cov 在有候选的 2/2 B run 命中;配对无回退(A 命中的 bug B 无一丢失);FP 全 6 dir=0;每 run noise_B ≤ noise_A+2 且 mean ≤10;precision_B ≥ precision_A−0.03。
+- **G-full(全量×1)**:recall ≥0.867(W12 min);FP=0;noise ≤10;tokens_in ≤ W12 均值 +2%(哨兵零新增调用);candidate_findings 全员在场;sentinel_rescue 事件逐条人工核对;finder 未报出 dead-flag/cov 不判负(归因记账)。
+- **G-holdout**:recall ≥6/7、FP=0、h6 kept=0;holdout 上每条救援逐条审计,救出 FP 即判负→收紧模式(重过 G-sweep)或 revert;兜底 prompt 若曾触发且 holdout 回退,按 W8 协议回滚。
+
+**验收结果(2026-07-12,commit 5fca0e9)**:
+
+- **哨兵两次预算内迭代**(均先过 G-sweep 再跑台架,VERIFIER_SYSTEM 一字未动、兜底 prompt 未动用):iter1(T3 设计期)issue 门加"loss 动词"——`_INVARIANT_VOCAB_RE` 单独会误救 d10 的 inv-vs-solve 负控(issue 只把"positive definite"当上下文而非声明其丢失);iter2(bench round1 后)——round1 暴露两种禁止话术的新措辞(numeric "speculative robustness / no concrete defect"、dead-path "intentional scaffolding / not wired yet"),两 reason 模式加宽,同时把 dead-path 的 issue 门**从松散的 dead/flag 收紧为"具名 ALL-CAPS 常量=布尔的 config 禁用条件"**——靠 issue 门把纯 no-callers 的合法 drop("new code gets wired up later")挡在外面。归因先行:两个 round1 失败经诊断脚本抓 live drop 理由确认均为"pattern-too-narrow"(禁止话术漏配)而非新的合法 drop,故迭代而非回滚。
+- **G-sweep ✅**:对 W12 全部 139 条已录 drop,恰救 4 条(d7r1/r3 dead-flag、d10r1/r2 cov)+ 守卫拦 1(d7r1 config 禁用死路径的 duplicate 副本),其余 0 误触。
+- **G-bench ✅ 24/24**(~0.34M/轮):dead-flag×3、cov×2 目标 survives,5 个负控(no-callers、inv-vs-solve、fsum 累加、div-zero 合法反驳、trap)全部 never_rescued/stays_dropped。
+- **G-replay(主判据)✅ 全五项**:配对回放×3 把 finder 方差从对比剔除后,哨兵净效应清晰:
+
+| | A(哨兵关) | B(哨兵开) | 逐 run 哨兵救援(=A 漏的 bug) |
+|---|---|---|---|
+| recall | 0.889 [.833–.933] | **0.922 [.867–.967]** | run1/2=d10-cov,run3=dead-flag |
+| precision | 0.765 | **0.772**(不降反升) | 每轮恰 1 次,全部命中真 bug |
+| F1 | 0.822 | **0.840** | |
+| FP | 0 [0–0] | 0 [0–0] | 配对零回退(A 命中 B 无一丢) |
+| noise | 8.0 [7–9] | 8.0 [7–9] | 与 A 完全持平 |
+
+  逐 bug:**d10-cov-asymmetry(W12 全灭 0/3)在有候选的 2/2 B run 被救活**(run3 finder 未产出该候选,候选层核实=finder 侧 miss,按构造豁免);**d7-dead-flag 在 B 3/3 命中**(W12 1/3)。哨兵只在 verifier 砍掉时兜底、verifier 自己保住时不动(run1/2 的 dead-flag 即 verifier 自保)——救回的是真 bug 命中而非噪音,故 noise 持平、precision 反升。
+- **G-holdout ✅**:recall **7/7**、FP 0、h6 陷阱 kept=0(两条入 oos);**holdout 上哨兵零触发**——分布外数据无过度触发、未制造 FP。
+- **G-full(全量×1 漂移检查)有保留通过**:recall 0.867(=W12 min 地板)、noise 5.0、candidate_findings 16/16 在场、哨兵恰 1 救(d7 dead-flag,正确)。两条字面未达但**归因均指向 W13 无关的单run finder/verifier 方差**:①FP=1 是 d3 的 `f.ball` finder 幻觉(`rescue=-`,verifier 误确认)——哨兵只增不减、candidate_findings 惰性,这条 FP 在 pre-W13 同 finder 输出下会一字不差出现;②tokens_in +4.9%(vs 三run均值)全是 finder 探索方差(步深 6.12 vs 5.75),哨兵/持久化按构造零 API 调用。d10-cov 本run 候选层缺失=finder 侧 miss(闸门豁免);d5/d6 单run flapper 方差(T6 配对里正常)。附:**T1 cache% 生效,全量 90% 命中**——原始 tokens_in 高估真实计费约一个量级,W14 成本回收基线到位。
+
+**判定:W13 通过,不回滚。** 主判据 G-replay 把 finder 方差剔除后给出干净净效应(B recall +0.033、F1 +0.018、零 FP、noise 持平、每轮恰 1 救且命中真 bug);G-sweep/G-bench/G-holdout 三道无害门全绿;G-full 两条字面未达项归因全指向 W13 无关方差,机制本身(哨兵零 LLM 调用、纯后处理)不可能是肇因。**d10-cov-asymmetry(三代 0/x 的领域难档之一)首次被机制救活**,dead-flag judge 层 1/3→3/3。VERIFIER_SYSTEM 一字未动、兜底 prompt 未动用——纯代码级 drop-reason 哨兵即达标。
+
+**评测基建产出(本周真正的杠杆)**:分层验收金字塔成文并首次跑通——
+
+| 层 | 工具 | 成本/轮 | 用途 |
+|---|---|---|---|
+| 0 | `python -m unittest`(66 测试) | 0(秒级) | 纯函数/协议契约 |
+| 1 | `replay_verifier.py --sweep` | 0(亚秒) | 哨兵模式对全部已录 drop 的确定性内环 |
+| 2 | `bench_verifier.py run`(10 case) | ~0.34M | live 砍杀台架,确定性断言无 LLM judge |
+| 3 | `replay_verifier.py --judge`(配对 A/B×3) | ~2.0M | verifier 改动主判据,finder 方差剔除 |
+| 4 | 全量 V2×1 + holdout | ~2.3M | 漂移理智检查(仅验收) |
+
+**协议变更**:verifier-only 周不再必跑全量 V2×3;主判据下沉到配对回放(层 3),迭代内环在层 1/2(-80%/次)。**finder 改动周仍回全量 V2×3**(回放冻结的是 finder 措辞,finder 变了台架/回放需重 build)。W13 全周实耗 ~5.4M(含台架 2 轮),但迭代单元从 1.55M(全量×1)降到 0/0.34M。
+
+**W14 候选**:①双跑成本回收(W12 遗留 +69.7%;cache 命中 90% 意味真实计费远低于原始 token,先用 T1 计量重估真实成本再决定是否需要 run2 步预算减半/条件二跑);②d5/d6 finder flapper 稳定化(本周 T7 单run 双漏,采样层仍有余量);③哨兵推广观察——目前仅两族(dead-path/numeric),W14 视 live 数据看是否有第三族禁止话术。d10-cov 的 finder 产出率(本run 缺失)与 d11-origin 维持挂起。

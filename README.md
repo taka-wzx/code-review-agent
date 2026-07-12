@@ -219,15 +219,40 @@ classify_bounce 伪影如预期落 oos——三代协议 FP 摇摆终结。预�
 切片归因:dead-flag/cov finder 层 0/3→**3/3**(双跑达成立项目标),但 verifier 2/2 砍、
 drop 理由逐字复现证据规则明令禁止的话术——"报了被砍"回归为 W13 头号候选。
 
+## W13:verifier 回放台架 + 砍杀台架 + 规则触发率哨兵(2026-07-12)
+
+**评测成本结构性修复(本周真正的杠杆)**:result JSON 的 findings+dropped_findings 拼回即
+verifier 完整候选列表,build_context 确定性可重建 finder 输入——**verifier 改动回放存盘的
+finder 输出,不重跑 finder(省 ~60%),且配对比较(A/B 看相同候选)把 finder 方差从对比剔除**。
+分层金字塔:单测(0)→ `--sweep` 哨兵内环(0,亚秒)→ 砍杀台架(~0.34M)→ 配对回放×3
+(~2.0M,主判据)→ 全量×1+holdout(仅验收)。迭代单元从 1.55M(全量×1)降到 0/0.34M。
+
+1. **回放台架**(replay_verifier.py):单次 live 执行产 B 视图(哨兵开),A 视图(HEAD)由
+   rescue 标记降回派生——一次执行两变体,配对由构造保证;candidate_findings 持久化(agent.py)
+   让今后回放拿到精确候选顺序;`--sweep` 是零 LLM 的哨兵设计内环。
+2. **规则触发率哨兵**(verifier.py `rescue_forbidden_drops`,纯函数,post-merge/degraded 两分支):
+   2/2 drop 且 drop_reason 命中禁止话术模式→降级 uncertain(非砍掉)。模式为规则原文的合取:
+   模态/scaffolding 式 future-work 话术 × **具名常量=布尔的 config 禁用**issue(靠 issue 门把
+   纯 no-callers 合法 drop 挡在外);generic/speculative 驳斥 × **声明不变量丢失**的 numeric issue。
+   两次预算内迭代收敛(G-sweep 对 139 条已录 drop 恰 4 救 + 1 守卫);**VERIFIER_SYSTEM 一字未动**。
+3. **砍杀台架**(bench_verifier.py + eval/bench_verifier.json):10 个 W12 冻结 case(dead-flag×3、
+   cov×2 + 5 负控)live 复跑,确定性断言无 LLM judge。
+4. **prompt-cache 计量**(T1):trace 记 DeepSeek cache_hit/miss,cost_report 加 cache% 列——
+   全量实测 **90% 命中**,原始 tokens_in 高估真实计费约一个量级(W14 成本回收基线)。
+
+**验收(五道闸门)**:G-sweep 4/139 ✅、G-bench 24/24 ✅、**G-replay 主判据 ✅**(配对回放×3:
+B recall 0.889→**0.922**、F1 0.822→**0.840**,每轮恰 1 救且命中 A 漏的真 bug,零 FP、noise
+持平、precision 反升)、G-holdout ✅(7/7、哨兵零触发)、G-full 有保留通过(两条字面未达项
+归因均为 W13 无关的单run finder 方差,哨兵零 LLM 调用不可能是肇因)。**d10-cov-asymmetry
+(三代 0/x)首次被机制救活;dead-flag judge 层 1/3→3/3。判定:通过,不回滚。**
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
-- **verifier 证据规则触发率**(W13 头号候选):dead-flag/cov 现在 finder 层 3/3 报出,但
-  两 pass 一致砍,drop 理由逐字撞规则禁止的推理("hypothesizing a future caller"、
-  "generic best-practice, no concrete failure")——优先级声明在场但不生效,uncertain
-  通道救不了 2/2
-- d11-origin-fit 领域难档,四代 0/x,维持挂起
-- **成本 1349k in/轮(+69.7%,豁免周)**:双跑翻倍 finder、verifier 随并集增长——W13 需
-  预算化消化(候选:run2 步预算减半/条件二跑/共享上下文前缀)
-- uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起
-  单独入档,精读时与 precision 并看
+- **成本 1349k in/轮(W12 +69.7%,豁免)**:但 W13 计量显示 cache 命中 90%,**真实计费远低于
+  原始 token**——W14 先用 T1 计量重估真实成本,再决定 run2 步预算减半/条件二跑是否必要
+- **d5/d6 finder flapper**:T7 单run 双漏,采样层仍有余量(W14 候选)
+- d10-cov finder 产出率不稳(T7 本run 候选层缺失)、d11-origin-fit 领域难档四代 0/x——维持挂起
+- 哨兵目前仅两族(dead-path/numeric)禁止话术;新措辞的 2/2 砍不触发=按现状死(被测量非缺陷),
+  系统性出现第三族则启用预写兜底 prompt
+- uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起单列
