@@ -163,17 +163,27 @@ def _finder_pass(client, model: str, user: str, repo_root: Path, *,
     )
 
 
-def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
-               use_context: bool = True, use_verify: bool = True,
-               trace: Trace | None = None) -> dict:
+def build_review_input(diff_text: str, repo_root: Path,
+                       use_context: bool = True,
+                       log=lambda msg: None) -> str:
+    """The exact user message the finder receives (and the verifier, which
+    shares the finder's view). Shared with replay_verifier.py so replays
+    reconstruct inputs with production code instead of a copy."""
     user = f"Review this diff:\n\n```diff\n{diff_text}\n```"
     if use_context:
-        pack = build_context(diff_text, Path(repo_root),
-                             log=lambda m: print(f"[context] {m}", file=sys.stderr))
+        pack = build_context(diff_text, Path(repo_root), log=log)
         if pack:
             user += ("\n\nRepository context retrieved automatically (conventions, "
                      "changed files in full, callers). You can still use read_file "
                      "for anything not covered:\n\n" + pack)
+    return user
+
+
+def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
+               use_context: bool = True, use_verify: bool = True,
+               trace: Trace | None = None) -> dict:
+    user = build_review_input(diff_text, repo_root, use_context,
+                              log=lambda m: print(f"[context] {m}", file=sys.stderr))
 
     # Anchor run (temperature 0): its failure is fatal, exactly as before.
     result = _finder_pass(client, model, user, repo_root, trace=trace,
@@ -227,6 +237,9 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
     review["out_of_scope_findings"] = out_of_scope
 
     if use_verify:
+        # Persist the verifier's exact input (W13): replays reuse it
+        # verbatim, keeping candidate order identical to the live run.
+        review["candidate_findings"] = [dict(f) for f in in_scope]
         kept, dropped = verify_findings(client, model, user, in_scope,
                                         repo_root, trace=trace)
         print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",

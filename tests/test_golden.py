@@ -248,6 +248,9 @@ class TestFinderGolden(RepoCase):
         self.assertEqual(review["dropped_findings"], [])
         self.assertEqual(review["out_of_scope_findings"],
                          [{**out_finding, "origin": "finder2"}])
+        # W13: the verifier's exact input is persisted for replays,
+        # unmutated by the verdicts applied afterwards.
+        self.assertEqual(review["candidate_findings"], [anchor])
         # the verifier saw ONLY the in-scope finding
         va_user = client.requests[2]["messages"][1]["content"]
         self.assertIn(USER_MSG, va_user)

@@ -7,6 +7,7 @@ import unittest
 from agent import validate_review
 from findings import dedup_union, is_duplicate, similarity, split_by_scope
 from judge import compute_metrics, validate_verdict
+from replay_verifier import reconstruct_candidates
 from verifier import apply_verdicts, merge_verdicts, validate_verdicts
 
 
@@ -279,6 +280,49 @@ class TestSplitByScope(unittest.TestCase):
         in_scope, out = split_by_scope([f], ["tracker/summary.py"])
         self.assertEqual(in_scope, [f])
         self.assertEqual(out, [])
+
+
+class TestReconstructCandidates(unittest.TestCase):
+    """W13 replay: recover the verifier's exact input from a recorded
+    review -- kept-then-dropped with verifier output keys stripped, or the
+    candidate_findings recording verbatim when present."""
+
+    def test_strips_verifier_keys_kept_then_dropped(self):
+        kept = finding(line=1, verification="confirmed")
+        unc = finding(line=2, verification="uncertain",
+                      dissent_reason="b1", origin="finder2")
+        dropped = finding(line=3, drop_reason="2/2: junk")
+        result = {"findings": [kept, unc], "dropped_findings": [dropped]}
+        self.assertEqual(reconstruct_candidates(result), [
+            finding(line=1),
+            finding(line=2, origin="finder2"),   # origin passes through
+            finding(line=3),
+        ])
+
+    def test_degraded_and_failopen_shapes(self):
+        # degraded single-pass: bare drop reasons, no verification keys
+        result = {"findings": [finding(line=1)],
+                  "dropped_findings": [finding(line=2, drop_reason="why")]}
+        self.assertEqual(reconstruct_candidates(result),
+                         [finding(line=1), finding(line=2)])
+        # fail-open: everything kept, nothing to strip
+        result = {"findings": [finding(line=1)], "dropped_findings": []}
+        self.assertEqual(reconstruct_candidates(result), [finding(line=1)])
+
+    def test_rescue_key_stripped(self):
+        rescued = finding(line=4, verification="uncertain",
+                          dissent_reason="[sentinel:x] 2/2: r", rescue="x")
+        result = {"findings": [rescued], "dropped_findings": []}
+        self.assertEqual(reconstruct_candidates(result), [finding(line=4)])
+
+    def test_candidate_findings_recording_wins_and_is_copied(self):
+        recorded = [finding(line=9, origin="finder2")]
+        result = {"candidate_findings": recorded,
+                  "findings": [finding(line=1, verification="confirmed")],
+                  "dropped_findings": [finding(line=2, drop_reason="r")]}
+        out = reconstruct_candidates(result)
+        self.assertEqual(out, recorded)
+        self.assertIsNot(out[0], recorded[0])   # copies, not aliases
 
 
 if __name__ == "__main__":
