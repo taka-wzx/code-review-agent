@@ -82,7 +82,8 @@ def run_stats(run_dir) -> dict:
     search misses and calls inside 3+ consecutive-miss chains."""
     stats = defaultdict(lambda: {"tokens_in": 0, "tokens_out": 0, "calls": 0,
                                  "tool_calls": 0, "steps": [], "miss": 0,
-                                 "chain_calls": 0})
+                                 "chain_calls": 0, "cache_hit": 0,
+                                 "cache_seen_in": 0})
     for tf in iter_trace_files([str(run_dir)]):
         maxstep = defaultdict(int)
         streak = defaultdict(int)
@@ -93,6 +94,11 @@ def run_stats(run_dir) -> dict:
                 d["calls"] += 1
                 d["tokens_in"] += e.get("tokens_in", 0)
                 d["tokens_out"] += e.get("tokens_out", 0)
+                # cache rate only over events that carry the fields (W13+
+                # traces); old traces stay blank rather than reading 0%.
+                if "cache_hit" in e:
+                    d["cache_hit"] += e["cache_hit"]
+                    d["cache_seen_in"] += e.get("tokens_in", 0)
                 maxstep[comp] = max(maxstep[comp], e.get("step", 0))
             elif e.get("kind") == "tool":
                 d["tool_calls"] += 1
@@ -117,7 +123,7 @@ def mean_run_stats(target: str) -> tuple[dict, int]:
         for comp, d in run_stats(rd).items():
             a = acc[comp]
             for k in ("tokens_in", "tokens_out", "calls", "tool_calls",
-                      "miss", "chain_calls"):
+                      "miss", "chain_calls", "cache_hit", "cache_seen_in"):
                 a[k] += d[k]
             a["step_sum"] += sum(d["steps"])
             a["step_n"] += len(d["steps"])
@@ -125,7 +131,8 @@ def mean_run_stats(target: str) -> tuple[dict, int]:
     out = {}
     for comp, a in acc.items():
         out[comp] = {k: a[k] / n for k in ("tokens_in", "tokens_out", "calls",
-                                           "tool_calls", "miss", "chain_calls")}
+                                           "tool_calls", "miss", "chain_calls",
+                                           "cache_hit", "cache_seen_in")}
         out[comp]["step_depth"] = (a["step_sum"] / a["step_n"]) if a["step_n"] else 0.0
     return out, len(runs)
 
@@ -134,15 +141,18 @@ def print_summary(label: str, stats: dict, n_runs: int, baseline: dict = None):
     print(f"\n== {label} (mean over {n_runs} run(s); search-miss detection is "
           "heuristic on old traces)")
     hdr = (f"{'component':<10} {'tok_in':>9} {'tok_out':>8} {'calls':>6} "
-           f"{'depth':>6} {'miss':>5} {'chain':>6}")
+           f"{'depth':>6} {'miss':>5} {'chain':>6} {'cache%':>7}")
     print(hdr + ("   [delta vs baseline]" if baseline else ""))
     for comp in sorted(stats):
         d = stats[comp]
         if not (d["calls"] or d["tool_calls"]):
             continue  # context-builder events carry no component
+        seen = d.get("cache_seen_in", 0)
+        cache = (f"{d['cache_hit'] / seen * 100:>6.1f}%" if seen
+                 else f"{'-':>7}")
         row = (f"{comp:<10} {d['tokens_in']:>9,.0f} {d['tokens_out']:>8,.0f} "
                f"{d['calls']:>6.1f} {d['step_depth']:>6.2f} {d['miss']:>5.1f} "
-               f"{d['chain_calls']:>6.1f}")
+               f"{d['chain_calls']:>6.1f} {cache}")
         if baseline and comp in baseline:
             b = baseline[comp]
             row += (f"   [in {d['tokens_in']-b['tokens_in']:+,.0f}, "
@@ -151,7 +161,11 @@ def print_summary(label: str, stats: dict, n_runs: int, baseline: dict = None):
         print(row)
     tin = sum(d["tokens_in"] for d in stats.values())
     tout = sum(d["tokens_out"] for d in stats.values())
+    thit = sum(d.get("cache_hit", 0) for d in stats.values())
+    tseen = sum(d.get("cache_seen_in", 0) for d in stats.values())
     line = f"{'TOTAL':<10} {tin:>9,.0f} {tout:>8,.0f}"
+    if tseen:
+        line += f"  cache {thit / tseen * 100:.1f}%"
     if baseline:
         btin = sum(d["tokens_in"] for d in baseline.values())
         pct = (tin - btin) / btin * 100 if btin else 0

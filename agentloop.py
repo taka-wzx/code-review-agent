@@ -71,9 +71,17 @@ def run_submit_loop(client, model: str, messages: list, *,
         msg = response.choices[0].message
         tool_calls = msg.tool_calls or []
         u = response.usage
+        # Provider cache accounting (DeepSeek splits prompt_tokens into
+        # cache hit/miss). Keys are included only when the SDK object has
+        # them, so traces from other providers are unchanged.
+        cache = {k: v for k, v in (
+            ("cache_hit", getattr(u, "prompt_cache_hit_tokens", None)),
+            ("cache_miss", getattr(u, "prompt_cache_miss_tokens", None)),
+        ) if v is not None}
         tev(trace, "llm_response", component=component, step=step,
             tool_calls=[tc.function.name for tc in tool_calls],
-            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens)
+            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens,
+            **cache)
 
         # A submit call only ends the run if its payload validates;
         # otherwise the problems are fed back as the tool result and the

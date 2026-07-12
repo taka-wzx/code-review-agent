@@ -396,6 +396,41 @@ class TestVerifierGolden(RepoCase):
         self.assertEqual(client.requests, [])
 
 
+class TestCacheAccounting(unittest.TestCase):
+    """W13: provider cache fields land in llm_response events only when the
+    SDK usage object carries them (DeepSeek); other providers unchanged."""
+
+    SUBMIT = {"type": "function",
+              "function": {"name": "submit_x", "parameters": {}}}
+
+    def loop(self, resp):
+        from agentloop import run_submit_loop
+        client = FakeClient([resp])
+        trace = FakeTrace()
+        result = run_submit_loop(
+            client, "m", [{"role": "user", "content": "u"}],
+            explore_tools=[], submit_tool=self.SUBMIT,
+            parse=lambda raw: (json.loads(raw), []),
+            session=None, max_steps=3, max_submit_attempts=2,
+            max_tokens=100, budget_msg="b", reject_msg=lambda p: "r",
+            trace=trace, component="finder")
+        self.assertEqual(result.reason, "ok")
+        return trace.events[0]
+
+    def test_cache_fields_recorded_when_present(self):
+        resp = response([tool_call("c1", "submit_x", {"ok": True})])
+        resp.usage.prompt_cache_hit_tokens = 60
+        resp.usage.prompt_cache_miss_tokens = 40
+        ev = self.loop(resp)
+        self.assertEqual(ev["cache_hit"], 60)
+        self.assertEqual(ev["cache_miss"], 40)
+
+    def test_cache_fields_absent_when_provider_lacks_them(self):
+        ev = self.loop(response([tool_call("c1", "submit_x", {"ok": True})]))
+        self.assertNotIn("cache_hit", ev)
+        self.assertNotIn("cache_miss", ev)
+
+
 class TestBuildContextSmoke(unittest.TestCase):
     """Guards the SKIP_DIRS import move; loose contains-checks only."""
 
