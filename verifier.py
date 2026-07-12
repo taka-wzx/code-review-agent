@@ -196,19 +196,41 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
 
 _GUARD_RE = re.compile(
     r"\b(duplicate|restat\w*|already\s+(kept|covered|dropped))\b", re.I)
-_FUTURE_CALLER_REASON_RE = re.compile(
-    r"callers?\s+(can|could|may|might)\s+(pass|supply|set|provide)\b", re.I)
-_DEAD_PATH_ISSUE_RE = re.compile(
-    r"dead[\s-]|unreachable|never\s+(be|run|hold|execut|reach|draw)"
-    r"|flag|config", re.I)
+
+# Dead-path family. The drop dismisses the finding as intentional / future
+# work -- either a hypothesized future caller, or "deliberate design /
+# scaffolding / not wired yet". Evidence rule 3 forbids BOTH when the issue
+# shows the path is disabled by an existing config/flag VALUE (as opposed
+# to merely having no callers, which the rule legitimately allows dropping).
+# So the issue gate requires a named ALL-CAPS constant set to a boolean (or
+# a flag/guard/condition stated true/false), NOT bare "no callers / dead
+# code" -- that gate is the discriminator that keeps the reverse-rule
+# no-callers drops out. (Bench round 1: live drops of the config-disabled
+# dead path varied the wording to "intentional scaffolding, not wired yet",
+# which the modal-only reason missed.)
+_DEAD_PATH_DISMISS_REASON_RE = re.compile(
+    r"callers?\s+(can|could|may|might)\s+(pass|supply|set|provide)\b"
+    r"|intentional\s+(design|behavior|choice|future|scaffold)"
+    r"|deliberate\s+(behavior|design|choice)"
+    r"|not\s+dead\s+code|scaffold"
+    r"|(is|are)n.?t\s+(yet\s+)?wired|not\s+(yet\s+)?wired|wired\s+up\s+later"
+    r"|work.in.progress", re.I)
+_CONFIG_DISABLED_ISSUE_RE = re.compile(
+    r"(?-i:[A-Z][A-Z0-9_]{3,})\s*(={1,2}|\bis\b)\s*(true|false)"
+    r"|\b(flag|guard|condition|config)\b[^.]{0,40}\b"
+    r"(true|false|set|unset|disabled|never\s+(holds|runs|executes|true))",
+    re.I)
+
+# Numeric family. A generic/speculative dismissal against a finding that
+# CLAIMS an invariant is lost across repeated updates (or a missing term).
+# Naming invariant vocabulary as mere context (e.g. "S is positive definite"
+# in an inv-vs-solve nit) is not a claim, so the issue must also carry a
+# loss verb. (Sweep iteration 1: vocabulary alone false-rescued d10's
+# inv-vs-solve control; bench round 1: the reason also appears as
+# "speculative robustness / no concrete defect".)
 _GENERIC_DISMISS_REASON_RE = re.compile(
-    r"generic\s+(numerical\s+)?(best.?practice|robustness)|textbook\b"
-    r"|no\s+concrete\s+(failure|drift)", re.I)
-# The numeric rule protects findings that CLAIM an invariant is lost across
-# repeated updates (or a missing term) -- naming invariant vocabulary as
-# mere context (e.g. "S is positive definite" in an inv-vs-solve nit) is
-# not a claim, so the issue must also carry a loss verb. (Sweep iteration
-# 1: the vocabulary alone false-rescued d10's inv-vs-solve control.)
+    r"(generic|speculative)\s+(numerical\s+)?(best.?practice|robustness)"
+    r"|textbook\b|no\s+concrete\s+(failure|drift|defect)", re.I)
 _INVARIANT_VOCAB_RE = re.compile(
     r"invariant|symmetr|positive.?(semi.?)?definite|conservation", re.I)
 _INVARIANT_LOSS_RE = re.compile(
@@ -227,8 +249,9 @@ def classify_drop(f: dict) -> str | None:
     claims_invariant = ((_INVARIANT_VOCAB_RE.search(issue)
                          and _INVARIANT_LOSS_RE.search(issue))
                         or _MISSING_TERM_RE.search(issue))
-    if _FUTURE_CALLER_REASON_RE.search(reason) and _DEAD_PATH_ISSUE_RE.search(issue):
-        tag = "dead-path-future-caller"
+    if (_DEAD_PATH_DISMISS_REASON_RE.search(reason)
+            and _CONFIG_DISABLED_ISSUE_RE.search(issue)):
+        tag = "dead-path-dismissed"
     elif _GENERIC_DISMISS_REASON_RE.search(reason) and claims_invariant:
         tag = "numeric-invariant"
     if tag and _GUARD_RE.search(reason):

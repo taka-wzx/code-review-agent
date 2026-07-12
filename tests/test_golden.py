@@ -420,13 +420,13 @@ class TestVerifierGolden(RepoCase):
         self.assertEqual(kept, [{
             **self.FLAG_FINDING,
             "verification": "uncertain",
-            "dissent_reason": "[sentinel:dead-path-future-caller] "
+            "dissent_reason": "[sentinel:dead-path-dismissed] "
                               "2/2: a future caller could pass frozen=True",
-            "rescue": "dead-path-future-caller",
+            "rescue": "dead-path-dismissed",
         }])
         self.assertIn({"kind": "sentinel_rescue", "n": 1,
                        "items": [{"file": "mod.py", "line": 5,
-                                  "tag": "dead-path-future-caller"}]},
+                                  "tag": "dead-path-dismissed"}]},
                       trace.events)
         self.assertIn({"kind": "verdicts", "kept": 1, "dropped": 0,
                        "confirmed": 0, "uncertain": 1}, trace.events)
@@ -447,9 +447,9 @@ class TestVerifierGolden(RepoCase):
         self.assertEqual(kept, [{
             **self.FLAG_FINDING,
             "verification": "uncertain",
-            "dissent_reason": "[sentinel:dead-path-future-caller] "
+            "dissent_reason": "[sentinel:dead-path-dismissed] "
                               "callers might set the flag to True",
-            "rescue": "dead-path-future-caller",
+            "rescue": "dead-path-dismissed",
         }])
         self.assertIn({"kind": "verdicts", "kept": 1, "dropped": 0,
                        "degraded": True, "failed_pass": "A"}, trace.events)

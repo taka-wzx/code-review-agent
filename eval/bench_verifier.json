@@ -1,0 +1,691 @@
+{
+  "built_from": "results_repeat_w12 @ see git log",
+  "cases": [
+    {
+      "id": "d7-r1-deadflag",
+      "diff": "d7_display",
+      "source": "v2_run1/d7_display.json",
+      "candidates": [
+        {
+          "file": "tracker/display.py",
+          "line": 27,
+          "severity": "low",
+          "issue": "Documented-but-unhandled input condition: the docstring explicitly notes that 'consecutive entries may be many frames apart' due to missing detections, but the code draws a line segment between every consecutive pair regardless of the temporal gap. This can produce misleading visual artifacts — a long straight line spanning many missed frames.",
+          "suggestion": "Consider introducing a maximum frame-gap threshold (e.g. skip line segments where `abs(b[0] - a[0]) > max_frame_gap`) so gaps in detection are visually represented as breaks in the polyline."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "medium",
+          "issue": "`draw_predicted` and `draw_observed` have no callers anywhere in the repository. These are dead-code functions that cannot be exercised.",
+          "suggestion": "Either wire them into the pipeline (e.g. in `pipeline.py` or a frame-annotation step) or remove them if they are not yet needed."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "Dead path: `PREDICT_DISPLAY_ONLY_FROZEN=True` (config.py) causes `draw_predicted` to return immediately whenever `frozen=False`. Combined with `FREEZE_PREDICTION_ON_COMMIT=False` (config.py), there is no mechanism in the current codebase to ever set `frozen=True`, so the predicted trajectory will never be drawn regardless of input.",
+          "suggestion": "Either implement the freeze-on-commit logic so `frozen` can become True, or temporarily set `PREDICT_DISPLAY_ONLY_FROZEN=False` during development so the drawing path can be tested."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "medium",
+          "issue": "`draw_predicted` may never draw anything under current config. `PREDICT_DISPLAY_ONLY_FROZEN=True` gates drawing on the `frozen` parameter, but `FREEZE_PREDICTION_ON_COMMIT=False` (tracker/config.py line 9) states freeze-on-commit wiring is not enabled. If `frozen` can only become True via that unwired mechanism, the early-return branch `if PREDICT_DISPLAY_ONLY_FROZEN and not frozen: return` is always taken, making the drawing loop dead code. No callers exist to verify how `frozen` is supplied.",
+          "suggestion": "Either wire the freeze-on-commit mechanism so `frozen` can become True, or provide an alternative source for the `frozen` flag. Consider adding a test or caller that exercises both frozen=True and frozen=False paths.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "low",
+          "issue": "`draw_predicted` assumes `pred_polyline` supports slicing (`pred_polyline[:MAX_POLYLINE_POINTS]`). If the caller passes a generator or iterator, this will raise TypeError. The parameter name 'polyline' suggests a sequence, but the type is not enforced.",
+          "suggestion": "Either document that `pred_polyline` must be a sequence, or convert to list eagerly: `pts = list(pred_polyline)[:MAX_POLYLINE_POINTS]`.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "PREDICT_DISPLAY_ONLY_FROZEN"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "no callers anywhere"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "supports slicing"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d7-r2-deadflag-nonregress",
+      "diff": "d7_display",
+      "source": "v2_run2/d7_display.json",
+      "candidates": [
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "medium",
+          "issue": "`draw_predicted` has no callers anywhere in the repository. Combined with `PREDICT_DISPLAY_ONLY_FROZEN=True` and `FREEZE_PREDICTION_ON_COMMIT=False` ('Freeze-on-commit wiring is not enabled yet'), the drawing branch (lines 19–20) is unreachable dead code — there is no mechanism to ever supply `frozen=True`.",
+          "suggestion": "Either wire up a caller, or if this is intentionally deferred, add a comment noting the integration point and consider temporarily setting `PREDICT_DISPLAY_ONLY_FROZEN=False` during development so the drawing path can be exercised."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 31,
+          "severity": "low",
+          "issue": "Documented-but-unhandled input: the docstring explicitly states 'consecutive entries may be many frames apart' (detection gaps), yet the code draws a straight line between *every* consecutive pair with no gap threshold. This can produce confusing visual artifacts — a line spanning the whole frame after a detection dropout.",
+          "suggestion": "Skip drawing a segment when `abs(b[0] - a[0])` exceeds a configurable frame-count threshold, or when the pixel distance exceeds a reasonable bound for a single frame step. Alternatively, clarify in the docstring that all segments are drawn unconditionally and long gaps are an accepted artifact."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 31,
+          "severity": "low",
+          "issue": "`draw_observed` does not limit the number of points drawn, unlike `draw_predicted` which truncates to `MAX_POLYLINE_POINTS` (200). In a long session, detections could accumulate into thousands of entries, and drawing every segment every frame would degrade performance.",
+          "suggestion": "Apply `MAX_POLYLINE_POINTS` (or a separate config constant) to `detections` before iterating, e.g. `detections[-MAX_POLYLINE_POINTS:]` to keep the most recent points.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 24,
+          "severity": "low",
+          "issue": "`draw_observed` has no callers anywhere in the repository — it is currently dead code at the module level.",
+          "suggestion": "Wire up a caller in the rendering pipeline, or add an explicit TODO/comment indicating where it will be integrated."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 24,
+          "severity": "medium",
+          "issue": "`draw_observed` draws straight lines between every pair of consecutive detections, but the docstring explicitly states that consecutive entries may be many frames apart due to missing detections. Long straight lines across gaps are visually misleading — they suggest the ball moved in a straight line when it may have curved or bounced during the missing frames.",
+          "suggestion": "Consider skipping line segments where the frame gap between consecutive detections exceeds a threshold, or use a dashed/dotted line style for large gaps to visually distinguish them from high-confidence segments.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 19,
+          "severity": "low",
+          "issue": "`draw_predicted` will crash with `TypeError` if `pred_polyline` is `None` (slicing `None[:MAX_POLYLINE_POINTS]`). Similarly, `draw_observed` crashes if `detections` is `None`. No null-safety guards exist.",
+          "suggestion": "Add an early guard: `if pred_polyline is None: return` (and the same for `detections`).",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "PREDICT_DISPLAY_ONLY"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "draw_observed` has no callers"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "TypeError"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d7-r3-deadflag",
+      "diff": "d7_display",
+      "source": "v2_run3/d7_display.json",
+      "candidates": [
+        {
+          "file": "tracker/display.py",
+          "line": 24,
+          "severity": "medium",
+          "issue": "Documented-but-unhandled input: the docstring states that consecutive detection entries 'may be many frames apart' due to missing detections, but `draw_observed` unconditionally draws a line segment between every consecutive pair regardless of the frame gap. A large temporal gap (e.g. frame 5 → frame 50) produces a line across the frame that is visually misleading — it connects two points that are not adjacent in time and may be on opposite sides of the frame.",
+          "suggestion": "Either (a) skip drawing a segment when `b[0] - a[0]` exceeds a max-gap threshold (in frames), or (b) if intentional, clarify in the docstring that gaps are intentionally connected and why."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "low",
+          "issue": "`draw_predicted` has no callers anywhere in the repository. Combined with `PREDICT_DISPLAY_ONLY_FROZEN=True` and `FREEZE_PREDICTION_ON_COMMIT=False` (no mechanism to set `frozen=True` exists), the function body is currently unreachable dead code.",
+          "suggestion": "Either wire up a caller that can pass `frozen=True`, or ensure this is tracked as a known TODO for a future integration step."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 24,
+          "severity": "low",
+          "issue": "`draw_observed` has no callers anywhere in the repository — the function is defined but never invoked.",
+          "suggestion": "Ensure a caller is added in a follow-up change, or confirm this is intentional scaffolding."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "medium",
+          "issue": "Both `draw_predicted` and `draw_observed` have zero callers anywhere in the repository. They are dead code that will never execute.",
+          "suggestion": "Either add callers in the frame-rendering loop (e.g., in pipeline.py or a new rendering module) or remove the functions if they are not yet needed.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 12,
+          "severity": "low",
+          "issue": "`_line` calls `frame.draw_line(p0, p1, color)`. No `draw_line` method is defined or imported anywhere in the repository. If the `frame` object comes from an external library that provides this method at runtime, it should at least be documented or the import should be visible.",
+          "suggestion": "Add a comment or type annotation indicating the expected `frame` type and where `draw_line` comes from, or verify the external dependency provides it.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "PREDICT_DISPLAY_ONLY"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "zero callers"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "draw_observed` has no callers"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d10-r1-cov",
+      "diff": "d10_filter",
+      "source": "v2_run1/d10_filter.json",
+      "candidates": [
+        {
+          "file": "tracker/filter.py",
+          "line": 24,
+          "severity": "high",
+          "issue": "Division by zero on duplicate timestamps. The docstring explicitly states 'ts may contain duplicate timestamps when both cameras report the same frame', but when `dt == 0` the code divides by zero: `(ps[i] - ps[i - 1]) / dt`. If `dt` is a plain Python float 0.0 this raises `ZeroDivisionError`; if it's a numpy scalar it produces `inf` (silent garbage). The documented input condition is not handled.",
+          "suggestion": "Skip or handle zero-dt cases explicitly. For duplicate-timestamp pairs from two cameras, consider averaging the two positions or taking only one. At minimum, guard with `if dt == 0: continue` and document which position is used."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 10,
+          "severity": "medium",
+          "issue": "`np.linalg.inv(S)` is numerically unstable. Kalman filter implementations should never explicitly invert the innovation covariance matrix S. The standard pattern is to solve the linear system instead.",
+          "suggestion": "Replace `K = P @ H.T @ np.linalg.inv(S)` with `K = np.linalg.solve(S.T, H @ P.T).T` (or equivalently `K = (np.linalg.solve(S, H @ P.T)).T`)."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 16,
+          "severity": "medium",
+          "issue": "No unit documentation. Project conventions (section 5.2) require unit clarity — positions are mm, timestamps are seconds, so returned velocities are mm/s. The docstring is silent on units, which has caused past incidents (e.g. speeds off by 1000×).",
+          "suggestion": "Document the units in the docstring: positions_mm, ts_s → velocities in mm/s. Or note that the caller must convert."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 12,
+          "severity": "medium",
+          "issue": "Covariance update `P_new = P - K @ S @ K.T` can lose positive-definiteness and symmetry due to floating-point error accumulation over repeated updates. This is a known pitfall in Kalman filtering.",
+          "suggestion": "Consider the Joseph form: `I_KH = np.eye(len(x)) - K @ H; P_new = I_KH @ P @ I_KH.T + K @ R @ K.T`. It is symmetric by construction and more stable. At minimum, symmetrize afterward: `P_new = (P_new + P_new.T) / 2`."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 22,
+          "severity": "low",
+          "issue": "Return type mismatch: docstring says `ps is an ndarray` (implying the return may also be array-like), but the function returns a plain Python `list`. Callers doing array operations on the result will need an explicit conversion.",
+          "suggestion": "Either return `np.array(vs)` or document that the return is a list. Returning an ndarray is more consistent with the ndarray input."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 7,
+          "severity": "low",
+          "issue": "No input validation on `kf_update`. If shapes are mismatched (e.g. `x` is 3×1 but `H` is 3×6), the error from numpy's `@` operator will be cryptic. This is a new public API with no callers yet, so now is the best time to add shape guards.",
+          "suggestion": "Add a brief shape check: e.g. `assert P.shape[0] == P.shape[1] == len(x)`, or raise a descriptive `ValueError`."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 10,
+          "severity": "medium",
+          "issue": "`np.linalg.inv(S)` computes the explicit matrix inverse of the innovation covariance, which is numerically less stable than solving the linear system directly. If S becomes near-singular (e.g., from highly precise measurements or nearly collinear observation geometry), this can amplify floating-point errors.",
+          "suggestion": "Replace `K = P @ H.T @ np.linalg.inv(S)` with `K = np.linalg.solve(S.T, H @ P.T).T` or use `scipy.linalg.solve(S, ...)` with `assume_a='sym'` for better stability on the symmetric positive-definite S.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 20,
+          "severity": "low",
+          "issue": "Edge case: when `len(ts) <= 1`, the loop body never executes and the function silently returns an empty list `[]`. Callers may not expect this.",
+          "suggestion": "Either document that an empty list is returned for inputs with fewer than 2 timestamps, or raise a ValueError with a clear message.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "positive-definiteness",
+            "symmetry"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "np.linalg.inv",
+            "shapes are mismatched",
+            "len(ts) <= 1"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d10-r2-cov",
+      "diff": "d10_filter",
+      "source": "v2_run2/d10_filter.json",
+      "candidates": [
+        {
+          "file": "tracker/filter.py",
+          "line": 24,
+          "severity": "high",
+          "issue": "Division by zero on duplicate timestamps. The docstring states 'ts may contain duplicate timestamps when both cameras report the same frame', but the code computes `dt = ts[i] - ts[i-1]` and then divides by `dt` without any zero guard. When duplicate timestamps occur, `dt == 0` produces `inf` or `nan` velocities that silently propagate downstream.",
+          "suggestion": "Skip or handle zero-dt pairs explicitly. For example, when `dt == 0`, either skip the pair (continue) or fall back to the most recent valid velocity estimate. At minimum, raise a clear error rather than silently producing inf/nan."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "Missing unit documentation. Project convention 5.2 requires that all speed/velocity calculations document intermediate units explicitly. The docstring says nothing about input units (ts in seconds? ps in mm?) or output units (mm/s? m/s?). Compare with `bootstrap_velocity` in tracker/acquire.py which documents `Returns (vx, vy, vz) in mm/s`.",
+          "suggestion": "Document that `ts` is in seconds, `ps` is in mm, and the returned velocities are in mm/s (consistent with `bootstrap_velocity`)."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 11,
+          "severity": "low",
+          "issue": "`np.linalg.inv(S)` computes the full matrix inverse and then multiplies, which is numerically less stable and slower than solving the linear system directly. For the innovation covariance S (positive definite), this can amplify floating-point errors.",
+          "suggestion": "Replace `P @ H.T @ np.linalg.inv(S)` with `np.linalg.solve(S, H @ P).T` or equivalently `(np.linalg.solve(S, H @ P)).T`. This computes K without forming the inverse."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 22,
+          "severity": "low",
+          "issue": "`velocity_from_positions` returns a plain Python `list` rather than an `ndarray`. In a numpy-heavy codebase (ps is documented as an ndarray), this forces callers to convert or use list operations, breaking the array API expectation.",
+          "suggestion": "Return `np.array(vs)` (or use a pre-allocated array and vectorized diff). If no velocities are computed (input length ≤ 1), consider returning an empty ndarray of the appropriate shape."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 12,
+          "severity": "low",
+          "issue": "The covariance update `P - K @ S @ K.T` is mathematically equivalent to `P - K @ H @ P` for the optimal Kalman gain, but neither form is the Joseph (symmetrized) update. Under repeated floating-point updates, P may drift from symmetry and positive-definiteness, eventually causing filter divergence.",
+          "suggestion": "Consider the Joseph form: `P_new = (I - K@H) @ P @ (I - K@H).T + K @ R @ K.T`, or at minimum explicitly symmetrize after the update: `P_new = (P_new + P_new.T) / 2`.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 17,
+          "severity": "low",
+          "issue": "The docstring does not document return units. Given project conventions (positions in mm, timestamps in seconds), the output is mm/s. The project has a history of unit-related bugs (CLAUDE.md §5.2), so undocumented units are a risk.",
+          "suggestion": "Add a line to the docstring: 'Returns velocities in mm/s (positions are mm, ts is seconds).' or similar.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "Joseph",
+            "symmetry"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "np.linalg.inv",
+            "ndarray"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d10-r3-negctl",
+      "diff": "d10_filter",
+      "source": "v2_run3/d10_filter.json",
+      "candidates": [
+        {
+          "file": "tracker/filter.py",
+          "line": 24,
+          "severity": "high",
+          "issue": "`velocity_from_positions` docstring explicitly states ts may contain duplicate timestamps (both cameras, same frame), but the loop computes `dt = ts[i] - ts[i - 1]` and divides by `dt` with no zero-check. Duplicate timestamps produce a zero `dt`, causing division by zero (inf/nan in numpy, or FloatingPointError for scalars).",
+          "suggestion": "Add a guard inside the loop: `if dt == 0: continue` (or `if dt <= 0: continue` to also handle unsorted inputs). Alternatively, merge/group duplicate-timestamped positions before differencing."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 16,
+          "severity": "low",
+          "issue": "`velocity_from_positions` output units are undocumented. Per CLAUDE.md §5.2, positions are mm and timestamps are seconds, so results are mm/s — but callers expecting m/s or km/h could misinterpret. The project has a history of unit-magnitude accidents.",
+          "suggestion": "Add a return-type docstring or comment: `Returns list of velocities in mm/s.`"
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 10,
+          "severity": "medium",
+          "issue": "`kf_update` computes Kalman gain via `np.linalg.inv(S)`, which is numerically less stable and slower than solving the linear system directly. Standard practice in Kalman filtering is `K = np.linalg.solve(S.T, H @ P.T).T` or using `scipy.linalg.solve(..., assume_a='pos')`.",
+          "suggestion": "Replace `P @ H.T @ np.linalg.inv(S)` with `np.linalg.solve(S.T, H @ P.T).T` (or use `scipy.linalg.solve` with `assume_a='sym'` / `'pos'` for even better stability)."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 23,
+          "severity": "medium",
+          "issue": "`velocity_from_positions` silently produces wrong results for unsorted timestamps (`dt < 0`), yielding negated velocities. The analogous `bootstrap_velocity` in `tracker/acquire.py` guards this with `if dt <= 0: return None`.",
+          "suggestion": "Add `if dt <= 0: continue` (or raise, or `return None`) to match the existing pattern in the codebase."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 6,
+          "severity": "low",
+          "issue": "`kf_update` docstring is sparse: it omits descriptions of `R` (measurement noise covariance) and `H` (observation matrix), and doesn't state return types or shapes. This makes misuse more likely for future callers.",
+          "suggestion": "Expand docstring to describe all parameters and returns, e.g., `R: measurement noise covariance (m x m), H: observation matrix (m x n), returns (x_new, P_new)`. Match `bootstrap_velocity`'s level of detail."
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 16,
+          "severity": "low",
+          "issue": "`velocity_from_positions` returns a Python `list`, not an `ndarray`. The docstring says `ps` is an ndarray and callers will likely expect a same-shaped ndarray result for downstream vector operations (e.g. computing speeds, filtering by velocity magnitude).",
+          "suggestion": "Return `np.array(vs)` so the result supports element-wise operations and is consistent with the input type.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/filter.py",
+          "line": 22,
+          "severity": "low",
+          "issue": "`velocity_from_positions` returns an empty list when `len(ts) <= 1`. This is undocumented and callers iterating over the result will silently get no velocities, which could mask data-quality problems upstream.",
+          "suggestion": "Either document this behavior in the docstring, or raise a ValueError if `len(ts) < 2` to make the precondition explicit.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "never_rescued"
+        }
+      ]
+    },
+    {
+      "id": "d12-r3-trap",
+      "diff": "d12_trap_clean",
+      "source": "v2_run3/d12_trap_clean.json",
+      "candidates": [
+        {
+          "file": "tracker/io_utils.py",
+          "line": 25,
+          "severity": "medium",
+          "issue": "`load_jsonl` silently skips blank lines but has no error handling for malformed JSON. A single corrupted line (e.g., from a truncated write) causes `json.loads(line)` to raise an unhandled exception, losing all preceding valid records. Combined with `save_jsonl` not using atomic writes, a crash during export could produce a file that is permanently unreadable by this function.",
+          "suggestion": "Either wrap `json.loads(line)` in try/except and log/skip bad lines, or document that callers must handle `json.JSONDecodeError`, or implement atomic write in `save_jsonl` (write to temp file then rename) so truncated files never exist."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 26,
+          "severity": "medium",
+          "issue": "`json.loads(line)` can raise `json.JSONDecodeError` if a line contains malformed JSON. The function has no try/except; a single corrupted line will crash the entire load, losing all previously-parsed records.",
+          "suggestion": "Either document that the function raises on malformed input, or wrap `json.loads` in a try/except that logs a warning and skips the bad line (or re-raises with context including the line number).",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 16,
+          "severity": "medium",
+          "issue": "`load_jsonl` is defined but has zero callers anywhere in the repository. It is dead code. If it was added for a future feature, it should be introduced in the same change as its caller to avoid accumulating unused code and to ensure the interface is validated by real usage.",
+          "suggestion": "Either remove `load_jsonl` from this diff and add it when a caller exists, or add a caller (e.g., a test or a report-reading path)."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 8,
+          "severity": "low",
+          "issue": "`save_jsonl` writes directly to the target path. If the process crashes or is killed mid-write, the file is left in a partially-written, corrupted state. This is especially problematic because JSONL has no end-of-file marker and `load_jsonl` will fail on a truncated final line.",
+          "suggestion": "Write to a temporary file (e.g., `path.with_suffix('.tmp')`) then atomically rename to the target path: `tmp.replace(path)`."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 16,
+          "severity": "low",
+          "issue": "Docstring says `load_jsonl` returns 'a list of dicts' but the function actually returns whatever `json.loads` parses — lists, strings, numbers, etc. If a caller (or future caller) serialized non-dict records with `save_jsonl`, the return type would not match the documented contract.",
+          "suggestion": "Change docstring to 'a list of parsed JSON values' or add type validation inside the function."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 22,
+          "severity": "low",
+          "issue": "`load_jsonl` handles missing files gracefully (`return []`) but does not handle other file access errors such as permission errors. If the file exists but is not readable, `path.open('r')` raises `PermissionError` which propagates unhandled.",
+          "suggestion": "Consider wrapping the `path.open` block in a try/except for `OSError`/`PermissionError`, or document that callers are expected to handle these."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 7,
+          "severity": "low",
+          "issue": "`save_jsonl` has no error handling for records that are not JSON-serializable (e.g., containing `datetime`, `Path`, `Decimal`, or numpy types that may appear in `session.records`). `json.dumps` will raise `TypeError` with no recovery.",
+          "suggestion": "Consider adding a custom `default` handler to `json.dumps`, or document that callers must ensure all records are JSON-serializable."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 7,
+          "severity": "low",
+          "issue": "No tests exist for either `save_jsonl` or `load_jsonl`. The repository has no test files at all.",
+          "suggestion": "Add basic round-trip tests (save then load) and edge-case tests (empty records list, malformed file, missing file)."
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 16,
+          "severity": "medium",
+          "issue": "`load_jsonl` is defined but has zero callers anywhere in the repository. Only `save_jsonl` is imported (in `tracker/pipeline.py:5`). This is dead code that adds maintenance burden with no current purpose.",
+          "suggestion": "Either remove `load_jsonl` until it has a real caller, or add a caller that uses it. If it is intended for future use, document that intent with a comment.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 12,
+          "severity": "low",
+          "issue": "`save_jsonl` iterates over `records` without checking that it is not `None`. If a caller passes `None` (e.g. if `session.records` were unset), the result is a cryptic `TypeError: 'NoneType' object is not iterable`.",
+          "suggestion": "Add an explicit guard: `if records is None: records = []` or raise a clearer `TypeError` with a message. Alternatively, document in the docstring that `records` must be an iterable of JSON-serializable dicts.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/io_utils.py",
+          "line": 19,
+          "severity": "low",
+          "issue": "`load_jsonl` uses `path.is_file()` to check for existence. This returns `False` for directories, FIFOs, or broken symlinks, silently returning `[]` in those cases. If a caller accidentally passes a directory path or a broken symlink, the error is masked.",
+          "suggestion": "Consider using `path.exists()` instead, or explicitly check and raise if the path exists but is not a regular file (e.g. `if path.exists() and not path.is_file(): raise ValueError(...)`) to avoid silently masking misconfiguration.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "never_rescued"
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "No tests exist"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d13-r1-trap",
+      "diff": "d13_trap_refactor",
+      "source": "v2_run1/d13_trap_refactor.json",
+      "candidates": [
+        {
+          "file": "tracker/geometry.py",
+          "line": 7,
+          "severity": "medium",
+          "issue": "Public function `dist2` renamed to `squared_distance_mm2` with no backward-compatibility alias. Any external code importing `dist2` from this module will break at runtime with an AttributeError.",
+          "suggestion": "Add a backward-compatibility shim, e.g. `dist2 = squared_distance_mm2` with a deprecation warning, or at minimum document the rename in a changelog."
+        },
+        {
+          "file": "tracker/geometry.py",
+          "line": 13,
+          "severity": "low",
+          "issue": "New private helper `_outside_band` has no docstring. The other two functions in the module both received docstrings as part of this diff, making the omission inconsistent.",
+          "suggestion": "Add a brief docstring, e.g. `\"\"\"Return True when v_mm is strictly outside the band [lo_mm, hi_mm].\"\"\"`"
+        },
+        {
+          "file": "tracker/geometry.py",
+          "line": 7,
+          "severity": "low",
+          "issue": "`squared_distance_mm2` (renamed from `dist2`) has no callers anywhere in the repository. The old name `dist2` also had no callers. This function is dead code.",
+          "suggestion": "Either add callers that use this function, or remove it if it's leftover cruft from a previous design.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/geometry.py",
+          "line": 14,
+          "severity": "low",
+          "issue": "`_outside_band(lo_mm, hi_mm)` has no guard against `lo_mm > hi_mm`. If `margin_mm > TABLE_WIDTH_MM / 2` (unlikely but possible with bad config), the band inverts silently and `near_table_edge` would return True for interior points and False for edge points — the opposite of its documented contract.",
+          "suggestion": "Add an assertion or explicit check that `lo_mm <= hi_mm`, or document that callers are responsible for ensuring this invariant.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "never_rescued"
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "no docstring"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d16-r2-fsum",
+      "diff": "d16_missing_dep",
+      "source": "v2_run2/d16_missing_dep.json",
+      "candidates": [
+        {
+          "file": "tracker/summary.py",
+          "line": 2,
+          "severity": "high",
+          "issue": "`from tracker.timeutil import normalize_ts` — the module `tracker.timeutil` does not exist anywhere in the repository, and `normalize_ts` is not defined in any other file. Importing this module will raise `ModuleNotFoundError` at runtime, making the entire file unusable.",
+          "suggestion": "Either create `tracker/timeutil.py` with a `normalize_ts` implementation, or inline the normalization logic directly in this file if it is simple (e.g., parsing a timestamp string to a float)."
+        },
+        {
+          "file": "tracker/summary.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "`return total / len(rallies)` divides by the length of `rallies` without guarding against an empty list. If `mean_rally_seconds` is ever called with an empty sequence (e.g., a session with no completed rallies), a `ZeroDivisionError` will be raised.",
+          "suggestion": "Guard with `if not rallies: return 0.0` (or raise a more descriptive exception, or return `None`, depending on the intended contract)."
+        },
+        {
+          "file": "tracker/summary.py",
+          "line": 5,
+          "severity": "low",
+          "issue": "`summarize_rally` and `mean_rally_seconds` both assume rally dicts contain the keys `'id'`, `'start_ts'`, `'end_ts'`, and `'bounces'`, but the docstrings do not document these requirements. A missing key will produce a bare `KeyError` with no guidance for the caller.",
+          "suggestion": "Document the expected rally dict shape in the docstrings (e.g., `rally: dict with keys 'id', 'start_ts', 'end_ts', 'bounces'`) so callers know the contract."
+        },
+        {
+          "file": "tracker/summary.py",
+          "line": 5,
+          "severity": "low",
+          "issue": "Neither `summarize_rally` nor `mean_rally_seconds` is imported or called anywhere in the repository. Both functions are dead code.",
+          "suggestion": "Either wire them into a call site (e.g. in `tracker/report.py` or a session-end reporting path) or remove the file. If this is preparation for future integration, consider adding a TODO comment.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/summary.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "`mean_rally_seconds` accumulates `total` as a plain `float`, which for a very large number of rallies could accumulate floating-point error (loss of precision).",
+          "suggestion": "For robustness with large session data, consider using `math.fsum` for the accumulation, or compute the mean via integer-frame-count difference and convert at the end.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "accumulates"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "accumulates"
+          ]
+        },
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "timeutil"
+          ]
+        },
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "len(rallies)"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d11-r1-negctl",
+      "diff": "d11_cor",
+      "source": "v2_run1/d11_cor.json",
+      "candidates": [
+        {
+          "file": "tracker/bounce_cor.py",
+          "line": 4,
+          "severity": "high",
+          "issue": "`cor_from_impact` accepts `vz_in_raw` and `vz_out_raw` parameters but the implementation ignores them and uses `vz_out_ukf` / `vz_in_ukf` instead. This directly contradicts CLAUDE.md §5.4, which explicitly states COR calibration must use raw triangulated velocity because UKF smoothing lags at velocity discontinuities (impacts), systematically biasing COR high. The raw parameters appear to have been added anticipating this rule, but the body was never updated.",
+          "suggestion": "Change the return to `return -vz_out_raw / vz_in_raw`. If UKF-based COR is needed for a separate purpose, it should be a different function with a name like `cor_from_impact_ukf` to avoid confusion."
+        },
+        {
+          "file": "tracker/bounce_cor.py",
+          "line": 6,
+          "severity": "medium",
+          "issue": "No guard against division by zero. If `vz_in_ukf` (or `vz_in_raw` after the fix above) is zero — which can happen at the apex of a bounce or with nearly-horizontal impacts — this raises an uncaught `ZeroDivisionError`.",
+          "suggestion": "Add a guard: if `vz_in == 0`, return `float('nan')` or raise a descriptive `ValueError`."
+        },
+        {
+          "file": "tracker/bounce_cor.py",
+          "line": 15,
+          "severity": "medium",
+          "issue": "No guard against division by zero in `fit_cor`. If all `vz_in` values are zero (empty list or degenerate data), `den` is 0 and a `ZeroDivisionError` is raised. An empty `vz_pairs` list also causes this because `sum([])` returns 0.",
+          "suggestion": "Check `if den == 0: raise ValueError('Cannot fit COR: all vz_in values are zero or input is empty')` before the division."
+        },
+        {
+          "file": "tracker/bounce_cor.py",
+          "line": 9,
+          "severity": "low",
+          "issue": "Docstring says the function returns the 'Least-squares slope of vz_out vs vz_in', but it actually returns `-num/den`, i.e. the negative of that slope (which is the COR itself). A reader could mistakenly use the result as the slope rather than as the COR.",
+          "suggestion": "Clarify the docstring: e.g., 'Returns the COR = -slope, i.e. -sum(vz_in*vz_out) / sum(vz_in^2), which is the negative of the least-squares slope through origin.'"
+        },
+        {
+          "file": "tracker/bounce_cor.py",
+          "line": 4,
+          "severity": "low",
+          "issue": "Unused parameters `vz_in_raw` and `vz_out_raw` in `cor_from_impact`. Their presence in the signature suggests they were intended to be used (aligning with convention 5.4), but the body ignores them. This is misleading and will confuse callers.",
+          "suggestion": "Either use them (see high-severity finding above) or remove them from the signature. If the raw/UKF distinction is intentional, rename the function or add a docstring explaining why UKF is used here despite convention 5.4.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "division by zero"
+          ]
+        },
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "vz_in_raw"
+          ]
+        }
+      ]
+    }
+  ]
+}

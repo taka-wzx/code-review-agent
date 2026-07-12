@@ -292,13 +292,33 @@ class TestRescueForbiddenDrops(unittest.TestCase):
                           "never runs",
                     drop_reason="2/2: speculative -- any future caller could "
                                 "pass enable=True directly")
-        self.assertEqual(classify_drop(f), "dead-path-future-caller")
+        self.assertEqual(classify_drop(f), "dead-path-dismissed")
+
+    def test_scaffold_reason_rescues_config_disabled_dead_path(self):
+        # bench round 1: the live drop dropped the modal phrasing for
+        # "intentional scaffolding, not wired yet"
+        f = finding(issue="PREDICT_FROZEN=True and FREEZE_ON_COMMIT=False so "
+                          "draw_predicted is unreachable dead code",
+                    drop_reason="2/2: intentional design; the freeze wiring "
+                                "isn't wired yet, normal scaffolding")
+        self.assertEqual(classify_drop(f), "dead-path-dismissed")
 
     def test_reverse_rule_no_callers_stays_dropped(self):
-        # the rule's own legitimate direction: new code gets wired up later
+        # the rule's own legitimate direction: new code gets wired up later.
+        # The issue is pure no-callers (no config VALUE), so the tightened
+        # issue gate keeps it dropped even though the reason matches.
         f = finding(issue="function has no callers anywhere, dead code",
                     drop_reason="2/2: new code gets wired up later; no "
                                 "existing definitions preclude a future caller")
+        self.assertIsNone(classify_drop(f))
+
+    def test_scaffold_reason_on_pure_no_callers_stays_dropped(self):
+        # the exact live-phrasing danger: scaffolding reason on a no-callers
+        # issue must NOT rescue (the issue gate is the discriminator)
+        f = finding(issue="draw_helper has zero callers anywhere; dead code "
+                          "that will never execute",
+                    drop_reason="2/2: newly added function, intentional "
+                                "scaffolding, not wired yet")
         self.assertIsNone(classify_drop(f))
 
     def test_duplicate_guard_blocks_rescue(self):
@@ -334,6 +354,15 @@ class TestRescueForbiddenDrops(unittest.TestCase):
                     drop_reason="2/2: textbook advice, no concrete failure")
         self.assertEqual(classify_drop(f), "numeric-invariant")
 
+    def test_speculative_robustness_rescues_numeric(self):
+        # bench round 1: live drop said "speculative robustness / no concrete
+        # defect" rather than "generic robustness / no concrete failure"
+        f = finding(issue="the covariance can lose symmetry and positive "
+                          "definiteness over repeated updates",
+                    drop_reason="2/2: speculative robustness advice; no "
+                                "concrete defect identified")
+        self.assertEqual(classify_drop(f), "numeric-invariant")
+
     def test_accumulation_without_invariant_stays_dropped(self):
         # the d16 fsum probe shape: generic-dismissal phrasing but the drop
         # legitimately refutes the mechanism; issue names no invariant
@@ -353,7 +382,8 @@ class TestRescueForbiddenDrops(unittest.TestCase):
 
     def test_rescued_shape_and_partition(self):
         target = finding(line=5, origin="finder2",
-                         issue="flag makes the guarded path unreachable",
+                         issue="the FROZEN flag is False so the guarded path "
+                               "never runs",
                          drop_reason="callers may supply a different value")
         junk = finding(line=9, issue="missing docstring",
                        drop_reason="style nit")
@@ -362,9 +392,9 @@ class TestRescueForbiddenDrops(unittest.TestCase):
         self.assertEqual(rescued, [{
             **{k: v for k, v in target.items() if k != "drop_reason"},
             "verification": "uncertain",
-            "dissent_reason": "[sentinel:dead-path-future-caller] "
+            "dissent_reason": "[sentinel:dead-path-dismissed] "
                               "callers may supply a different value",
-            "rescue": "dead-path-future-caller",
+            "rescue": "dead-path-dismissed",
         }])
 
     def test_empty_input(self):
