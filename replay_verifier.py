@@ -31,10 +31,12 @@ Usage:
 """
 import argparse
 import json
+import re
+import subprocess
 import sys
 from pathlib import Path
 
-from tracelog import force_utf8
+from tracelog import Trace, force_utf8
 
 force_utf8()
 
@@ -101,6 +103,79 @@ def sweep(source: Path, only: set) -> int:
     return n_rescue
 
 
+_SENTINEL_PREFIX_RE = re.compile(r"^\[sentinel:[^\]]+\]\s*")
+
+
+def derive_head_view(result: dict) -> dict:
+    """The A (HEAD, sentinel-off) view of a replayed review: rescued
+    findings are demoted back to dropped_findings with their original
+    drop_reason recovered from the machine-strippable dissent prefix.
+    The sentinel itself makes no LLM calls, so one live execution yields
+    both variants and the pairing is exact by construction."""
+    findings, demoted = [], []
+    for f in result["findings"]:
+        if "rescue" in f:
+            d = {k: v for k, v in f.items()
+                 if k not in ("verification", "dissent_reason", "rescue")}
+            d["drop_reason"] = _SENTINEL_PREFIX_RE.sub(
+                "", f.get("dissent_reason", ""))
+            demoted.append(d)
+        else:
+            findings.append(f)
+    return {**result, "findings": findings,
+            "dropped_findings": result["dropped_findings"] + demoted}
+
+
+def replay_run(client, model, run_dir: Path, out: Path, tag: str,
+               diffs_dir: Path, repo: Path, only: set) -> None:
+    """Replay one recorded run dir: B view (sentinel active) written from
+    the live execution, A view derived. Resumable per diff."""
+    from agent import build_review_input
+    from verifier import verify_findings
+    a_dir, b_dir = out / f"A_{tag}", out / f"B_{tag}"
+    a_dir.mkdir(parents=True, exist_ok=True)
+    b_dir.mkdir(parents=True, exist_ok=True)
+    for name, source in iter_results(run_dir, only):
+        if (a_dir / f"{name}.json").is_file() and (b_dir / f"{name}.json").is_file():
+            print(f"[skip] {tag}/{name}: already replayed")
+            continue
+        diff_path = diffs_dir / f"{name}.diff"
+        if not diff_path.is_file():
+            print(f"[warn] {tag}/{name}: no diff at {diff_path}, skipped",
+                  file=sys.stderr)
+            continue
+        candidates = reconstruct_candidates(source)
+        print(f"\n[replay] {tag}/{name}: {len(candidates)} candidate(s)")
+        diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
+        user = build_review_input(diff_text, repo)
+        trace = Trace(b_dir / "traces" / f"{name}.jsonl")
+        try:
+            kept, dropped = verify_findings(client, model, user, candidates,
+                                            repo, trace=trace)
+        finally:
+            trace.close()
+        b_view = {"summary": source.get("summary", ""),
+                  "findings": kept, "dropped_findings": dropped,
+                  "out_of_scope_findings":
+                      source.get("out_of_scope_findings", []),
+                  "candidate_findings": candidates}
+        (b_dir / f"{name}.json").write_text(
+            json.dumps(b_view, indent=2, ensure_ascii=False), encoding="utf-8")
+        (a_dir / f"{name}.json").write_text(
+            json.dumps(derive_head_view(b_view), indent=2, ensure_ascii=False),
+            encoding="utf-8")
+
+
+def judge_dir(results_dir: Path) -> bool:
+    if (results_dir / "scores.json").is_file():
+        print(f"[skip] {results_dir.name}: already judged")
+        return True
+    print(f"[judge] {results_dir.name}", flush=True)
+    return subprocess.run([sys.executable, str(HERE / "judge.py"),
+                           "--results-dir", str(results_dir)],
+                          cwd=HERE).returncode == 0
+
+
 def main():
     parser = argparse.ArgumentParser(description="Verifier replay harness")
     parser.add_argument("--source", required=True,
@@ -125,7 +200,31 @@ def main():
         sweep(source, only)
         return
 
-    sys.exit("live replay mode lands in W13 T4 -- only --sweep is available")
+    if not args.out:
+        sys.exit("--out is required for live replay")
+    from llm import make_client
+    from repeat_eval import aggregate, print_summary
+    out = Path(args.out)
+    client, model = make_client()
+    run_dirs = source_run_dirs(source)
+    failures = 0
+    for i, run_dir in enumerate(run_dirs, 1):
+        replay_run(client, model, run_dir, out, f"run{i}",
+                   Path(args.diffs_dir), Path(args.repo), only)
+        if args.judge:
+            for tag in ("A", "B"):
+                if not judge_dir(out / f"{tag}_run{i}"):
+                    failures += 1
+    if failures:
+        print(f"\n{failures} judge run(s) failed -- rerun to resume.",
+              file=sys.stderr)
+    if args.judge:
+        summary = aggregate(out, ["A", "B"], len(run_dirs))
+        (out / "summary.json").write_text(
+            json.dumps(summary, indent=2, ensure_ascii=False),
+            encoding="utf-8")
+        print_summary(summary)
+        print(f"\nsummary -> {out / 'summary.json'}")
 
 
 if __name__ == "__main__":
