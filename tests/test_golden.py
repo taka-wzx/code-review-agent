@@ -398,6 +398,62 @@ class TestVerifierGolden(RepoCase):
                                          [], self.repo), ([], []))
         self.assertEqual(client.requests, [])
 
+    # W13 sentinel: a 2/2 drop whose reason uses forbidden reasoning is
+    # demoted to the uncertain channel instead of dying.
+    FLAG_FINDING = {"file": "mod.py", "line": 5, "severity": "medium",
+                    "issue": "dead path: PREDICT flag is False so the "
+                             "branch never runs",
+                    "suggestion": "s"}
+
+    def test_sentinel_rescues_forbidden_two_pass_drop(self):
+        client = FakeClient([
+            response([tool_call("v1", "submit_verdicts", verdicts_payload(
+                (0, "drop", "a future caller could pass frozen=True")))]),
+            response([tool_call("v2", "submit_verdicts", verdicts_payload(
+                (0, "drop", "callers may supply a different value")))]),
+        ])
+        trace = FakeTrace()
+        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
+                                        [self.FLAG_FINDING], self.repo,
+                                        trace=trace)
+        self.assertEqual(dropped, [])
+        self.assertEqual(kept, [{
+            **self.FLAG_FINDING,
+            "verification": "uncertain",
+            "dissent_reason": "[sentinel:dead-path-future-caller] "
+                              "2/2: a future caller could pass frozen=True",
+            "rescue": "dead-path-future-caller",
+        }])
+        self.assertIn({"kind": "sentinel_rescue", "n": 1,
+                       "items": [{"file": "mod.py", "line": 5,
+                                  "tag": "dead-path-future-caller"}]},
+                      trace.events)
+        self.assertIn({"kind": "verdicts", "kept": 1, "dropped": 0,
+                       "confirmed": 0, "uncertain": 1}, trace.events)
+
+    def test_sentinel_on_degraded_single_pass(self):
+        bad = verdicts_payload((5, "keep", "r"))   # out of range -> invalid
+        client = FakeClient([
+            response([tool_call("v1", "submit_verdicts", bad)]),
+            response([tool_call("v2", "submit_verdicts", bad)]),
+            response([tool_call("v3", "submit_verdicts", verdicts_payload(
+                (0, "drop", "callers might set the flag to True")))]),
+        ])
+        trace = FakeTrace()
+        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
+                                        [self.FLAG_FINDING], self.repo,
+                                        trace=trace)
+        self.assertEqual(dropped, [])
+        self.assertEqual(kept, [{
+            **self.FLAG_FINDING,
+            "verification": "uncertain",
+            "dissent_reason": "[sentinel:dead-path-future-caller] "
+                              "callers might set the flag to True",
+            "rescue": "dead-path-future-caller",
+        }])
+        self.assertIn({"kind": "verdicts", "kept": 1, "dropped": 0,
+                       "degraded": True, "failed_pass": "A"}, trace.events)
+
 
 class TestCacheAccounting(unittest.TestCase):
     """W13: provider cache fields land in llm_response events only when the

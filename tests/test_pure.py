@@ -8,7 +8,8 @@ from agent import validate_review
 from findings import dedup_union, is_duplicate, similarity, split_by_scope
 from judge import compute_metrics, validate_verdict
 from replay_verifier import reconstruct_candidates
-from verifier import apply_verdicts, merge_verdicts, validate_verdicts
+from verifier import (apply_verdicts, classify_drop, merge_verdicts,
+                      rescue_forbidden_drops, validate_verdicts)
 
 
 def finding(**over):
@@ -280,6 +281,94 @@ class TestSplitByScope(unittest.TestCase):
         in_scope, out = split_by_scope([f], ["tracker/summary.py"])
         self.assertEqual(in_scope, [f])
         self.assertEqual(out, [])
+
+
+class TestRescueForbiddenDrops(unittest.TestCase):
+    """W13 sentinel: each pattern facet has a rescue case and the nearest
+    legitimate-drop lookalike that must NOT be rescued."""
+
+    def test_future_caller_modal_rescues_dead_path(self):
+        f = finding(issue="dead path: ENABLE_X flag is False so the branch "
+                          "never runs",
+                    drop_reason="2/2: speculative -- any future caller could "
+                                "pass enable=True directly")
+        self.assertEqual(classify_drop(f), "dead-path-future-caller")
+
+    def test_reverse_rule_no_callers_stays_dropped(self):
+        # the rule's own legitimate direction: new code gets wired up later
+        f = finding(issue="function has no callers anywhere, dead code",
+                    drop_reason="2/2: new code gets wired up later; no "
+                                "existing definitions preclude a future caller")
+        self.assertIsNone(classify_drop(f))
+
+    def test_duplicate_guard_blocks_rescue(self):
+        f = finding(issue="dead path: flag is False so branch never runs",
+                    drop_reason="2/2: duplicate of finding 1 -- any caller "
+                                "could pass frozen=True")
+        self.assertEqual(classify_drop(f), "duplicate-guard")
+        rescued, still = rescue_forbidden_drops([f])
+        self.assertEqual((rescued, still), ([], [f]))
+
+    def test_named_invariant_rescues_numeric(self):
+        f = finding(issue="covariance update can lose symmetry and positive "
+                          "semi-definiteness across repeated updates",
+                    drop_reason="2/2: generic numerical best-practice advice "
+                                "about the Joseph form. No concrete failure "
+                                "identified in this code")
+        self.assertEqual(classify_drop(f), "numeric-invariant")
+
+    def test_invariant_as_context_not_claim_stays_dropped(self):
+        # the inv-vs-solve shape: invariant vocabulary as mere context, no
+        # claim that anything is lost -- the "X is more robust than Y" DROP
+        # is legitimate per the rule text itself (sweep iteration 1)
+        f = finding(issue="np.linalg.inv(S) is numerically less stable than "
+                          "solve; for the covariance S (positive definite) "
+                          "this can amplify floating-point errors",
+                    drop_reason="2/2: generic best-practice advice, textbook "
+                                "recommendation, no concrete failure")
+        self.assertIsNone(classify_drop(f))
+
+    def test_missing_term_rescues_without_loss_verb(self):
+        f = finding(issue="the estimator is missing a term: missing term "
+                          "for measurement noise in the update",
+                    drop_reason="2/2: textbook advice, no concrete failure")
+        self.assertEqual(classify_drop(f), "numeric-invariant")
+
+    def test_accumulation_without_invariant_stays_dropped(self):
+        # the d16 fsum probe shape: generic-dismissal phrasing but the drop
+        # legitimately refutes the mechanism; issue names no invariant
+        f = finding(issue="accumulates total as a plain float and could "
+                          "accumulate floating-point error",
+                    drop_reason="2/2: generic best-practice advice; float64 "
+                                "keeps sub-microsecond precision here")
+        self.assertIsNone(classify_drop(f))
+
+    def test_division_class_stays_dropped(self):
+        # div-zero findings are protected by the docstring evidence rule
+        # already; a generic-dismissal drop of one is not sentinel business
+        f = finding(issue="division by zero when the list is empty",
+                    drop_reason="2/2: generic robustness advice, the list is "
+                                "never empty here")
+        self.assertIsNone(classify_drop(f))
+
+    def test_rescued_shape_and_partition(self):
+        target = finding(line=5, origin="finder2",
+                         issue="flag makes the guarded path unreachable",
+                         drop_reason="callers may supply a different value")
+        junk = finding(line=9, issue="missing docstring",
+                       drop_reason="style nit")
+        rescued, still = rescue_forbidden_drops([target, junk])
+        self.assertEqual(still, [junk])
+        self.assertEqual(rescued, [{
+            **{k: v for k, v in target.items() if k != "drop_reason"},
+            "verification": "uncertain",
+            "dissent_reason": "[sentinel:dead-path-future-caller] "
+                              "callers may supply a different value",
+            "rescue": "dead-path-future-caller",
+        }])
+
+    def test_empty_input(self):
+        self.assertEqual(rescue_forbidden_drops([]), ([], []))
 
 
 class TestReconstructCandidates(unittest.TestCase):

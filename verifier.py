@@ -24,6 +24,7 @@ merges: agreement applies, disagreement keeps the finding marked
 is the boundary-case detector -- no prompt self-reports doubt.
 """
 import json
+import re
 import sys
 
 from agentloop import run_submit_loop
@@ -180,6 +181,90 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
     return kept, dropped
 
 
+# --- Rule-firing sentinel (W13) -------------------------------------------
+# W12 showed the two known kill families dying 2/2 with drop reasons that
+# quote the exact reasoning the Evidence rules forbid ("a future caller
+# could pass X", "generic best-practice, no concrete failure" against a
+# finding that names its invariant). The sentinel is the code-level
+# backstop: a dropped finding whose drop_reason matches a forbidden pattern
+# is demoted to the uncertain channel instead of dying. Patterns are
+# conjunctions derived from the rules' own text -- the reason must use the
+# forbidden reasoning AND the issue must be of the class the rule protects
+# -- so legitimate drops (mechanism refutations, the no-callers reverse
+# rule, duplicates) stay dropped. Validated offline against all recorded
+# W12 drops via `replay_verifier.py --sweep`.
+
+_GUARD_RE = re.compile(
+    r"\b(duplicate|restat\w*|already\s+(kept|covered|dropped))\b", re.I)
+_FUTURE_CALLER_REASON_RE = re.compile(
+    r"callers?\s+(can|could|may|might)\s+(pass|supply|set|provide)\b", re.I)
+_DEAD_PATH_ISSUE_RE = re.compile(
+    r"dead[\s-]|unreachable|never\s+(be|run|hold|execut|reach|draw)"
+    r"|flag|config", re.I)
+_GENERIC_DISMISS_REASON_RE = re.compile(
+    r"generic\s+(numerical\s+)?(best.?practice|robustness)|textbook\b"
+    r"|no\s+concrete\s+(failure|drift)", re.I)
+# The numeric rule protects findings that CLAIM an invariant is lost across
+# repeated updates (or a missing term) -- naming invariant vocabulary as
+# mere context (e.g. "S is positive definite" in an inv-vs-solve nit) is
+# not a claim, so the issue must also carry a loss verb. (Sweep iteration
+# 1: the vocabulary alone false-rescued d10's inv-vs-solve control.)
+_INVARIANT_VOCAB_RE = re.compile(
+    r"invariant|symmetr|positive.?(semi.?)?definite|conservation", re.I)
+_INVARIANT_LOSS_RE = re.compile(
+    r"\blo(?:se|ses|sing|st)\b|violat|no\s+longer|drift", re.I)
+_MISSING_TERM_RE = re.compile(r"missing\s+term", re.I)
+
+
+def classify_drop(f: dict) -> str | None:
+    """Sentinel verdict for one dropped finding: a rescue tag, the string
+    "duplicate-guard" (pattern hit but the drop is a duplicate call -- never
+    rescue those, one bug must not re-inflate into two findings), or None.
+    Pure function, unit-testable offline."""
+    reason = f.get("drop_reason", "")
+    issue = f.get("issue", "")
+    tag = None
+    claims_invariant = ((_INVARIANT_VOCAB_RE.search(issue)
+                         and _INVARIANT_LOSS_RE.search(issue))
+                        or _MISSING_TERM_RE.search(issue))
+    if _FUTURE_CALLER_REASON_RE.search(reason) and _DEAD_PATH_ISSUE_RE.search(issue):
+        tag = "dead-path-future-caller"
+    elif _GENERIC_DISMISS_REASON_RE.search(reason) and claims_invariant:
+        tag = "numeric-invariant"
+    if tag and _GUARD_RE.search(reason):
+        return "duplicate-guard"
+    return tag
+
+
+def rescue_forbidden_drops(dropped: list) -> tuple[list, list]:
+    """(rescued_as_uncertain, still_dropped). Rescued findings lose the
+    drop_reason and enter the uncertain channel; the fixed "[sentinel:tag] "
+    prefix keeps the original reason machine-recoverable. Pure function."""
+    rescued, still = [], []
+    for f in dropped:
+        tag = classify_drop(f)
+        if tag and tag != "duplicate-guard":
+            r = {k: v for k, v in f.items() if k != "drop_reason"}
+            r["verification"] = "uncertain"
+            r["dissent_reason"] = f"[sentinel:{tag}] {f.get('drop_reason', '')}"
+            r["rescue"] = tag
+            rescued.append(r)
+        else:
+            still.append(f)
+    return rescued, still
+
+
+def _apply_sentinel(kept: list, dropped: list, trace) -> tuple[list, list]:
+    rescued, dropped = rescue_forbidden_drops(dropped)
+    if rescued:
+        print(f"[verifier] sentinel rescued {len(rescued)} dropped "
+              "finding(s) -> uncertain", file=sys.stderr)
+        tev(trace, "sentinel_rescue", n=len(rescued),
+            items=[{"file": f["file"], "line": f["line"], "tag": f["rescue"]}
+                   for f in rescued])
+    return kept + rescued, dropped
+
+
 def _verify_pass(client, model: str, review_input: str, findings: list,
                  repo_root, trace=None, pass_id: str = "A",
                  reverse_order: bool = False):
@@ -270,11 +355,13 @@ def verify_findings(client, model: str, review_input: str, findings: list,
         print(f"[verifier] pass {failed} failed -- degrading to single-pass "
               "verdicts (no uncertainty detection this run)", file=sys.stderr)
         kept, dropped = apply_verdicts(findings, va or vb)
+        kept, dropped = _apply_sentinel(kept, dropped, trace)
         tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
             degraded=True, failed_pass=failed)
         return kept, dropped
 
     kept, dropped = merge_verdicts(findings, va, vb)
+    kept, dropped = _apply_sentinel(kept, dropped, trace)
     n_unc = sum(1 for f in kept if f.get("verification") == "uncertain")
     print(f"[verifier] merged: {len(kept)} kept "
           f"({len(kept) - n_unc} confirmed, {n_unc} uncertain), "
