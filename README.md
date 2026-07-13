@@ -249,8 +249,11 @@ B recall 0.889→**0.922**、F1 0.822→**0.840**,每轮恰 1 救且命中 A 漏
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
-- **成本 1349k in/轮(W12 +69.7%,豁免)**:但 W13 计量显示 cache 命中 90%,**真实计费远低于
-  原始 token**——W14 先用 T1 计量重估真实成本,再决定 run2 步预算减半/条件二跑是否必要
+- **成本已按真实计费裁决(W14 关闭)**:全量单轮实测 **¥1.72**(deepseek-v4-pro,hit 价=miss
+  的 1/120、cache 命中 90%),单次 review 均值 ¥0.11——W12 双跑 +69.7%(原始 tokens_in)豁免
+  转为"实测不重要"的永久结论,回收机制不做。**输出占真实账单 72.6%**,今后成本杠杆在
+  tokens_out。预算纪律双口径:原始 tokens_in ≤+10%/W 仍作膨胀漂移哨(对 cache 不敏感),
+  每周终测跑 `cost_report --price-in/--price-hit/--price-out` 真实 ¥ 入台账
 - **d5/d6 finder flapper**:T7 单run 双漏,采样层仍有余量(W14 候选)
 - d10-cov finder 产出率不稳(T7 本run 候选层缺失)、d11-origin-fit 领域难档四代 0/x——维持挂起
 - 哨兵目前仅两族(dead-path/numeric)禁止话术;新措辞的 2/2 砍不触发=按现状死(被测量非缺陷),
