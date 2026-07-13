@@ -246,6 +246,27 @@ B recall 0.889→**0.922**、F1 0.822→**0.840**,每轮恰 1 救且命中 A 漏
 归因均为 W13 无关的单run finder 方差,哨兵零 LLM 调用不可能是肇因)。**d10-cov-asymmetry
 (三代 0/x)首次被机制救活;dead-flag judge 层 1/3→3/3。判定:通过,不回滚。**
 
+## W14:双跑成本裁决(关闭)+ d5 清单代入指令(2026-07-13)
+
+**T0 计量裁决先行(预写阈值 ¥2/全量轮)**:cost_report 增缓存感知计价(`--price-hit`,
+deepseek-v4-pro hit 价=miss 的 **1/120**)。实测全量单轮真实计费 **¥1.72 ≤ ¥2 → W12 双跑
++69.7% 豁免转永久关闭**,回收机制不做。结构性发现:**输出占真实账单 72.6%**——今后成本
+杠杆在 tokens_out。预算纪律改双口径(tokens_in 漂移哨 + 真实 ¥ 台账)。
+
+**归因先行修正立项前提**(10 个 live run 分层表):真 flapper 是 **d5-deadzone 单独一个**
+(产出 4/10,主导失败=finder 未产出 6/10,而证据每轮都在 context pack——注意力非可见性);
+d6 自 W11 起 7/7 稳定。机制=SYSTEM 清单 documented-unhandled 条目补 **call-site 代入指令**
+(把调用方文档化的输入区间代入 guard/早退)。
+
+**验收(九门 6 过 3 字面未达,判定:有保留通过、不回滚)**:d5 候选层合并切片 5/6(基线
+40%)但全量 judge 1/3——run3 被"parameter-tuning observation"话术砍杀=**第三族第 4 例**
+(w10r3-d6/w11r3-d5/切片r1-d6/全量r3-d5,共同形态=驳斥话术×caller-documented 真 bug);
+recall min 0.833 与 FP 0.667 归因均为预存方差(`f.ball` 幻觉复现、d7 dead-path 摇摆)与
+哨兵救活坏措辞候选的代价面(净账 +3HIT/−1FP,**d10-cov 首次从 never_hit 毕业 2/3**)。
+无害面全绿:陷阱 0.67、noise 7.7、oos 2.7、holdout 7/7、成本 +1.5%(¥1.85/run 台账首录)。
+**W15 头号候选:哨兵第三族**(紧 issue 门=documented-unhandled/missing-filter;31 条合法
+驳斥 drop 是误救红线)。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
@@ -254,8 +275,11 @@ B recall 0.889→**0.922**、F1 0.822→**0.840**,每轮恰 1 救且命中 A 漏
   转为"实测不重要"的永久结论,回收机制不做。**输出占真实账单 72.6%**,今后成本杠杆在
   tokens_out。预算纪律双口径:原始 tokens_in ≤+10%/W 仍作膨胀漂移哨(对 cache 不敏感),
   每周终测跑 `cost_report --price-in/--price-hit/--price-out` 真实 ¥ 入台账
-- **d5/d6 finder flapper**:T7 单run 双漏,采样层仍有余量(W14 候选)
-- d10-cov finder 产出率不稳(T7 本run 候选层缺失)、d11-origin-fit 领域难档四代 0/x——维持挂起
-- 哨兵目前仅两族(dead-path/numeric)禁止话术;新措辞的 2/2 砍不触发=按现状死(被测量非缺陷),
-  系统性出现第三族则启用预写兜底 prompt
+- **d5-deadzone 未稳定化**(W14 判定):候选层 5/6(基线 40%)但判定链卡 verifier 第三族
+  砍杀;d6 自 W11 起稳定(W14 3/3)非 flapper——W13 所记"d5/d6 双漏"经归因表修正
+- d10-cov W14 从 never_hit 毕业(judge 2/3,哨兵救活生效);d11-origin-fit 领域难档五代 0/x
+  ——维持挂起
+- **哨兵第三族已系统化**(4 例:w10r3-d6/w11r3-d5/W14切片r1-d6/W14全量r3-d5,驳斥话术×
+  caller-documented 真 bug)——W15 头号候选,须沿两族先例紧 issue 门(W14 全量 31 条合法
+  驳斥 drop 是误救红线);d7 型实质性机理驳斥是另一族,哨兵路线不适用
 - uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起单列

@@ -479,3 +479,28 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 内环切片(机制指标 only,成本门不设):d5×3 候选层产出 3/3 为过;d6/d12/d13 各×3 同批跑作误伤探针(d12/d13 findings 不升、d6 不回退)。
 
 **T5 内环切片(d5/d6/d12/d13 ×3,results_w14_slice)**:**d5 候选层 3/3 ✅(全部 f1 直接产出,run2 f2 重复副本被正确 drop)、judge 3/3 ✅**——超闸门(≥2/3),产出文本全部引用 ingest.py:22-24 调用方注释,机制按设计起效。探针:d12+d13 kept 均值 1.33 ≤1.67(kept 为 json 健壮性类噪音,与新句无关);**d6 run1 judge=miss——非 finder 回归**(候选照常产出),系 verifier "Speculative: no evidence that the physics detector actually produces low-asr bounce events" 话术砍杀,与 w11r3 d5("tuning suggestion")、w10r3 d6 同族=**"speculative/generic 驳斥吃 documented-unhandled/missing-filter 真 bug"第三族证据第 3 例**;issue 门(config-disable/numeric)按设计不触发哨兵。T7 持续记账,本周不动哨兵;d6 闸门保持原样,若 T6 触发按 W13 G-full 先例做字面未达+归因判定。哨兵 sweep 预验:W12 139 drop 仍恰 4 救+1 守卫,verifier 零漂移。
+
+**T6 验收(全量 V2×3 results_repeat_w14 + holdout×1,九门 6 过 3 字面未达)**:
+
+| 指标 | W12 | **W14** |
+|---|---|---|
+| recall | 0.900 [.867–.933] | 0.900 [.833–.933] |
+| precision* | 0.770 | 0.760 |
+| F1 | 0.830 | 0.823 |
+| FP | 0.0 [0–0] | 0.7 [0–2] |
+| noise | 8.0 | **7.7** |
+| oos | 5.3 | **2.7** |
+| 陷阱 kept | 1.67 | **0.67** |
+| never_hit | d10-cov, d11-origin | **仅 d11-origin(d10-cov 毕业 2/3)** |
+| tokens_in | 1,349k | 1,369k(+1.5% ✅) |
+| 真实计费 | - | **¥1.85/run(台账首录)** |
+
+- 过:G2 d6 judge 3/3、G3c/3d/3e(noise/陷阱/never_hit)、G4 成本、G5 holdout **7/7 + h6 kept=0**、G6 哨兵零漂移(W12 139 drop 恰 4+1 不变;W14 145 新 drop 零误救)。
+- **字面未达 ×3,逐条归因**:①G1 d5 候选 2/3(关键词初筛 3/3 系误报,run2 实未产出)、judge 1/3——run3 被"parameter-tuning observation, not a concrete defect / returns None gracefully"2/2 砍杀=**第三族第 4 例**;②G3a recall min 0.833——全部 run3:d5 砍杀 + d7-dead-flag 被实质性机理驳斥砍(声称 FREEZE 常量耦合不存在,非话术,哨兵按设计不触发)+ d7-gap finder 方差;③G3b FP 0.667——两条全在 run1:d3 `f.ball` 幻觉与 W13 G-full 一字不差(已知 finder 方差),另一条系**哨兵救活坏措辞 d7 候选(no-callers 主张)后被 judge 判 FP=哨兵代价面首次记账**(本轮哨兵净账:+3 HIT[d10-cov×2、d7×1] / −1 FP,净收益为正,d10-cov 因此毕业)。
+- 机制本身:d5 候选层合并切片 **5/6(历史基线 4/10)**,产出文本全部引用调用方注释;无害面全绿。清单句是上游改动,三条未达项均在其作用域之外(verifier 层×2、finder 方差×1)。
+
+**T7(哨兵第三族,4 例证据链闭合)**:w10r3-d6、w11r3-d5、W14切片r1-d6("Speculative: no evidence detector produces low-asr events")、W14全量r3-d5——共同形态=**驳斥话术 × 有文档证据的真 bug(documented-unhandled/missing-filter 类)**。W14 145 条 drop 中 31 条带驳斥话术但绝大多数在正确杀噪音——第三族哨兵必须沿用两族先例的紧 issue 门(caller-documented 条件类 issue),纯话术匹配会大量误救。另记:run3 d7 的实质性机理驳斥是**不同的族**(有具体反主张、非禁止话术),哨兵路线救不了,候选进 bench 台架。
+
+**判定(用户批准,2026-07-13):有保留通过、不回滚。** 仿 W12 先例:机制达成采样层方向目标(候选 40%→83%),d5 记"未稳定化"不记达标;残余瓶颈换层至 verifier 第三族话术执行率。
+
+**W15 候选**:①**哨兵第三族(头号,用户已预定向)**——驳斥话术 × caller-documented 真 bug,issue 门=documented-unhandled/missing-filter,纪律:先补 test_pure 逐模式正反例 + --sweep 对 W12/W14 全部已录 drop 验证(预期恰救 w11r3-d5/w14r3-d5 两例 + 不误救 31 条合法驳斥),再走配对回放主判(verifier-only 周,回放台架适用);②d7 实质性驳斥族观察(bench_verifier 补 case);③d5 候选层 run2 型缺产出(5/6→6/6)视第三族落地后 judge 层表现再定;d11-origin 维持挂起。
