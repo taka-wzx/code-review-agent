@@ -527,6 +527,6 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 - **G-holdout 有保留(6/7)**:h6 陷阱 kept=0 ✅、哨兵零触发 ✅(符合预写),但 h2-hud-line-cap 单点 miss。归因:finder 照常产出候选,verifier 2/2 砍,理由="6 行 HUD 约定**缺乏声明的真实后果**(对比 print/dbg 规则的'发布版要能一键静音')、无 crash/overlap/失败机理"——**VERIFIER_SYSTEM convention 条款的字面合规应用,不属三族禁止话术**('convention states' 不在三族 issue 门内,'no crash…identified' 不中任何 reason 门);W14 同套件同 prompt 7/7,单 run 翻转;哨兵只增不减按构造无法致 miss。**记录张力:未声明后果的 convention 违反该不该算命中,是 truth-set 设计问题非执行缺陷**(fixture CLAUDE.md 的 6 行规则确实没写后果)——W16 泛化周一并考虑,不做 mid-week 资产修改。
 - 真实 ¥ 台账:回放 B×3 + bench + holdout 计 2.36M in(cache 折后)/432k out = **$0.50 ≈ ¥3.6**(judge 未 trace,B2 落地后并入)。
 
-**判定(建议:通过、不回滚——主判据干净、唯一保留项归因 W15 无关且有 W13 G-full 先例;待用户批准)。**
+**判定(用户批准,2026-07-13):通过、不回滚。** 主判据干净,唯一保留项归因 W15 无关(沿 W13 G-full 先例);h2 truth-set 张力进 W16 议题。
 
 **W16 候选**(路线图既定主题=真实 PR 抽查+泛化决策门,搭车 B2 judge-trace+tools 单测):①h2-line-cap 张力的 truth-set 处置(改 CLAUDE.md 声明后果 vs 接受 convention 类按规则字面执行);②glm 交叉重判(仍等 GLM_API_KEY);③d5 候选层 run2 型缺产出维持观察。
