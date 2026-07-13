@@ -445,3 +445,24 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 必报变量:**¥/全量轮 = 1.72**;¥/单次 review = 0.11 均值(min 0.06 / max 0.19);**finder2 边际份额 = 25.6%**(原始 in-token 口径 41% → 真实口径缩小但不消失,立项预判成立);分组件 cache% 高度均匀(92.9/92.2/86.1/86.5)。**结构性发现:输出占真实账单 72.6%**(输入被 1/120 hit 价压到 27.4%)——今后成本工作的杠杆在 tokens_out,不在 tokens_in。跨 diff 伪影核查:finder run1 step-1 命中共 39.7k tok(占 in 2.8%,时间序首 diff 即 96% 命中=缓存跨会话暖启),全部改按 miss 计的生产保守估价 $0.258 ≈ **¥1.84,仍在阈值内**——结论适用于生产单次 review。judge 未 trace(阈值定义已排除):全 miss 上界估 +$0.08/轮,连它算上 ≈ ¥2.3,不影响按预写口径的裁决。
 
 **裁决:¥1.72 ≤ ¥2,①关闭。** W12 双跑 +69.7%(原始 tokens_in)豁免转为"实测不重要"的永久结论:一次完整验收(V2×3+holdout)≈ ¥6,W13 全周实耗 ~5.4M raw ≈ ¥7 量级。run2 步预算减半/条件二跑不做(B 分支未触发);"共享锚点会话前缀"由 provider cache 事实兑现(finder2 hit 92.2%)。本周主体按立项切 d5/d6。
+
+**T4(d5/d6 归因先行,零 LLM,10 个 live run:W10×3/W11×3/W12×3/W13×1 + 回放 B×3 佐证)**:
+
+| run | d5-deadzone 候选 | 层 | judge | d6-ghost 候选 | 层 | judge |
+|---|---|---|---|---|---|---|
+| w10r1 | f1 产出 | kept | HIT | f1 产出 | kept | miss(文本浅,没连到鬼弹跳后果) |
+| w10r2 | **未产出** | - | miss | f1 产出 | kept | HIT |
+| w10r3 | **未产出** | - | miss | f1 产出 | **DROP**(2/2) | miss |
+| w11r1 | **未产出** | - | miss | f1 产出 | kept | HIT |
+| w11r2 | **未产出** | - | miss | f1 产出 | kept | HIT |
+| w11r3 | f1 产出 | **DROP**("parameter tuning suggestion, not a concrete defect / code correctly returns None") | miss | f1 产出 | kept | HIT |
+| w12r1 | f1 产出 | kept | HIT | f1 产出 | kept | HIT |
+| w12r2 | **f2 产出** | kept | HIT | f1 产出 | kept | HIT |
+| w12r3 | **未产出**(f1+f2 双缺) | - | miss | f1 产出 | kept | HIT |
+| w13r1 | **未产出** | - | miss | f1 产出 | kept | HIT |
+
+**修正立项前提:真 flapper 是 d5-window-deadzone 单独一个**(产出 4/10、其中砍 1、judge 3/10;主导失败=finder 未产出 6/10)。**d6-ghost 不是 flapper**:10/10 产出(全部 f1)、W11 起 judge 7/7 连续命中,仅有的 2 次 miss 都在 W10(浅文本 ×1、verifier 砍 ×1)。W13 T7 所记"d5/d6 单run 双漏"与工件不符——w13r1 实际 d6 judge=HIT(d5 确实 miss:仅产出 docstring 措辞候选)。
+
+**关键机理核实(零 LLM)**:d5 证据(ingest.py:22-23 调用方注释"serve-toss segments frequently end after only 2-4 samples")**每一轮都在 context pack 的 caller 节里**(build_review_input 确定性复现)——失败是注意力而非可见性:4 次产出的候选文本全部引用了该注释;未产出的 run 里 finder 报的是同 diff 的 off-by-one/docstring 措辞候选(注意力被同文件更浅的信号吸走)。现有 SYSTEM 清单 documented-unhandled 条目缺 dead-path 条目那样的**代入动作指令**("把实际值代入条件")。附:w11r3 的砍杀话术("tuning suggestion, not a concrete defect")是 dead-path/numeric 之外的**潜在哨兵第三族历史数据点**(1/10,未系统化,T7 继续观察;本周不动哨兵)。
+
+**佐证**:回放 B×3(冻结 W12 finder 输出)d5/d6 层判定与对应 w12 run 完全一致——verifier 层在这两个 case 上无新增方差。
