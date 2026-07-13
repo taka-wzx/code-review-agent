@@ -384,6 +384,103 @@ class TestRescueForbiddenDrops(unittest.TestCase):
                                 "never empty here")
         self.assertIsNone(classify_drop(f))
 
+    def test_tuning_dismissal_rescues_documented_condition(self):
+        # W14 full r3-d5: the caller DOCUMENTS the short-segment regime; the
+        # drop calls it a tuning observation and praises the guard
+        f = finding(issue="BOOTSTRAP_WINDOW = 5, but the caller in "
+                          "tracker/ingest.py:22-23 documents that serve-toss "
+                          "segments frequently end after only 2-4 samples, so "
+                          "bootstrap_velocity returns None for the common case",
+                    drop_reason="2/2: This is a parameter-tuning observation, "
+                                "not a concrete defect. The code handles short "
+                                "segments gracefully by returning None")
+        self.assertEqual(classify_drop(f), "doc-condition-dismissed")
+
+    def test_no_evidence_dismissal_rescues_documented_condition(self):
+        # W14 slice r1-d6: "no evidence the scenario occurs" against an issue
+        # that cites the constant's own comment asserting the scenario
+        f = finding(issue="record_bounce accepts asr but discards it. The "
+                          "constant ACQUIRE_MIN_STATE = 4 (line 3) documents "
+                          "that asr >= 4 means the ball is confirmed in "
+                          "flight; without the gate low-asr detections are "
+                          "recorded as bounces",
+                    drop_reason="Speculative: no evidence that the detector "
+                                "actually produces low-asr bounce events; a "
+                                "robustness suggestion rather than a concrete "
+                                "defect")
+        self.assertEqual(classify_drop(f), "doc-condition-dismissed")
+
+    def test_correctly_returns_rescues_caller_comment_citation(self):
+        # w11r3-d5: "correctly returns None" locally-correct reasoning against
+        # a caller-comment citation ("notes that ...")
+        f = finding(issue="BOOTSTRAP_WINDOW=5 but the caller comment in "
+                          "ingest.py:24 notes that 'serve-toss segments "
+                          "frequently end after only 2-4 samples' -- most "
+                          "segments get None and no initial velocity is set",
+                    drop_reason="2/2: This is a parameter tuning suggestion, "
+                                "not a concrete defect. The code correctly "
+                                "returns None when samples are insufficient")
+        self.assertEqual(classify_drop(f), "doc-condition-dismissed")
+
+    def test_future_proofing_dismissal_rescues_constant_comment(self):
+        # w10r3-d6: quoted constant comment in the issue; the drop hand-waves
+        # "no evidence / speculative future-proofing / not a defect"
+        f = finding(issue='ACQUIRE_MIN_STATE = 4 with comment "asr >= 4 means '
+                          'the ball is confirmed in flight" strongly suggests '
+                          "asr carries confidence downstream consumers need",
+                    drop_reason="2/2: no evidence that discarding it causes "
+                                "any concrete failure. Speculative "
+                                "future-proofing advice, not a defect")
+        self.assertEqual(classify_drop(f), "doc-condition-dismissed")
+
+    def test_missing_doc_nit_stays_dropped(self):
+        # nearest lookalike: docstring-nit issues say docs are ABSENT
+        # ("does not specify"); the gate needs a positive citation
+        f = finding(issue="the docstring does not specify the expected format "
+                          "of pred_polyline",
+                    drop_reason="2/2: docstring omission, not a concrete "
+                                "defect")
+        self.assertIsNone(classify_drop(f))
+
+    def test_robustness_without_citation_stays_dropped(self):
+        # legit speculative-robustness kill: no documentation cited at all
+        f = finding(issue="No None guard for pred_polyline; if a caller "
+                          "passes None the slice expression crashes",
+                    drop_reason="2/2: Speculative robustness advice with no "
+                                "evidence that None is ever passed")
+        self.assertIsNone(classify_drop(f))
+
+    def test_substantive_doc_rebuttal_stays_dropped(self):
+        # a REAL rebuttal may itself cite docs in the reason; without the
+        # forbidden dismissal motifs it must stay dropped
+        f = finding(issue="the guard treats missing actual_y as possible, "
+                          "but the comment in report.py states every throw "
+                          "record carries both keys",
+                    drop_reason="2/2: the schema documented in report.py "
+                                "guarantees both keys are present, so the "
+                                "guarded scenario cannot occur; the guard is "
+                                "merely redundant")
+        self.assertIsNone(classify_drop(f))
+
+    def test_negated_citation_stays_dropped(self):
+        # sweep iteration 2 (w14r3-d11): "does not document that X" is a
+        # missing-doc nit wearing citation clothing -- must not rescue
+        f = finding(issue="The fit_cor docstring states the fit is 'forced "
+                          "through the origin' but does not document that "
+                          "the returned value is COR = -slope",
+                    drop_reason="2/2: Documentation style nit: a clarity "
+                                "improvement, not a defect. The math is "
+                                "correct")
+        self.assertIsNone(classify_drop(f))
+
+    def test_doc_condition_duplicate_guard(self):
+        f = finding(issue="the caller comment in ingest.py notes that "
+                          "segments are 2-4 samples, so the guard swallows "
+                          "the common case",
+                    drop_reason="2/2: duplicate of finding 0; also just a "
+                                "tuning suggestion, not a concrete defect")
+        self.assertEqual(classify_drop(f), "duplicate-guard")
+
     def test_rescued_shape_and_partition(self):
         target = finding(line=5, origin="finder2",
                          issue="the FROZEN flag is False so the guarded path "

@@ -237,6 +237,33 @@ _INVARIANT_LOSS_RE = re.compile(
     r"\blo(?:se|ses|sing|st)\b|violat|no\s+longer|drift", re.I)
 _MISSING_TERM_RE = re.compile(r"missing\s+term", re.I)
 
+# Documented-condition family (W15). Four recorded kills (w10r3-d6,
+# w11r3-d5, W14 slice r1-d6, W14 full r3-d5) dismiss as "tuning /
+# speculative / not a concrete defect" a finding whose issue CITES an
+# existing doc assertion that the input condition occurs -- reasoning
+# evidence rule 1 forbids ("documenting a condition is not handling it";
+# "no evidence the scenario occurs" is refuted by the citation itself,
+# and "correctly returns None" is the locally-correct-but-functionally-
+# dead shape that killed d5 back in W5). The issue gate demands a
+# POSITIVE citation (comment/docstring + notes/states/says/documents, a
+# "documents that", or a quoted comment); missing-doc nits ("docstring
+# does not specify X") carry no such assertion verb and stay dropped --
+# that keeps the 31 legitimately dismissal-phrased W14 drops out
+# (sweep-validated against W11/W12/W14 full + W14 slice).
+_DOC_DISMISS_REASON_RE = re.compile(
+    r"(not\s+a|rather\s+than\s+a)\s+(concrete\s+)?(defect|bug)"
+    r"|(parameter|threshold).?tuning\s+(suggestion|observation)"
+    r"|no\s+evidence\s+that"
+    r"|speculative\s+(robustness|future.?proofing)"
+    r"|(handles?|works?)\b[^.]{0,50}\b(gracefully|correctly)"
+    r"|correctly\s+returns?", re.I)
+# Sweep iteration 2: "does not document that X" is the missing-doc nit in
+# citation clothing -- a negated verb is not a citation.
+_DOC_CITED_ISSUE_RE = re.compile(
+    r"\b(comment|caller|constant|docstring)\b.{0,60}?"
+    r"(?<!not )(?<!n't )\b(notes?|states?|says?|documents?)\s+that\b"
+    r"|with\s+(the\s+)?comment\s+[\"'“]", re.I)
+
 
 def classify_drop(f: dict) -> str | None:
     """Sentinel verdict for one dropped finding: a rescue tag, the string
@@ -254,6 +281,9 @@ def classify_drop(f: dict) -> str | None:
         tag = "dead-path-dismissed"
     elif _GENERIC_DISMISS_REASON_RE.search(reason) and claims_invariant:
         tag = "numeric-invariant"
+    elif (_DOC_DISMISS_REASON_RE.search(reason)
+            and _DOC_CITED_ISSUE_RE.search(issue)):
+        tag = "doc-condition-dismissed"
     if tag and _GUARD_RE.search(reason):
         return "duplicate-guard"
     return tag
