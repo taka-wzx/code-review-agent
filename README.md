@@ -271,6 +271,25 @@ recall min 0.833 与 FP 0.667 归因均为预存方差(`f.ball` 幻觉复现、d
 **W15 头号候选:哨兵第三族**(紧 issue 门=documented-unhandled/missing-filter;31 条合法
 驳斥 drop 是误救红线)。
 
+## W15:哨兵第三族 doc-condition-dismissed + 产品化搭车(2026-07-13)
+
+**机制**:`classify_drop` 增第三族——reason 门("not a/rather than a concrete defect"、
+"parameter-tuning suggestion/observation"、"no evidence that"、"handles gracefully/correctly
+returns" 等)× issue 门(**非否定的**文档断言引用:comment/caller/constant/docstring +
+notes/states/says/documents **that**)。两轮 sweep 迭代:格式自述 nit("Docstring states
+'Native frames…'")与否定形引用("does not document that")是两大误救源,各固化为负例测试。
+
+**验收(六门五过一保留,判定:通过、不回滚)**:G-sweep 六向精确计数全过——历史 4 例全数
+命中,且在 W10 负控中**意外发现第 5 例**(w10r3 d7-gap-connect 真埋点被"Design preference,
+not a concrete defect"砍杀);G-bench 30/30;**G-replay 主判据:run3 中 d5-deadzone 被 fresh
+verifier 再砍、第三族 live 救活 → judge HIT,第三族边际 +1 真 bug/0 FP/0 噪音**,B recall
+.889 vs A(哨兵全关).855;G-holdout 6/7 有保留——h2-hud-line-cap 系 verifier 对"未声明
+后果的 convention 违反"的**规则合规砍杀**(非三族话术,W14 同套件 7/7,单 run 翻转,记录
+truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM 实耗 ¥3.6。
+
+**搭车**:pyproject 打包(`pip install -e .` → `crag` 命令)+ GitHub Actions CI(双平台跑
+82 零 API 测试 + 资产一致性)+ MIT LICENSE。glm 交叉重判阻塞于 GLM_API_KEY 未配置。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
@@ -279,11 +298,11 @@ recall min 0.833 与 FP 0.667 归因均为预存方差(`f.ball` 幻觉复现、d
   转为"实测不重要"的永久结论,回收机制不做。**输出占真实账单 72.6%**,今后成本杠杆在
   tokens_out。预算纪律双口径:原始 tokens_in ≤+10%/W 仍作膨胀漂移哨(对 cache 不敏感),
   每周终测跑 `cost_report --price-in/--price-hit/--price-out` 真实 ¥ 入台账
-- **d5-deadzone 未稳定化**(W14 判定):候选层 5/6(基线 40%)但判定链卡 verifier 第三族
-  砍杀;d6 自 W11 起稳定(W14 3/3)非 flapper——W13 所记"d5/d6 双漏"经归因表修正
+- **d5-deadzone 判定链已闭环**(W15):verifier 第三族砍杀被哨兵兜住(回放 run3 live 救活);
+  残余是 finder 候选层 5/6(run2 型缺产出),维持观察;d6 自 W11 起稳定非 flapper
 - d10-cov W14 从 never_hit 毕业(judge 2/3,哨兵救活生效);d11-origin-fit 领域难档五代 0/x
   ——维持挂起
-- **哨兵第三族已系统化**(4 例:w10r3-d6/w11r3-d5/W14切片r1-d6/W14全量r3-d5,驳斥话术×
-  caller-documented 真 bug)——W15 头号候选,须沿两族先例紧 issue 门(W14 全量 31 条合法
-  驳斥 drop 是误救红线);d7 型实质性机理驳斥是另一族,哨兵路线不适用
+- **哨兵三族齐备**(dead-path/numeric/doc-condition,W15 起),累计正确救活含全部 5 例历史
+  真 bug 砍杀;d7 型实质性机理驳斥(有具体反主张)是哨兵救不了的另一族,bench 持续观察;
+  h2-line-cap 暴露"未声明后果的 convention 违反"truth-set 张力(W16 议)
 - uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起单列
