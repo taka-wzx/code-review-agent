@@ -466,3 +466,14 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 **关键机理核实(零 LLM)**:d5 证据(ingest.py:22-23 调用方注释"serve-toss segments frequently end after only 2-4 samples")**每一轮都在 context pack 的 caller 节里**(build_review_input 确定性复现)——失败是注意力而非可见性:4 次产出的候选文本全部引用了该注释;未产出的 run 里 finder 报的是同 diff 的 off-by-one/docstring 措辞候选(注意力被同文件更浅的信号吸走)。现有 SYSTEM 清单 documented-unhandled 条目缺 dead-path 条目那样的**代入动作指令**("把实际值代入条件")。附:w11r3 的砍杀话术("tuning suggestion, not a concrete defect")是 dead-path/numeric 之外的**潜在哨兵第三族历史数据点**(1/10,未系统化,T7 继续观察;本周不动哨兵)。
 
 **佐证**:回放 B×3(冻结 W12 finder 输出)d5/d6 层判定与对应 w12 run 完全一致——verifier 层在这两个 case 上无新增方差。
+
+**T5 mini-立项(用户定两取舍,2026-07-13)**:机制=**清单代入指令**(SYSTEM documented-unhandled 条目补 call-site 代入动作,仿 dead-path 条目的"把实际值代入条件";零结构改动、零新增调用、golden 按引用不破);finder2 升温被否(f2@0.7 产出率 1/3 ≈ f1@0 的 3/10,数据不支持,且双变量无法归因)。
+
+**T6 预写闸门(先写后跑,全量 V2×3 + holdout×1;基线=results_repeat_w12×3 配对参照 + w13r1 单run,不重跑基线——W12 与现 HEAD finder 代码相同)**:
+1. **主闸门 d5-window-deadzone:候选层 3/3(f1/f2 任一产出)+ judge 层 ≥2/3**(容 1 次 verifier/judge 方差;砍杀史 1/10);
+2. d6-ghost judge 3/3 不回退;
+3. recall min ≥0.867(W12 地板);FP mean ≤0.3;noise mean ≤8.7;陷阱 d12+d13 kept mean ≤1.67;never_hit 不增(d10-cov/d11-origin 挂起豁免);
+4. 原始 tokens_in ≤ W12 均值(1349k)+10%(清单一句话不应增加探索);真实 ¥ 入台账(T1 新列);
+5. holdout 7/7、h6 陷阱 kept=0;
+6. 哨兵回归:--sweep 对 W12 139 drop 仍恰 4 救+1 守卫(verifier 未动,应零漂移)。
+内环切片(机制指标 only,成本门不设):d5×3 候选层产出 3/3 为过;d6/d12/d13 各×3 同批跑作误伤探针(d12/d13 findings 不升、d6 不回退)。

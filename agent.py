@@ -53,6 +53,11 @@ can name the concrete code path and failure mechanism:
 - Documented-but-unhandled inputs: when a docstring or comment states an
   input condition (duplicates, gaps, missing/empty entries), check the
   code actually handles it -- documenting a condition is not handling it.
+  This includes conditions documented at the call site: substitute the
+  caller-documented operating regime (typical lengths, ranges, rates)
+  into the function's guards and early returns -- a guard that swallows
+  the documented common case is a functional dead zone, not correct
+  None-handling.
 - Numeric/statistical defects: division by a difference that can be
   zero; repeated updates accumulating floating-point error in long-lived
   state (e.g. a symmetry or conservation invariant silently lost); an
