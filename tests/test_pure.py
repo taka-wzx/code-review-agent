@@ -2,9 +2,13 @@
 docstrings advertise as offline-testable. Locks the eval-side behavior the
 refactor must not disturb (judge.py's loop itself is out of scope).
 """
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from agent import validate_review
+from cost_report import billed_cost, collect, iter_trace_files, run_stats
 from findings import dedup_union, is_duplicate, similarity, split_by_scope
 from judge import compute_metrics, validate_verdict
 from replay_verifier import reconstruct_candidates
@@ -442,6 +446,77 @@ class TestReconstructCandidates(unittest.TestCase):
         out = reconstruct_candidates(result)
         self.assertEqual(out, recorded)
         self.assertIsNot(out[0], recorded[0])   # copies, not aliases
+
+
+class TestBilledCost(unittest.TestCase):
+    def test_no_prices_means_no_cost(self):
+        self.assertIsNone(billed_cost(100, 10, 50, None, None))
+        self.assertIsNone(billed_cost(100, 10, 50, 1.0, None))
+
+    def test_price_hit_defaults_to_no_discount(self):
+        # hits billed like misses -> identical to the pre-W14 formula
+        self.assertAlmostEqual(
+            billed_cost(1_000_000, 0, 500_000, 2.0, 8.0), 2.0)
+
+    def test_hit_discount(self):
+        # 90% hit at 1/10 price -> effective input factor 0.19
+        self.assertAlmostEqual(
+            billed_cost(1_000_000, 0, 900_000, 1.0, 4.0, price_hit=0.1),
+            0.19)
+
+    def test_output_never_discounted(self):
+        self.assertAlmostEqual(
+            billed_cost(0, 1_000_000, 0, 1.0, 4.0, price_hit=0.1), 4.0)
+
+    def test_all_hit_and_zero_hit_edges(self):
+        self.assertAlmostEqual(
+            billed_cost(1_000_000, 0, 1_000_000, 1.0, 4.0, price_hit=0.1),
+            0.1)
+        self.assertAlmostEqual(
+            billed_cost(1_000_000, 0, 0, 1.0, 4.0, price_hit=0.1), 1.0)
+
+
+class TestCostReportCacheAggregation(unittest.TestCase):
+    """Traces mixing W13+ events (cache fields) with older ones (none):
+    only recorded hits may earn the discount; old events bill as all-miss."""
+
+    EVENTS = [
+        {"kind": "llm_response", "component": "finder", "step": 1,
+         "tokens_in": 100, "tokens_out": 10, "cache_hit": 80, "cache_miss": 20},
+        {"kind": "llm_response", "component": "finder", "step": 2,
+         "tokens_in": 50, "tokens_out": 5},          # pre-W13 event
+        {"kind": "llm_response", "component": "finder", "step": 3,
+         "tokens_in": 40, "tokens_out": 4, "cache_hit": 40, "cache_miss": 0},
+        {"kind": "tool", "component": "finder", "tool": "read_file",
+         "result_chars": 1000},
+    ]
+
+    def write_trace(self, tmp):
+        (Path(tmp) / "d1_demo.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in self.EVENTS) + "\n",
+            encoding="utf-8")
+
+    def test_run_stats_splits_hit_and_seen(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_trace(tmp)
+            d = run_stats(tmp)["finder"]
+        self.assertEqual(d["tokens_in"], 190)
+        self.assertEqual(d["cache_hit"], 120)
+        self.assertEqual(d["cache_seen_in"], 140)    # only events with fields
+        # billed miss volume = 190-120 = 70: the 20 recorded misses plus
+        # the 50 old-style tokens billed conservatively as misses
+        self.assertAlmostEqual(
+            billed_cost(d["tokens_in"], d["tokens_out"], d["cache_hit"],
+                        1.0, 0.0, price_hit=0.0), 70 / 1e6)
+
+    def test_collect_accumulates_cache_hit_per_diff(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_trace(tmp)
+            per_diff = collect(iter_trace_files([tmp]))
+        d = per_diff["d1_demo"]["finder"]
+        self.assertEqual(d["tokens_in"], 190)
+        self.assertEqual(d["cache_hit"], 120)
+        self.assertEqual(d["calls"], 3)
 
 
 if __name__ == "__main__":
