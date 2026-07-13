@@ -504,3 +504,19 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 **判定(用户批准,2026-07-13):有保留通过、不回滚。** 仿 W12 先例:机制达成采样层方向目标(候选 40%→83%),d5 记"未稳定化"不记达标;残余瓶颈换层至 verifier 第三族话术执行率。
 
 **W15 候选**:①**哨兵第三族(头号,用户已预定向)**——驳斥话术 × caller-documented 真 bug,issue 门=documented-unhandled/missing-filter,纪律:先补 test_pure 逐模式正反例 + --sweep 对 W12/W14 全部已录 drop 验证(预期恰救 w11r3-d5/w14r3-d5 两例 + 不误救 31 条合法驳斥),再走配对回放主判(verifier-only 周,回放台架适用);②d7 实质性驳斥族观察(bench_verifier 补 case);③d5 候选层 run2 型缺产出(5/6→6/6)视第三族落地后 judge 层表现再定;d11-origin 维持挂起。
+
+## W15(2026-07-13~):哨兵第三族 doc-condition-dismissed + 产品化搭车
+
+**立项(W14 验收时用户预定向①)**:范围=哨兵第三族(verifier-only 周,配对回放主判,不跑全量×3);机制=`classify_drop` 增第三族——**reason 门**(4 例共同基元:"not a/rather than a concrete defect"×4、"parameter-tuning suggestion/observation"、"no evidence that"、"speculative robustness/future-proofing"、"handles gracefully/correctly returns")× **issue 门**(引用现存文档断言:comment/docstring/constant-comment + notes/states/documents that 形式——区分于"docstring 未写"类 missing-doc nit,后者动词是 does not specify/not documented,不命中);VERIFIER_SYSTEM 一字不动;重复守卫沿用。搭车:B1 打包+CI+LICENSE(已完成,a967793);glm 交叉重判(**阻塞:无 GLM_API_KEY,待用户提供**)。
+
+**预写闸门**:
+1. **G-sweep(四向,零成本内环)**:W12 dir 恰 4 救+1 守卫不变;W11 dir 恰 1 救(w11r3-d5);W14 dir 恰 1 救(r3-d5),31 条驳斥话术合法 drop 零误救;W14 切片 dir 恰 1 救(r1-d6)。任何计划外命中逐条人工裁决,合法驳斥被误救→收紧门,预算内迭代(沿 W13 两轮先例)。
+2. **G-pure**:test_pure 第三族逐模式正反例先于实现落地,全绿;既有 4 例族测试零回归。
+3. **G-bench**:既有 24/24 不破 + 新增 2 个冻结 kill-case(w14全量r3-d5、w14切片r1-d6)通过。
+4. **G-replay(主判据,配对回放×3,source=results_repeat_w14)**:B(三族)vs A(两族)——d5-deadzone 在"有候选且被砍"的 run 被救活入 uncertain;A 命中的 bug B 无一丢失;FP 差=0;noise_B ≤ noise_A+2;precision_B ≥ precision_A−0.03。
+5. **G-holdout(×1)**:7/7、h6 kept=0、第三族预期零触发(holdout 无已知 doc-condition 砍杀)。
+预算:回放×3 ≈2M raw(真实 ~¥1.2)+ holdout ≈0.6M;内环全零成本。
+
+**W15 实现与内环(2026-07-13,commit e7e4305)**:`classify_drop` 第三族 `doc-condition-dismissed` = reason 门(not a/rather than a concrete defect | parameter/threshold-tuning suggestion/observation | no evidence that | speculative robustness/future-proofing | handles/works…gracefully/correctly | correctly returns)× issue 门(comment/caller/constant/docstring + **非否定** notes/states/says/documents **that** | 带引号 comment 引用)。两轮 sweep 迭代:①v1 issue 门过松(任意文档引用),W12 误救 8——"Docstring states 'Native frames…'"类**格式自述 nit** 是主误救源 → 收紧为"断言动词+that";路径含点还暴露 `[^.]{0,60}` 句内启发被 `ingest.py` 截断的 bug → 改惰性 `.{0,60}?`;②v2 唯一残留误救 w14r3-d11"does not document that"=**否定形引用**(缺文档 nit 穿引用外衣)→ 动词前定宽负后顾 `(?<!not )(?<!n't )`,案例固化为负例测试。
+
+**G-sweep 终局(六向,超出预写的四向)**:W12 恰 4+1 不变 ✅;W14 恰 r3-d5、31 条合法驳斥零误救 ✅;切片恰 r1-d6 ✅;W11 第三族恰 w11r3-d5 ✅(族二在 W11 数据上另中 w11r3-d10 cov 真 bug 砍杀——W11 从未入 sweep 验证集,系族二既有正确行为非本周改动);W13 零 ✅;**W10(追加负控)第三族命中 w10r3-d6(第 4 例)+ w10r3-d7(计划外,人工裁决=正确救活:被砍的是 d7-gap-connect 真埋点,话术"Design preference, not a concrete defect / correctly implements what it advertises"——第三族第 5 例,先前 T7 扫描未及 W10)**。G-pure:82 测试全绿(第三族 4 正例+5 反例:missing-doc nit/无引用 robustness/实质性文档反驳/否定形引用/重复守卫)。

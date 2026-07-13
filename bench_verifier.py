@@ -35,55 +35,56 @@ force_utf8()
 
 HERE = Path(__file__).parent
 BENCH_PATH = HERE / "eval" / "bench_verifier.json"
-SOURCE_ROOT = HERE / "eval" / "results_repeat_w12"
+SOURCE_ROOT = HERE / "eval"   # W15: sources span multiple results dirs
 
 # id, diff stem, source result (relative to SOURCE_ROOT), checks.
 # Keywords quote the recorded candidate texts.
 CASES = [
-    ("d7-r1-deadflag", "d7_display", "v2_run1/d7_display.json", [
+    ("d7-r1-deadflag", "d7_display",
+     "results_repeat_w12/v2_run1/d7_display.json", [
         {"kind": "survives", "issue_contains_any": ["PREDICT_DISPLAY_ONLY_FROZEN"]},
         {"kind": "stays_dropped", "issue_contains_any": ["no callers anywhere"]},
         {"kind": "never_rescued", "issue_contains_any": ["supports slicing"]},
     ]),
-    ("d7-r2-deadflag-nonregress", "d7_display", "v2_run2/d7_display.json", [
+    ("d7-r2-deadflag-nonregress", "d7_display", "results_repeat_w12/v2_run2/d7_display.json", [
         # kept (uncertain) in W12 -- the sentinel must not regress a keep
         {"kind": "survives", "issue_contains_any": ["PREDICT_DISPLAY_ONLY"]},
         {"kind": "stays_dropped",
          "issue_contains_any": ["draw_observed` has no callers"]},
         {"kind": "never_rescued", "issue_contains_any": ["TypeError"]},
     ]),
-    ("d7-r3-deadflag", "d7_display", "v2_run3/d7_display.json", [
+    ("d7-r3-deadflag", "d7_display", "results_repeat_w12/v2_run3/d7_display.json", [
         {"kind": "survives", "issue_contains_any": ["PREDICT_DISPLAY_ONLY"]},
         {"kind": "stays_dropped", "issue_contains_any": ["zero callers"]},
         {"kind": "never_rescued",
          "issue_contains_any": ["draw_observed` has no callers"]},
     ]),
-    ("d10-r1-cov", "d10_filter", "v2_run1/d10_filter.json", [
+    ("d10-r1-cov", "d10_filter", "results_repeat_w12/v2_run1/d10_filter.json", [
         {"kind": "survives",
          "issue_contains_any": ["positive-definiteness", "symmetry"]},
         {"kind": "never_rescued",
          "issue_contains_any": ["np.linalg.inv", "shapes are mismatched",
                                 "len(ts) <= 1"]},
     ]),
-    ("d10-r2-cov", "d10_filter", "v2_run2/d10_filter.json", [
+    ("d10-r2-cov", "d10_filter", "results_repeat_w12/v2_run2/d10_filter.json", [
         {"kind": "survives", "issue_contains_any": ["Joseph", "symmetry"]},
         {"kind": "never_rescued",
          "issue_contains_any": ["np.linalg.inv", "ndarray"]},
     ]),
-    ("d10-r3-negctl", "d10_filter", "v2_run3/d10_filter.json", [
+    ("d10-r3-negctl", "d10_filter", "results_repeat_w12/v2_run3/d10_filter.json", [
         # no cov candidate exists in this recording (finder-side miss):
         # nothing may be rescued here at all
         {"kind": "never_rescued"},
     ]),
-    ("d12-r3-trap", "d12_trap_clean", "v2_run3/d12_trap_clean.json", [
+    ("d12-r3-trap", "d12_trap_clean", "results_repeat_w12/v2_run3/d12_trap_clean.json", [
         {"kind": "never_rescued"},
         {"kind": "stays_dropped", "issue_contains_any": ["No tests exist"]},
     ]),
-    ("d13-r1-trap", "d13_trap_refactor", "v2_run1/d13_trap_refactor.json", [
+    ("d13-r1-trap", "d13_trap_refactor", "results_repeat_w12/v2_run1/d13_trap_refactor.json", [
         {"kind": "never_rescued"},
         {"kind": "stays_dropped", "issue_contains_any": ["no docstring"]},
     ]),
-    ("d16-r2-fsum", "d16_missing_dep", "v2_run2/d16_missing_dep.json", [
+    ("d16-r2-fsum", "d16_missing_dep", "results_repeat_w12/v2_run2/d16_missing_dep.json", [
         # the pattern-(ii) discriminator: accumulation phrasing without a
         # named-invariant claim, legitimately refuted -- never rescue
         {"kind": "never_rescued", "issue_contains_any": ["accumulates"]},
@@ -92,10 +93,29 @@ CASES = [
         {"kind": "survives", "issue_contains_any": ["timeutil"]},
         {"kind": "survives", "issue_contains_any": ["len(rallies)"]},
     ]),
-    ("d11-r1-negctl", "d11_cor", "v2_run1/d11_cor.json", [
+    ("d11-r1-negctl", "d11_cor", "results_repeat_w12/v2_run1/d11_cor.json", [
         # div-zero drops here carry legitimate mechanism refutations
         {"kind": "never_rescued", "issue_contains_any": ["division by zero"]},
         {"kind": "survives", "issue_contains_any": ["vz_in_raw"]},
+    ]),
+    # W15 doc-condition family: the two live kills that motivated it.
+    ("d5-w14r3-doccond", "d5_bootstrap",
+     "results_repeat_w14/v2_run3/d5_bootstrap.json", [
+        # caller-documented deadzone, killed live as "parameter-tuning
+        # observation, not a concrete defect" -- must survive now
+        {"kind": "survives", "issue_contains_any": ["documents that serve-toss"]},
+        {"kind": "stays_dropped", "issue_contains_any": ["No unit tests exist"]},
+        {"kind": "never_rescued",
+         "issue_contains_any": ["No unit tests exist", "lower bound on `dt`"]},
+    ]),
+    ("d6-w14slice-doccond", "d6_ghost",
+     "results_w14_slice/v2_run1/d6_ghost.json", [
+        # constant-comment-documented asr gate, killed live as "no evidence
+        # low-asr events occur ... rather than a concrete defect"
+        {"kind": "survives", "issue_contains_any": ["ACQUIRE_MIN_STATE"]},
+        # the reverse-rule no-callers drop in the same recording is legal
+        {"kind": "never_rescued", "issue_contains_any": ["no callers anywhere"]},
+        {"kind": "stays_dropped", "issue_contains_any": ["no method to increment"]},
     ]),
 ]
 

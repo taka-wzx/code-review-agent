@@ -1,10 +1,10 @@
 {
-  "built_from": "results_repeat_w12 @ see git log",
+  "built_from": "eval @ see git log",
   "cases": [
     {
       "id": "d7-r1-deadflag",
       "diff": "d7_display",
-      "source": "v2_run1/d7_display.json",
+      "source": "results_repeat_w12/v2_run1/d7_display.json",
       "candidates": [
         {
           "file": "tracker/display.py",
@@ -68,7 +68,7 @@
     {
       "id": "d7-r2-deadflag-nonregress",
       "diff": "d7_display",
-      "source": "v2_run2/d7_display.json",
+      "source": "results_repeat_w12/v2_run2/d7_display.json",
       "candidates": [
         {
           "file": "tracker/display.py",
@@ -140,7 +140,7 @@
     {
       "id": "d7-r3-deadflag",
       "diff": "d7_display",
-      "source": "v2_run3/d7_display.json",
+      "source": "results_repeat_w12/v2_run3/d7_display.json",
       "candidates": [
         {
           "file": "tracker/display.py",
@@ -204,7 +204,7 @@
     {
       "id": "d10-r1-cov",
       "diff": "d10_filter",
-      "source": "v2_run1/d10_filter.json",
+      "source": "results_repeat_w12/v2_run1/d10_filter.json",
       "candidates": [
         {
           "file": "tracker/filter.py",
@@ -286,7 +286,7 @@
     {
       "id": "d10-r2-cov",
       "diff": "d10_filter",
-      "source": "v2_run2/d10_filter.json",
+      "source": "results_repeat_w12/v2_run2/d10_filter.json",
       "candidates": [
         {
           "file": "tracker/filter.py",
@@ -353,7 +353,7 @@
     {
       "id": "d10-r3-negctl",
       "diff": "d10_filter",
-      "source": "v2_run3/d10_filter.json",
+      "source": "results_repeat_w12/v2_run3/d10_filter.json",
       "candidates": [
         {
           "file": "tracker/filter.py",
@@ -416,7 +416,7 @@
     {
       "id": "d12-r3-trap",
       "diff": "d12_trap_clean",
-      "source": "v2_run3/d12_trap_clean.json",
+      "source": "results_repeat_w12/v2_run3/d12_trap_clean.json",
       "candidates": [
         {
           "file": "tracker/io_utils.py",
@@ -515,7 +515,7 @@
     {
       "id": "d13-r1-trap",
       "diff": "d13_trap_refactor",
-      "source": "v2_run1/d13_trap_refactor.json",
+      "source": "results_repeat_w12/v2_run1/d13_trap_refactor.json",
       "candidates": [
         {
           "file": "tracker/geometry.py",
@@ -563,7 +563,7 @@
     {
       "id": "d16-r2-fsum",
       "diff": "d16_missing_dep",
-      "source": "v2_run2/d16_missing_dep.json",
+      "source": "results_repeat_w12/v2_run2/d16_missing_dep.json",
       "candidates": [
         {
           "file": "tracker/summary.py",
@@ -633,7 +633,7 @@
     {
       "id": "d11-r1-negctl",
       "diff": "d11_cor",
-      "source": "v2_run1/d11_cor.json",
+      "source": "results_repeat_w12/v2_run1/d11_cor.json",
       "candidates": [
         {
           "file": "tracker/bounce_cor.py",
@@ -683,6 +683,134 @@
           "kind": "survives",
           "issue_contains_any": [
             "vz_in_raw"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d5-w14r3-doccond",
+      "diff": "d5_bootstrap",
+      "source": "results_repeat_w14/v2_run3/d5_bootstrap.json",
+      "candidates": [
+        {
+          "file": "tracker/acquire.py",
+          "line": 16,
+          "severity": "high",
+          "issue": "`window[-2]` skips the most recent sample and computes velocity between the 1st and 4th element of the 5-sample window. This is almost certainly an off-by-one error: `window[-1]` (the last sample) was likely intended. If intentionally excluding the last sample (e.g. because it may be a hit frame), that rationale must be documented in the docstring and the index should carry an explanatory comment. As written, the velocity estimate silently ignores the freshest data point.",
+          "suggestion": "Change `window[-2]` to `window[-1]`, unless there is a documented reason to exclude the last sample. If exclusion is intentional, add a comment explaining why and update the docstring."
+        },
+        {
+          "file": "tracker/acquire.py",
+          "line": 7,
+          "severity": "medium",
+          "issue": "Docstring says 'from the first acquisition samples' but line 13 uses `samples[-BOOTSTRAP_WINDOW:]`, which takes the **last** `BOOTSTRAP_WINDOW` samples. If 'first' refers to the acquisition phase (not position in the list), the wording is misleading. If the code is meant to use the earliest samples, it should be `samples[:BOOTSTRAP_WINDOW]`.",
+          "suggestion": "Clarify the docstring: e.g. 'Estimate velocity from the final few acquisition samples' if the tail is correct, or change the code to `samples[:BOOTSTRAP_WINDOW]` if initial-position velocity is intended."
+        },
+        {
+          "file": "tracker/acquire.py",
+          "line": 12,
+          "severity": "low",
+          "issue": "`BOOTSTRAP_WINDOW = 5`, but the caller in `tracker/ingest.py:22-23` documents that serve-toss segments frequently end after only 2–4 samples. This means `bootstrap_velocity` will return `None` for the majority of its intended use case. The guard at line 11 handles this gracefully, but the effective dead zone for the common path is worth noting.",
+          "suggestion": "Consider lowering `BOOTSTRAP_WINDOW` to 3 or 4, or document that serve-toss segments are expected to fall through to `None` and that bootstrapping only kicks in for longer acquisition runs."
+        },
+        {
+          "file": "tracker/acquire.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "The velocity estimator uses only two points (first and second-to-last) out of a 5-sample window, ignoring the three intermediate samples entirely. Given convention 5.3 (漏帧很常见, frame gaps of 2-3 periods are common), a two-point estimate is especially noisy. While this is a bootstrap/initial estimate and simplicity may be acceptable, the estimator quality is poor.",
+          "suggestion": "Consider using a simple linear regression over all 5 samples for a more robust estimate, or at minimum average adjacent deltas.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/acquire.py",
+          "line": 15,
+          "severity": "low",
+          "issue": "The `dt <= 0` guard correctly handles non-positive time deltas, but there is no lower bound on `dt`. An extremely small positive `dt` (e.g. from a timing glitch) would produce an enormous velocity that passes silently. At 125 fps, consecutive frames are ~8 ms apart, so this is unlikely in normal operation.",
+          "suggestion": "Consider adding a minimum `dt` threshold, e.g. `if dt < 1e-6: return None`, to guard against degenerate timestamps.",
+          "origin": "finder2"
+        },
+        {
+          "file": "tracker/acquire.py",
+          "line": 6,
+          "severity": "low",
+          "issue": "No unit tests exist for `bootstrap_velocity` (nor any tests in the entire repository).",
+          "suggestion": "Add tests covering: fewer than BOOTSTRAP_WINDOW samples, exactly BOOTSTRAP_WINDOW samples, dt=0, dt<0, and normal operation with known-velocity synthetic data.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "documents that serve-toss"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "No unit tests exist"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "No unit tests exist",
+            "lower bound on `dt`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "d6-w14slice-doccond",
+      "diff": "d6_ghost",
+      "source": "results_w14_slice/v2_run1/d6_ghost.json",
+      "candidates": [
+        {
+          "file": "tracker/rally.py",
+          "line": 17,
+          "severity": "high",
+          "issue": "`record_bounce` accepts `asr` but discards it. The module-level constant `ACQUIRE_MIN_STATE = 4` (line 3) documents that `asr >= 4` means the ball is confirmed in flight, suggesting bounces below this threshold should be rejected. Without this gate, unconfirmed (low-asr) detections will be stored as bounce events, polluting the rally bookkeeping with noise.",
+          "suggestion": "Add a guard: `if asr < ACQUIRE_MIN_STATE: return` at the top of `record_bounce`, or store `asr` alongside the coordinates so downstream consumers can filter."
+        },
+        {
+          "file": "tracker/rally.py",
+          "line": 13,
+          "severity": "medium",
+          "issue": "`start_new_rally` resets `self.strokes` to 0 but does not clear `self.bounce_points`. If a single `RallyState` instance is reused across multiple rallies (as implied by its docstring 'one rally'), bounce points from the previous rally will persist into the new one.",
+          "suggestion": "Add `self.bounce_points = []` (or `.clear()`) inside `start_new_rally`."
+        },
+        {
+          "file": "tracker/rally.py",
+          "line": 11,
+          "severity": "low",
+          "issue": "`self.strokes` is initialized to 0 and reset to 0 in `start_new_rally`, but there is no method to increment it (e.g. a `record_stroke`) and no code reads it. It is write-only dead state.",
+          "suggestion": "Either add a `record_stroke` method that increments `self.strokes`, or remove the field until stroke tracking is implemented."
+        },
+        {
+          "file": "tracker/rally.py",
+          "line": 13,
+          "severity": "low",
+          "issue": "`start_new_rally` has no callers anywhere in the repository. Combined with `on_bounce` (tracker/ingest.py:30) also having no callers, the entire rally bookkeeping pipeline appears to be scaffolding not yet wired into the ingest loop.",
+          "suggestion": "Wire `start_new_rally` and `on_bounce` into the frame processing loop (e.g., in `tracker/ingest.py:ingest`) or add a TODO indicating the integration plan."
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "ACQUIRE_MIN_STATE"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "no callers anywhere"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "no method to increment"
           ]
         }
       ]
