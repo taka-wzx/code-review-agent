@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+description = "Two-pass (finder + verifier) code-review agent over OpenAI-compatible APIs, with a reproducible eval harness"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "openai>=1.40",
+    "pyflakes",
+]
+
+[project.scripts]
+crag = "agent:main"
+
+# Only the runtime review pipeline is installable. The eval harness
+# (run_eval/repeat_eval/judge/replay_verifier/bench_verifier/cost_report)
+# resolves eval/ assets relative to the repo and stays repo-only.
+[tool.setuptools]
+py-modules = [
+    "agent",
+    "agentloop",
+    "context",
+    "findings",
+    "llm",
+    "render",
+    "tools",
+    "tracelog",
+    "verifier",
+]

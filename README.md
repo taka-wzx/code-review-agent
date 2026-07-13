@@ -18,6 +18,10 @@ $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY
 # 2. 跑内置样例（sample.diff 里埋了几个真实 bug，看它能不能抓到）
 .venv\Scripts\python.exe agent.py sample.diff
 
+# （可选）以包安装，获得 crag 命令（W15：pyproject + CI + MIT LICENSE）
+.venv\Scripts\python.exe -m pip install -e .
+crag sample.diff
+
 # 3. 审查真实改动（W7 git 集成,不再需要手动导 diff）
 .venv\Scripts\python.exe agent.py --commit HEAD --repo e:\shiyan\pingpong_tracker      # 某个 commit
 .venv\Scripts\python.exe agent.py --uncommitted --repo e:\shiyan\pingpong_tracker      # 工作区未提交改动
