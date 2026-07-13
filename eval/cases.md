@@ -520,3 +520,13 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 **W15 实现与内环(2026-07-13,commit e7e4305)**:`classify_drop` 第三族 `doc-condition-dismissed` = reason 门(not a/rather than a concrete defect | parameter/threshold-tuning suggestion/observation | no evidence that | speculative robustness/future-proofing | handles/works…gracefully/correctly | correctly returns)× issue 门(comment/caller/constant/docstring + **非否定** notes/states/says/documents **that** | 带引号 comment 引用)。两轮 sweep 迭代:①v1 issue 门过松(任意文档引用),W12 误救 8——"Docstring states 'Native frames…'"类**格式自述 nit** 是主误救源 → 收紧为"断言动词+that";路径含点还暴露 `[^.]{0,60}` 句内启发被 `ingest.py` 截断的 bug → 改惰性 `.{0,60}?`;②v2 唯一残留误救 w14r3-d11"does not document that"=**否定形引用**(缺文档 nit 穿引用外衣)→ 动词前定宽负后顾 `(?<!not )(?<!n't )`,案例固化为负例测试。
 
 **G-sweep 终局(六向,超出预写的四向)**:W12 恰 4+1 不变 ✅;W14 恰 r3-d5、31 条合法驳斥零误救 ✅;切片恰 r1-d6 ✅;W11 第三族恰 w11r3-d5 ✅(族二在 W11 数据上另中 w11r3-d10 cov 真 bug 砍杀——W11 从未入 sweep 验证集,系族二既有正确行为非本周改动);W13 零 ✅;**W10(追加负控)第三族命中 w10r3-d6(第 4 例)+ w10r3-d7(计划外,人工裁决=正确救活:被砍的是 d7-gap-connect 真埋点,话术"Design preference, not a concrete defect / correctly implements what it advertises"——第三族第 5 例,先前 T7 扫描未及 W10)**。G-pure:82 测试全绿(第三族 4 正例+5 反例:missing-doc nit/无引用 robustness/实质性文档反驳/否定形引用/重复守卫)。
+
+**W15 验收(六门五过一保留)**:
+- **G-pure ✅** 82 零 API 测试;**G-sweep ✅** 六向精确计数(见上);**G-bench ✅ 30/30**(含 2 新冻结 case:目标存活、同录合法 drop 全留死);**VERIFIER_SYSTEM 零改动 ✅**(verifier.py +31 行全在哨兵区)。
+- **G-replay(主判据)✅**:配对回放×3(source=results_repeat_w14;注:台架 A 视图=哨兵全关,较预写的"A=两族"更严——族一/二已知代价被算进 B 侧,按 tag 归因拆解)。**run3=目标链路 live 验证:d5-deadzone 候选被 fresh verifier 再砍,B 第三族救活 → judge HIT(A=miss)**;run1 d5 verifier 自保(无需救)、run2 录制无候选(按构造豁免)。配对无回退(B⊇A ×3);均值 recall A .855→B .889、precision −0.009(容差 .03)✓。严格口径下两处 flag 均非第三族:run1 fp_B=1 是族一救坏措辞 d7 的 W14 已记账代价;run3 fp_A=1>fp_B=0 是 judge 对相同 unmatched 的分类方差(方向利 B)。**第三族边际:+1 真 bug / 0 FP / 0 噪音**。
+- **G-holdout 有保留(6/7)**:h6 陷阱 kept=0 ✅、哨兵零触发 ✅(符合预写),但 h2-hud-line-cap 单点 miss。归因:finder 照常产出候选,verifier 2/2 砍,理由="6 行 HUD 约定**缺乏声明的真实后果**(对比 print/dbg 规则的'发布版要能一键静音')、无 crash/overlap/失败机理"——**VERIFIER_SYSTEM convention 条款的字面合规应用,不属三族禁止话术**('convention states' 不在三族 issue 门内,'no crash…identified' 不中任何 reason 门);W14 同套件同 prompt 7/7,单 run 翻转;哨兵只增不减按构造无法致 miss。**记录张力:未声明后果的 convention 违反该不该算命中,是 truth-set 设计问题非执行缺陷**(fixture CLAUDE.md 的 6 行规则确实没写后果)——W16 泛化周一并考虑,不做 mid-week 资产修改。
+- 真实 ¥ 台账:回放 B×3 + bench + holdout 计 2.36M in(cache 折后)/432k out = **$0.50 ≈ ¥3.6**(judge 未 trace,B2 落地后并入)。
+
+**判定(建议:通过、不回滚——主判据干净、唯一保留项归因 W15 无关且有 W13 G-full 先例;待用户批准)。**
+
+**W16 候选**(路线图既定主题=真实 PR 抽查+泛化决策门,搭车 B2 judge-trace+tools 单测):①h2-line-cap 张力的 truth-set 处置(改 CLAUDE.md 声明后果 vs 接受 convention 类按规则字面执行);②glm 交叉重判(仍等 GLM_API_KEY);③d5 候选层 run2 型缺产出维持观察。
