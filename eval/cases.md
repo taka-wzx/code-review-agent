@@ -477,3 +477,5 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 5. holdout 7/7、h6 陷阱 kept=0;
 6. 哨兵回归:--sweep 对 W12 139 drop 仍恰 4 救+1 守卫(verifier 未动,应零漂移)。
 内环切片(机制指标 only,成本门不设):d5×3 候选层产出 3/3 为过;d6/d12/d13 各×3 同批跑作误伤探针(d12/d13 findings 不升、d6 不回退)。
+
+**T5 内环切片(d5/d6/d12/d13 ×3,results_w14_slice)**:**d5 候选层 3/3 ✅(全部 f1 直接产出,run2 f2 重复副本被正确 drop)、judge 3/3 ✅**——超闸门(≥2/3),产出文本全部引用 ingest.py:22-24 调用方注释,机制按设计起效。探针:d12+d13 kept 均值 1.33 ≤1.67(kept 为 json 健壮性类噪音,与新句无关);**d6 run1 judge=miss——非 finder 回归**(候选照常产出),系 verifier "Speculative: no evidence that the physics detector actually produces low-asr bounce events" 话术砍杀,与 w11r3 d5("tuning suggestion")、w10r3 d6 同族=**"speculative/generic 驳斥吃 documented-unhandled/missing-filter 真 bug"第三族证据第 3 例**;issue 门(config-disable/numeric)按设计不触发哨兵。T7 持续记账,本周不动哨兵;d6 闸门保持原样,若 T6 触发按 W13 G-full 先例做字面未达+归因判定。哨兵 sweep 预验:W12 139 drop 仍恰 4 救+1 守卫,verifier 零漂移。
