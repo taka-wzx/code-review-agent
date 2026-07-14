@@ -1,2 +1,4 @@
-openai>=1.40
-pyflakes
+# Abstract deps live in pyproject.toml; install the project with
+#   pip install -e .
+# For the exact environment the evals were run in, use requirements.lock.
+-e .

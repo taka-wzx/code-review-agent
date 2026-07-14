@@ -2,6 +2,9 @@
 .venv/
 __pycache__/
 *.pyc
+*.egg-info/
 real.diff
 eval/results*
+eval/bench_out/
 traces/
+.coverage
