@@ -530,3 +530,29 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 **判定(用户批准,2026-07-13):通过、不回滚。** 主判据干净,唯一保留项归因 W15 无关(沿 W13 G-full 先例);h2 truth-set 张力进 W16 议题。
 
 **W16 候选**(路线图既定主题=真实 PR 抽查+泛化决策门,搭车 B2 judge-trace+tools 单测):①h2-line-cap 张力的 truth-set 处置(改 CLAUDE.md 声明后果 vs 接受 convention 类按规则字面执行);②glm 交叉重判(仍等 GLM_API_KEY);③d5 候选层 run2 型缺产出维持观察。
+
+## W16(2026-07-14):glm 交叉重判 + 真实 PR 泛化门 + B2 搭车
+
+**立项(用户定三取舍,2026-07-14)**:主攻=真实 PR 抽查(素材 pingpong_tracker,用户拍板 90af514/43fc78c/b489ae7 三 commit)+泛化决策门;glm 交叉重判进本轮(GLM_API_KEY 到位);搭车=B2(judge 入 trace + scores.json meta 自描述/truth_sha256 陈旧校验 + judge_one golden 测试 8 例,119 零 API 测试全绿)。插曲:.env 全局 `LLM_MODEL=GLM-5.2` 曾把 deepseek 主管线带偏(400 invalid model),已注释并改为 per-run 传参——教训:LLM_MODEL 是跨 provider 全局覆盖,只应按次设置。
+
+**W16-A glm 交叉重判(判定:一致性极高,不引入仲裁机制)**:
+
+- 方法:复制 results_repeat_w14/v2_run1..3(仅 result JSON,不含 scores)到 scratch,`LLM_PROVIDER=glm` 重判(judge_model=**GLM-5.2**,scores meta 可查证);对比脚本出逐 bug 翻转表+一致率。judge 协议(submit_scores tool-calling)在 glm 端零改动跑通——厂商无关结构化输出设计的首次跨厂实证。
+- **结果:90/90 埋点命中判定 100% 一致,零翻转**;三 run 的 recall(.933/.933/.833)与 precision(.737/.794/.75)在双 judge 下逐位相同;unmatched findings 的 FP/noise 分类一致率 24/25(96%,唯一分歧=run3 一条 ds 判 noise、glm 判 FP,不影响任何埋点判定)。
+- **解读(按预写门)**:系统性翻转(同 bug ≥2 run)=0 → 双 judge 仲裁机制不立项。"judge 与被测同模型 → self-preference 抬高分数"的质疑在**命中判定层面被证伪于本集**(跨家族 deepseek-v4-pro ↔ GLM-5.2 完全可复现);残余风险收窄为**共享盲区**(两个模型都判不出的命中形态)——该风险无法用交叉重判排除,属 truth-set 人工校准欠账(README 限制节保留该条)。成本 ~¥1(48 次 judge 调用)。
+
+**W16-B 真实 PR 抽查(pingpong_tracker,主线;判定口径=机器侧预判、待作者复核,用户批准落盘)**:
+
+| commit | 内容 | verifier | kept/dropped | 真实成本 |
+|---|---|---|---|---|
+| 90af514 | COR 标定 X1(82 行单文件) | ok | 1/4 | $0.046 |
+| 43fc78c | 每球分段 vy-flip(300 行 3 文件,主文件 5400+ 行) | **degraded**(B pass 失败) | 5/6 | $0.259(含重试) |
+| b489ae7 | UKF 修复链 F/G/H/I(93 行 2 文件) | ok | 5/5 | $0.173 |
+
+- **finding 质量**:11 kept ≈ **8 真 / 2 真但低价值 / 1 待复核**。代表性真问题:b489ae7 跨文件过期建议(analyze_innovation_adaptive.py:131 仍推荐已被 H1 撤回的 F1,源码 903 行注释"H1…撤回 F1"核验属实——工具查证型跨文件一致性,eval 集没有这类形态);43fc78c `hit_display_suppress_left` 跨轨迹状态泄漏(medium,含 finder2 重复副本被 verifier 正确合并);90af514 tangent 回归静默跳过与 COR 回归行为不一致(344-349 无 else 分支,核验属实)。低价值两条=dev 测试包装器的 argv 防护(事实为真,语境价值低)。**编造率:抽检 2/2 事实断言为真,零编造**(d16 能力在真实仓库首证)。
+- **verifier drop 质量**:15 条全部可辩护——正确识别 watchdog 语境 `os._exit` 合理性、正确引用项目约定拒风格 nit、正确指出"*= 0.35 非本 diff 改动"。降分布不降判。
+- **哨兵首个分布外实证:零触发、零误救**——reason 门多次命中禁止话术("not a concrete defect"/"speculative robustness")但 issue 门全部正确拦截,合取设计按预期泛化;局限:新分布无已知真 bug 错杀,救活率不可测,只证无害面。
+- **新失败模式(工程鲁棒性 ×3,评测有效性 0)**:①anchor finder **空响应致命**(43fc78c 首跑 step8 模型返回空内容,`on_text_answer="raise"` 直接崩,重试即过=偶发 provider 毛刺,但 anchor 无重试是真实脆弱点);②verifier `submit_verdicts` **JSON 截断**(11 候选×长理由超 max_tokens=4000,pass B 失败)——降级路径按设计工作,`verifier_status=degraded` 标注生效(P0-6 修复首次生产可见);③**成本分布**:大文件仓库单条最高 ~¥1.85(≈eval 均值 17 倍),cache 命中率仍 73-75%。
+- 全轮实耗 ≈ ¥4.5(交叉判 ~¥1 + 抽查含失败重试 ~¥3.4),略超预估 <¥3,归因 43fc78c 体量与重试。
+
+**门裁决(用户批准,2026-07-14):通过。** GLM 零翻转 + 新失败模式全为工程鲁棒性类(非评测有效性类)→ **不触发第二域 fixture 周**;W17 = 既定路线(d7 实质性驳斥族 + uncertain 通道方差 + B3 GitHub 闭环搭车),外加鲁棒性双修进搭车清单:anchor 空响应重试一次、verifier max_tokens 提额或候选分块。结果 JSON/MD/trace 三件套在 eval/results_w16_real/(gitignore 内,复核入口)。

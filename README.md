@@ -1,37 +1,39 @@
 # code-review-agent
 
-最小 code review agent loop（W0 里程碑）。喂一段 unified diff → Claude 审查（可用 `read_file` 工具自己读仓库文件补上下文）→ 输出结构化 JSON review。
+最小 code review agent loop（W0 里程碑）。喂一段 unified diff → LLM 审查（provider 无关，可用 `read_file` 工具自己读仓库文件补上下文）→ 输出结构化 JSON review。
 
 ## 运行
 
-Provider 无关：走 OpenAI 兼容接口，`LLM_PROVIDER` 切换 `deepseek`（默认）/ `glm`。
+Provider 无关：走 OpenAI 兼容接口，`LLM_PROVIDER` 切换 `deepseek`（默认）/ `glm`；
+`LLM_MODEL` 可覆盖默认模型 id（如锁定快照做可复现评测）。
 
 ```powershell
-# 0. 建项目独立虚拟环境 + 装依赖（只做一次）
+# 0. 建项目独立虚拟环境 + 以包安装（src/ 布局,只做一次;获得 crag 命令）
 python -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install -e .
+#   复现评测环境用锁定版本: pip install -r requirements.lock
 
-# 1. 设 provider + key
+# 1. 设 provider + key（或复制 .env.example 为 .env 填入,勿提交）
 $env:LLM_PROVIDER = "deepseek"          # 或 "glm"
 $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY
 
 # 2. 跑内置样例（sample.diff 里埋了几个真实 bug，看它能不能抓到）
-.venv\Scripts\python.exe agent.py sample.diff
-
-# （可选）以包安装，获得 crag 命令（W15：pyproject + CI + MIT LICENSE）
-.venv\Scripts\python.exe -m pip install -e .
-crag sample.diff
+.venv\Scripts\crag.exe sample.diff      # 或 .venv\Scripts\python.exe -m code_review_agent sample.diff
 
 # 3. 审查真实改动（W7 git 集成,不再需要手动导 diff）
-.venv\Scripts\python.exe agent.py --commit HEAD --repo e:\shiyan\pingpong_tracker      # 某个 commit
-.venv\Scripts\python.exe agent.py --uncommitted --repo e:\shiyan\pingpong_tracker      # 工作区未提交改动
-.venv\Scripts\python.exe agent.py --pr 42 --repo path\to\repo --format md --out pr.md  # GitHub PR(需 gh,先 checkout PR 分支)
+.venv\Scripts\crag.exe --commit HEAD --repo e:\shiyan\pingpong_tracker      # 某个 commit
+.venv\Scripts\crag.exe --uncommitted --repo e:\shiyan\pingpong_tracker      # 工作区未提交改动
+.venv\Scripts\crag.exe --pr 42 --repo path\to\repo --format md --out pr.md  # GitHub PR(需 gh,先 checkout PR 分支)
 
 # 输出格式：默认 JSON；--format md 出可直接贴 PR 的 markdown(--out 落盘后
 # 用 gh pr comment N --body-file pr.md 发布)
 ```
 
 ## 结构
+
+运行时代码在 `src/code_review_agent/` 包内（src/ 布局,`pip install -e .` 后可 import）；
+评测脚本（run_eval/judge/repeat_eval/replay_verifier/bench_verifier/cost_report）留在仓库根,
+依赖 `eval/` 资产、不随包分发。下文模块名均指包内文件。
 
 - **agent loop**（agentloop.py，finder/verifier 共用引擎）：`run_submit_loop()` — 调 API → 有 `tool_calls` 就执行、把 `role:"tool"` 结果回填 → 循环直到模型提交校验合法的 submit 载荷（末步撤探索工具催交）；agent.py `run_review()` / verifier.py `_verify_pass()` 只留 prompt、载荷校验和成败映射
 - **provider**（llm.py）：`make_client()` — `LLM_PROVIDER` 切 deepseek/glm，OpenAI 兼容端点（自 agent.py 抽出）
@@ -290,6 +292,22 @@ truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM
 **搭车**:pyproject 打包(`pip install -e .` → `crag` 命令)+ GitHub Actions CI(双平台跑
 82 零 API 测试 + 资产一致性)+ MIT LICENSE。glm 交叉重判阻塞于 GLM_API_KEY 未配置。
 
+## W16:glm 交叉重判 + 真实 PR 泛化门(2026-07-14)
+
+- **交叉重判(自偏质疑实测)**:GLM-5.2 独立重判 W14 全部 3 run——**90/90 埋点命中判定
+  100% 一致、零翻转**,recall/precision 逐位相同,FP/noise 分类一致率 96%;judge 协议
+  (tool-calling 结构化输出)在 glm 端零改动跑通。双 judge 仲裁机制不立项。
+- **真实 PR 抽查(pingpong_tracker 3 commit,首次分布外)**:11 kept ≈ 8 真/2 低价值/1 待复核
+  (含跨文件过期建议、状态泄漏等 eval 集没有的形态),15 drop 全可辩护,**抽检零编造**;
+  哨兵零触发零误救(reason 门命中、issue 门正确拦截=合取设计首个分布外实证)。
+- **新失败模式(全为工程鲁棒性类)**:anchor finder 空响应致命(无重试)、verifier 11 候选
+  载荷超 max_tokens=4000 截断致 pass 失败(降级标注按设计生效)、大文件仓单条成本
+  ~¥1.85(eval 均值 17 倍)。
+- **门裁决:通过,不触发第二域 fixture 周**;W17=d7 驳斥族+uncertain 方差+B3 GitHub 闭环,
+  搭车修 anchor 重试与 verifier max_tokens。搭车 B2 已落地:judge 入 trace、scores.json
+  meta 自描述(judge_model/truth_sha256 陈旧校验)、judge 回路 golden 测试(119 零 API 测试)。
+  详见 eval/cases.md W16 节。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
@@ -306,3 +324,25 @@ truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM
   真 bug 砍杀;d7 型实质性机理驳斥(有具体反主张)是哨兵救不了的另一族,bench 持续观察;
   h2-line-cap 暴露"未声明后果的 convention 违反"truth-set 张力(W16 议)
 - uncertain 通道容量与 oos 波动(2–9 条/run)仍是 precision 方差主源;oos 列自 W12 起单列
+
+**评测方法论已知弱点（诚实声明,数字应读作工程日志而非科学结论）**：
+
+- **judge 与被测 agent 同模型**（同 provider 同权重）：self-preference 偏置的部分已被
+  W16 交叉重判**实测收窄**——GLM-5.2 独立重判 W14 三个 run,90/90 埋点命中判定 100% 一致、
+  零翻转,FP/noise 分类一致率 96%(见 cases.md W16-A)。残余风险是**共享盲区**（两个模型
+  都判不出的命中形态）,交叉重判无法排除,需人工校准抽样兜底（下条欠账仍在）
+- **judge 人工校准只有 W2 的 9 个埋点**（9/9 一致,但 n=9 无统计意义,95% CI 下界约 0.66）,
+  评测集扩到 30 埋点、加入大量"边缘命中"用例后**未重做人工校准**
+- **holdout 并非严格 held-out**：自 W8 起被跑过 ≥15 次,每次验收都读结果、做归因并据此
+  迭代（哨兵族、证据规则）,实际已是第二开发集。真正的泛化证据待 W16 真实 PR 抽查裁决
+- **n=3 无显著性检验**：mean [min–max] 是 3 点极差,分不开 33% 与 67% 命中率的埋点。
+  聚合现已补 stdev + 种子化 bootstrap 95% CI（run 级仅描述性;**bug 级 CI**——对 ~30 埋点
+  重采样——才是接近决策级的区间,W14 v2 实测 [0.811, 0.978]）
+- **模型是服务端别名非快照**（deepseek-v4-pro/glm-4.6）：跨代对比混入模型漂移变量。
+  trace 自 W16 前夕起记录 meta(provider/model),`LLM_MODEL` env 可锁定具体快照
+- **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise,precision 是有偏低估
+  （"多找对"被方向性惩罚）;被判 FP/noise 的条目未做人工复核抽样
+- **precision 分母 W12 起剔除 out_of_scope**,与更早代际的 precision 不可直接比较
+  （W7 表内数字同口径,跨表看趋势需注意）
+- **哨兵正则是措辞级、单模型族验证**（详见 `src/code_review_agent/sentinels.py` 模块
+  docstring 的设计依据/验证方法/泛化风险三节）:换 provider 或改 prompt 需先重跑 sweep
