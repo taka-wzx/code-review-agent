@@ -808,7 +808,7 @@
           ]
         },
         {
-          "kind": "stays_dropped",
+          "kind": "never_rescued",
           "issue_contains_any": [
             "no method to increment"
           ]

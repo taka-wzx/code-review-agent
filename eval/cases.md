@@ -614,3 +614,42 @@ verifier max_tokens 4000→8000(W16 两个实证失败模式),golden 锁定,121 
   **G-replay-2 取消**(省 ~¥1.5),uncertain 方差记开放问题(W18 候选:渲染降级/容量口径,
   或 confirm-only 变体研究)。tiebreak-off 单 case 复测 d7-r1 3/3 ✅;全量 bench 出厂配置
   复跑进行中。
+- **G-bench ✅ 13/13(出厂配置认证,含检查修正=迭代 2)**:c1 全量(tiebreak on)32/33,唯一
+  失败=第三票重杀 d7-r1(上条);c2 全量(tiebreak off=出厂)32/33,唯一失败换成
+  d6-w14slice 的 stays_dropped"no method to increment"——**归因:该 run A/B 2/2 keep,
+  路径不经任何 W17 代码**(哨兵/守卫只作用于 drop,第三票已关),纯边界 finding 的 live
+  方差,W15 冻结该检查时仅单次录制未验稳定性,c1 里恰被第三票掩盖。**裁决:检查过度指定,
+  按其本意(族三负控=不被哨兵误救)转 never_rescued**,单 case 复测 3/3 ✅。两轮 bench
+  实耗 ~0.94M in/190k out ≈ ¥1.0。
+
+**G-replay(主判据)✅ 五门全过(一门空真,如实记)**:配对回放×3(source=results_repeat_w14,
+A=哨兵全关派生视图,B=四族+守卫精化,tiebreak 关):
+
+| | A(哨兵全关) | B(四族) | 逐 run 配对 |
+|---|---|---|---|
+| recall | 0.867 [.833-.900] | **0.889 [.867-.900]** | **回退 0,B⊇A ×3** |
+| precision | 0.747 | 0.744(−0.003,容差 .03 ✓) | |
+| F1 | 0.801 | **0.809** | |
+| FP | 0.7 [0-2] | 0.7 [0-2](差 0 ✓) | |
+| noise | 8.3 | 8.7(+0.4 ≤ +2 ✓) | |
+| bug 级 recall CI | [.756,.956] | [.789,.967] | |
+
+- 逐救援归因(B 侧共 3 次):run1/run2 d10-cov 被**族二**救活、judge 双 MATCHED(d10 从 A 的
+  never-hit 出列→2/3);run1 d7 no-callers 措辞副本被族一救、judge FP(W14 已记账的族一
+  已知代价,FP 均值仍持平)。
+- **族四本轮 live 零触发(门 1 空真)**:fresh verifier 未复现缺失反转措辞——该砍杀模式低频
+  (523 条历史 drop 仅 1 例)。族四的救活能力证据在 sweep(命中 w14r3-d7)与 bench 冻结
+  kill-case;无害性证据三层(sweep 零误救/bench 13 case/回放×3 零 FP 增量)。定位=低频
+  保险,零 LLM 成本。
+- 回放实耗 ~2.2M in(cache 折后)/~400k out ≈ ¥1.5。
+
+**G-holdout ✅ 满分**:recall **7/7**、precision 7/7、FP 0、noise 0、h6 陷阱 kept=0;
+**h2_hud 2/2 命中——W15 砍杀在"补声明后果"资产修正后的首次观察即修复**(W16 门裁决的
+truth-set 处置路线验证成立);哨兵/第三票 holdout 全程零触发(符合预写)。实耗 ≈ ¥0.7。
+
+**W17 验收判定(推荐:通过、不回滚)**:五道闸门全过(G-replay 门 1 空真如实记),迭代 2 轮
+均在预算纪律内(守卫精化、bench 检查意图修正),外加一项机制级负结果(对称第三票,三重证据
+否决,脚手架默认关保留)。核心交付:①族四 absence-inverted 哨兵(低频保险,零 LLM 成本,
+sweep/bench 验证);②守卫精化(存活孪生判定,解锁孤儿重复救援);③d10-cov 经族二在配对
+回放 2/2 MATCHED、出 never-hit 列;④h2 truth-set 张力闭环;⑤uncertain 方差记开放问题
+(W18 候选)。全轮 LLM 实耗 ≈ **¥3.4**(预算 ≤¥6)。B3 dry-run 与鲁棒性双修见 git log。

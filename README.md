@@ -308,6 +308,24 @@ truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM
   meta 自描述(judge_model/truth_sha256 陈旧校验)、judge 回路 golden 测试(119 零 API 测试)。
   详见 eval/cases.md W16 节。
 
+## W17:缺失反转哨兵 + 第三票否决 + B3 dry-run(2026-07-15)
+
+- **归因先行推翻两个预设**:①"错误驳斥=不查证"不成立——14 条实质性驳斥砍杀全部 ≥1 次
+  工具调用,d7 的真实形态是**缺失反转**(查证"常量从未被引用"正确,却把该缺失当反驳,
+  而缺失恰是死路径成立的证据);②对称第三票被三重证据否决(冻结 case 真 bug 被 pass C
+  重杀、38 条历史真 bug 命中暴露、W9 立论)——机制默认关保留脚手架,负结果入档。
+- **哨兵族四 absence-inverted** + 守卫精化(仅存活孪生才拦,解锁孤儿重复救援):sweep 六向
+  523 drop 零计划外命中;bench 13/13(出厂配置);**配对回放×3:recall A .867→B .889、
+  零回退、FP 差 0,d10-cov 出 never-hit 列(族二 2/2 MATCHED)**;族四本轮 live 零触发
+  (低频保险定位,如实记录)。
+- **holdout 满分 7/7/零噪音,h2_hud 2/2**——W15 砍杀经"补声明后果"truth-set 修正后首次
+  观察即修复。
+- **鲁棒性双修**(W16 实证失败模式):anchor 空响应重试一次、verifier max_tokens 8000。
+- **B3(dry-run 口径)**:`github_review.py` 行映射+行内评论载荷,`crag --pr N --post[-dry-run]`,
+  CI 模板 docs/examples/review.yml;真实 b489ae7 数据 4/5 内联。live posting 待 GitHub 仓库。
+- 全轮 LLM 实耗 ≈ ¥3.4(预算 ≤¥6);142 零 API 测试。验收判定:**通过、不回滚**(详见
+  cases.md W17 节)。
+
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
