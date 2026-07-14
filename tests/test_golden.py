@@ -15,11 +15,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import agent
-from agent import SUBMIT_TOOL, SYSTEM, run_review
-from context import build_context
-from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL
-from verifier import VERDICT_TOOL, VERIFIER_SYSTEM, verify_findings
+from code_review_agent import agent
+from code_review_agent.agent import SUBMIT_TOOL, SYSTEM, run_review
+from code_review_agent.context import build_context
+from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL
+from code_review_agent.verifier import VERDICT_TOOL, VERIFIER_SYSTEM, verify_findings
 
 from fakes import FakeClient, FakeTrace, response, tool_call
 
@@ -246,6 +246,7 @@ class TestFinderGolden(RepoCase):
         self.assertEqual(review["findings"],
                          [{**anchor, "verification": "confirmed"}])
         self.assertEqual(review["dropped_findings"], [])
+        self.assertEqual(review["verifier_status"], "ok")
         self.assertEqual(review["out_of_scope_findings"],
                          [{**out_finding, "origin": "finder2"}])
         # W13: the verifier's exact input is persisted for replays,
@@ -299,8 +300,10 @@ class TestVerifierGolden(RepoCase):
                 (0, "keep", "b0"), (1, "drop", "b1"), (2, "drop", "b2")))]),
         ])
         trace = FakeTrace()
-        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
-                                        FINDINGS, self.repo, trace=trace)
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, FINDINGS,
+                                                self.repo, trace=trace)
+        self.assertEqual(status, "ok")
         self.assertEqual(kept, [
             {**FINDINGS[0], "verification": "confirmed"},
             {**FINDINGS[1], "verification": "uncertain",
@@ -360,8 +363,10 @@ class TestVerifierGolden(RepoCase):
                 (0, "keep", "b0"), (1, "drop", "b1")))]),
         ])
         trace = FakeTrace()
-        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
-                                        two, self.repo, trace=trace)
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, two,
+                                                self.repo, trace=trace)
+        self.assertEqual(status, "degraded")
         self.assertEqual(kept, [two[0]])   # single-pass: no verification tag
         self.assertEqual(dropped, [{**two[1], "drop_reason": "b1"}])
         self.assertEqual(client.requests[1]["messages"][-2:], [
@@ -378,8 +383,10 @@ class TestVerifierGolden(RepoCase):
     def test_text_answers_fail_open(self):
         client = FakeClient([response(content=f"t{i}") for i in range(4)])
         trace = FakeTrace()
-        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
-                                        FINDINGS, self.repo, trace=trace)
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, FINDINGS,
+                                                self.repo, trace=trace)
+        self.assertEqual(status, "failed_open")
         self.assertEqual(kept, FINDINGS)
         self.assertEqual(dropped, [])
         # a text answer gets the fixed nudge and counts as a bad submit
@@ -395,7 +402,7 @@ class TestVerifierGolden(RepoCase):
     def test_no_findings_short_circuits(self):
         client = FakeClient([])
         self.assertEqual(verify_findings(client, "test-model", REVIEW_INPUT,
-                                         [], self.repo), ([], []))
+                                         [], self.repo), ([], [], "ok"))
         self.assertEqual(client.requests, [])
 
     # W13 sentinel: a 2/2 drop whose reason uses forbidden reasoning is
@@ -413,9 +420,11 @@ class TestVerifierGolden(RepoCase):
                 (0, "drop", "callers may supply a different value")))]),
         ])
         trace = FakeTrace()
-        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
-                                        [self.FLAG_FINDING], self.repo,
-                                        trace=trace)
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT,
+                                                [self.FLAG_FINDING], self.repo,
+                                                trace=trace)
+        self.assertEqual(status, "ok")
         self.assertEqual(dropped, [])
         self.assertEqual(kept, [{
             **self.FLAG_FINDING,
@@ -440,9 +449,11 @@ class TestVerifierGolden(RepoCase):
                 (0, "drop", "callers might set the flag to True")))]),
         ])
         trace = FakeTrace()
-        kept, dropped = verify_findings(client, "test-model", REVIEW_INPUT,
-                                        [self.FLAG_FINDING], self.repo,
-                                        trace=trace)
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT,
+                                                [self.FLAG_FINDING], self.repo,
+                                                trace=trace)
+        self.assertEqual(status, "degraded")
         self.assertEqual(dropped, [])
         self.assertEqual(kept, [{
             **self.FLAG_FINDING,
@@ -463,7 +474,7 @@ class TestCacheAccounting(unittest.TestCase):
               "function": {"name": "submit_x", "parameters": {}}}
 
     def loop(self, resp):
-        from agentloop import run_submit_loop
+        from code_review_agent.agentloop import run_submit_loop
         client = FakeClient([resp])
         trace = FakeTrace()
         result = run_submit_loop(

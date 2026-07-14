@@ -29,7 +29,7 @@ import json
 import sys
 from pathlib import Path
 
-from tracelog import Trace, force_utf8, iter_events
+from code_review_agent.tracelog import Trace, force_utf8, iter_events
 
 force_utf8()
 
@@ -163,9 +163,9 @@ def check_one(check: dict, candidates: list, kept: list) -> tuple[bool, str]:
 
 
 def run(only: set, out: Path) -> int:
-    from agent import build_review_input
-    from llm import make_client
-    from verifier import verify_findings
+    from code_review_agent.agent import build_review_input
+    from code_review_agent.llm import make_client
+    from code_review_agent.verifier import verify_findings
     bench = json.loads(BENCH_PATH.read_text(encoding="utf-8"))
     client, model = make_client()
     out.mkdir(parents=True, exist_ok=True)
@@ -180,10 +180,10 @@ def run(only: set, out: Path) -> int:
         trace_path = out / f"{case['id']}.jsonl"
         trace = Trace(trace_path)
         try:
-            kept, dropped = verify_findings(client, model, user,
-                                            case["candidates"],
-                                            HERE / "eval" / "repo",
-                                            trace=trace)
+            kept, dropped, _status = verify_findings(client, model, user,
+                                                     case["candidates"],
+                                                     HERE / "eval" / "repo",
+                                                     trace=trace)
         finally:
             trace.close()
         ct_in = ct_out = 0
@@ -191,7 +191,8 @@ def run(only: set, out: Path) -> int:
             if e.get("kind") == "llm_response":
                 ct_in += e.get("tokens_in", 0)
                 ct_out += e.get("tokens_out", 0)
-        tin += ct_in; tout += ct_out
+        tin += ct_in
+        tout += ct_out
         print(f"\n== {case['id']}  (kept {len(kept)}/{len(case['candidates'])}, "
               f"tokens {ct_in:,}/{ct_out:,})")
         for check in case["checks"]:

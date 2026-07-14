@@ -24,12 +24,12 @@ merges: agreement applies, disagreement keeps the finding marked
 is the boundary-case detector -- no prompt self-reports doubt.
 """
 import json
-import re
 import sys
 
-from agentloop import run_submit_loop
-from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
-from tracelog import tev
+from code_review_agent.agentloop import run_submit_loop
+from code_review_agent.sentinels import rescue_forbidden_drops
+from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
+from code_review_agent.tracelog import tev
 
 VERIFIER_SYSTEM = """You are a strict code-review verifier. You receive a
 diff, repository context, and a numbered list of candidate findings from a
@@ -181,132 +181,10 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
     return kept, dropped
 
 
-# --- Rule-firing sentinel (W13) -------------------------------------------
-# W12 showed the two known kill families dying 2/2 with drop reasons that
-# quote the exact reasoning the Evidence rules forbid ("a future caller
-# could pass X", "generic best-practice, no concrete failure" against a
-# finding that names its invariant). The sentinel is the code-level
-# backstop: a dropped finding whose drop_reason matches a forbidden pattern
-# is demoted to the uncertain channel instead of dying. Patterns are
-# conjunctions derived from the rules' own text -- the reason must use the
-# forbidden reasoning AND the issue must be of the class the rule protects
-# -- so legitimate drops (mechanism refutations, the no-callers reverse
-# rule, duplicates) stay dropped. Validated offline against all recorded
-# W12 drops via `replay_verifier.py --sweep`.
-
-_GUARD_RE = re.compile(
-    r"\b(duplicate|restat\w*|already\s+(kept|covered|dropped))\b", re.I)
-
-# Dead-path family. The drop dismisses the finding as intentional / future
-# work -- either a hypothesized future caller, or "deliberate design /
-# scaffolding / not wired yet". Evidence rule 3 forbids BOTH when the issue
-# shows the path is disabled by an existing config/flag VALUE (as opposed
-# to merely having no callers, which the rule legitimately allows dropping).
-# So the issue gate requires a named ALL-CAPS constant set to a boolean (or
-# a flag/guard/condition stated true/false), NOT bare "no callers / dead
-# code" -- that gate is the discriminator that keeps the reverse-rule
-# no-callers drops out. (Bench round 1: live drops of the config-disabled
-# dead path varied the wording to "intentional scaffolding, not wired yet",
-# which the modal-only reason missed.)
-_DEAD_PATH_DISMISS_REASON_RE = re.compile(
-    r"callers?\s+(can|could|may|might)\s+(pass|supply|set|provide)\b"
-    r"|intentional\s+(design|behavior|choice|future|scaffold)"
-    r"|deliberate\s+(behavior|design|choice)"
-    r"|not\s+dead\s+code|scaffold"
-    r"|(is|are)n.?t\s+(yet\s+)?wired|not\s+(yet\s+)?wired|wired\s+up\s+later"
-    r"|work.in.progress", re.I)
-_CONFIG_DISABLED_ISSUE_RE = re.compile(
-    r"(?-i:[A-Z][A-Z0-9_]{3,})\s*(={1,2}|\bis\b)\s*(true|false)"
-    r"|\b(flag|guard|condition|config)\b[^.]{0,40}\b"
-    r"(true|false|set|unset|disabled|never\s+(holds|runs|executes|true))",
-    re.I)
-
-# Numeric family. A generic/speculative dismissal against a finding that
-# CLAIMS an invariant is lost across repeated updates (or a missing term).
-# Naming invariant vocabulary as mere context (e.g. "S is positive definite"
-# in an inv-vs-solve nit) is not a claim, so the issue must also carry a
-# loss verb. (Sweep iteration 1: vocabulary alone false-rescued d10's
-# inv-vs-solve control; bench round 1: the reason also appears as
-# "speculative robustness / no concrete defect".)
-_GENERIC_DISMISS_REASON_RE = re.compile(
-    r"(generic|speculative)\s+(numerical\s+)?(best.?practice|robustness)"
-    r"|textbook\b|no\s+concrete\s+(failure|drift|defect)", re.I)
-_INVARIANT_VOCAB_RE = re.compile(
-    r"invariant|symmetr|positive.?(semi.?)?definite|conservation", re.I)
-_INVARIANT_LOSS_RE = re.compile(
-    r"\blo(?:se|ses|sing|st)\b|violat|no\s+longer|drift", re.I)
-_MISSING_TERM_RE = re.compile(r"missing\s+term", re.I)
-
-# Documented-condition family (W15). Four recorded kills (w10r3-d6,
-# w11r3-d5, W14 slice r1-d6, W14 full r3-d5) dismiss as "tuning /
-# speculative / not a concrete defect" a finding whose issue CITES an
-# existing doc assertion that the input condition occurs -- reasoning
-# evidence rule 1 forbids ("documenting a condition is not handling it";
-# "no evidence the scenario occurs" is refuted by the citation itself,
-# and "correctly returns None" is the locally-correct-but-functionally-
-# dead shape that killed d5 back in W5). The issue gate demands a
-# POSITIVE citation (comment/docstring + notes/states/says/documents, a
-# "documents that", or a quoted comment); missing-doc nits ("docstring
-# does not specify X") carry no such assertion verb and stay dropped --
-# that keeps the 31 legitimately dismissal-phrased W14 drops out
-# (sweep-validated against W11/W12/W14 full + W14 slice).
-_DOC_DISMISS_REASON_RE = re.compile(
-    r"(not\s+a|rather\s+than\s+a)\s+(concrete\s+)?(defect|bug)"
-    r"|(parameter|threshold).?tuning\s+(suggestion|observation)"
-    r"|no\s+evidence\s+that"
-    r"|speculative\s+(robustness|future.?proofing)"
-    r"|(handles?|works?)\b[^.]{0,50}\b(gracefully|correctly)"
-    r"|correctly\s+returns?", re.I)
-# Sweep iteration 2: "does not document that X" is the missing-doc nit in
-# citation clothing -- a negated verb is not a citation.
-_DOC_CITED_ISSUE_RE = re.compile(
-    r"\b(comment|caller|constant|docstring)\b.{0,60}?"
-    r"(?<!not )(?<!n't )\b(notes?|states?|says?|documents?)\s+that\b"
-    r"|with\s+(the\s+)?comment\s+[\"'“]", re.I)
-
-
-def classify_drop(f: dict) -> str | None:
-    """Sentinel verdict for one dropped finding: a rescue tag, the string
-    "duplicate-guard" (pattern hit but the drop is a duplicate call -- never
-    rescue those, one bug must not re-inflate into two findings), or None.
-    Pure function, unit-testable offline."""
-    reason = f.get("drop_reason", "")
-    issue = f.get("issue", "")
-    tag = None
-    claims_invariant = ((_INVARIANT_VOCAB_RE.search(issue)
-                         and _INVARIANT_LOSS_RE.search(issue))
-                        or _MISSING_TERM_RE.search(issue))
-    if (_DEAD_PATH_DISMISS_REASON_RE.search(reason)
-            and _CONFIG_DISABLED_ISSUE_RE.search(issue)):
-        tag = "dead-path-dismissed"
-    elif _GENERIC_DISMISS_REASON_RE.search(reason) and claims_invariant:
-        tag = "numeric-invariant"
-    elif (_DOC_DISMISS_REASON_RE.search(reason)
-            and _DOC_CITED_ISSUE_RE.search(issue)):
-        tag = "doc-condition-dismissed"
-    if tag and _GUARD_RE.search(reason):
-        return "duplicate-guard"
-    return tag
-
-
-def rescue_forbidden_drops(dropped: list) -> tuple[list, list]:
-    """(rescued_as_uncertain, still_dropped). Rescued findings lose the
-    drop_reason and enter the uncertain channel; the fixed "[sentinel:tag] "
-    prefix keeps the original reason machine-recoverable. Pure function."""
-    rescued, still = [], []
-    for f in dropped:
-        tag = classify_drop(f)
-        if tag and tag != "duplicate-guard":
-            r = {k: v for k, v in f.items() if k != "drop_reason"}
-            r["verification"] = "uncertain"
-            r["dissent_reason"] = f"[sentinel:{tag}] {f.get('drop_reason', '')}"
-            r["rescue"] = tag
-            rescued.append(r)
-        else:
-            still.append(f)
-    return rescued, still
-
-
+# The rule-firing sentinel (W13-W15) lives in sentinels.py: pattern-gated
+# rescue of drops whose drop_reason uses reasoning the Evidence rules above
+# forbid. See that module's docstring for the design rationale, validation
+# method (sweeps/bench/replay), and known generalization limits.
 def _apply_sentinel(kept: list, dropped: list, trace) -> tuple[list, list]:
     rescued, dropped = rescue_forbidden_drops(dropped)
     if rescued:
@@ -381,7 +259,7 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
 
 
 def verify_findings(client, model: str, review_input: str, findings: list,
-                    repo_root, trace=None) -> tuple[list, list]:
+                    repo_root, trace=None) -> tuple[list, list, str]:
     """Double-verification orchestrator (W9). review_input is the exact
     user content the finder saw, so all passes share one view; the tools
     let each pass check anything beyond that view itself.
@@ -390,9 +268,13 @@ def verify_findings(client, model: str, review_input: str, findings: list,
     agreement applies, their disagreement keeps the finding as
     "uncertain". One failed pass degrades to single-pass verdicts; both
     failed fails open (a broken verifier must not silently eat findings).
+
+    Returns (kept, dropped, status) with status "ok" | "degraded" |
+    "failed_open" -- fail-open output is unfiltered, and the caller must
+    be able to say so instead of presenting it as a verified review.
     """
     if not findings:
-        return [], []
+        return [], [], "ok"
     va = _verify_pass(client, model, review_input, findings, repo_root,
                       trace=trace, pass_id="A", reverse_order=False)
     vb = _verify_pass(client, model, review_input, findings, repo_root,
@@ -402,7 +284,7 @@ def verify_findings(client, model: str, review_input: str, findings: list,
         print(f"[verifier] both passes FAILED, failing open -- keeping all "
               f"{len(findings)} findings", file=sys.stderr)
         tev(trace, "verifier_fail_open", n_findings=len(findings))
-        return findings, []
+        return findings, [], "failed_open"
     if va is None or vb is None:
         failed = "A" if va is None else "B"
         print(f"[verifier] pass {failed} failed -- degrading to single-pass "
@@ -411,7 +293,7 @@ def verify_findings(client, model: str, review_input: str, findings: list,
         kept, dropped = _apply_sentinel(kept, dropped, trace)
         tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
             degraded=True, failed_pass=failed)
-        return kept, dropped
+        return kept, dropped, "degraded"
 
     kept, dropped = merge_verdicts(findings, va, vb)
     kept, dropped = _apply_sentinel(kept, dropped, trace)
@@ -421,4 +303,4 @@ def verify_findings(client, model: str, review_input: str, findings: list,
           f"{len(dropped)} dropped", file=sys.stderr)
     tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
         confirmed=len(kept) - n_unc, uncertain=n_unc)
-    return kept, dropped
+    return kept, dropped, "ok"

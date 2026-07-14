@@ -10,12 +10,13 @@ Usage:
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-from agent import run_review
-from llm import make_client
-from tracelog import Trace, force_utf8
+from code_review_agent.agent import run_review
+from code_review_agent.llm import make_client
+from code_review_agent.tracelog import Trace, force_utf8, tev
 
 force_utf8()
 
@@ -61,6 +62,8 @@ def main():
         print(f"\n{'='*60}\n{name}\n{'='*60}")
         diff_text = diff_path.read_text(encoding="utf-8", errors="replace")
         trace = Trace(results_dir / "traces" / f"{name}.jsonl")
+        tev(trace, "meta", provider=os.environ.get("LLM_PROVIDER", "deepseek"),
+            model=model)
         try:
             review = run_review(client, diff_text, Path(args.repo), model,
                                 use_context=not args.no_context,

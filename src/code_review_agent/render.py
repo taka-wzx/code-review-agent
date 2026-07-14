@@ -9,9 +9,15 @@ _SEV_ORDER = {"high": 0, "medium": 1, "low": 2}
 _SEV_BADGE = {"high": "🔴 high", "medium": "🟡 medium", "low": "🔵 low"}
 
 
+def _loc(f: dict) -> str:
+    """`file:line` with placeholders -- out_of_scope/dropped findings are
+    not schema-validated, so a missing key must not crash the render."""
+    return f"{f.get('file', '?')}:{f.get('line', '?')}"
+
+
 def _finding_lines(f: dict) -> list[str]:
     badge = _SEV_BADGE.get(f.get("severity"), f.get("severity", "?"))
-    out = [f"- **{badge}** `{f['file']}:{f['line']}` — {f['issue'].strip()}"]
+    out = [f"- **{badge}** `{_loc(f)}` — {f.get('issue', '').strip()}"]
     suggestion = f.get("suggestion", "").strip()
     if suggestion:
         out.append(f"  - 💡 {suggestion}")
@@ -27,6 +33,9 @@ def render_markdown(review: dict, title: str = "Code review") -> str:
     dropped = review.get("dropped_findings", [])
 
     lines = [f"## 🤖 {title}", "", review.get("summary", "").strip(), ""]
+    if review.get("verifier_status") == "failed_open":
+        lines += ["> ⚠️ **Verifier unavailable this run** — the findings "
+                  "below are unfiltered finder output.", ""]
     if findings:
         lines.append(f"### Findings ({len(findings)})")
         lines.append("")
@@ -54,7 +63,7 @@ def render_markdown(review: dict, title: str = "Code review") -> str:
                      "</summary>")
         lines.append("")
         for f in out_of_scope:
-            lines.append(f"- `{f['file']}:{f['line']}` {f['issue'].strip()}")
+            lines.append(f"- `{_loc(f)}` {f.get('issue', '').strip()}")
         lines += ["", "</details>", ""]
 
     if dropped:
@@ -63,7 +72,7 @@ def render_markdown(review: dict, title: str = "Code review") -> str:
                      "verifier (click to audit)</summary>")
         lines.append("")
         for f in dropped:
-            lines.append(f"- `{f['file']}:{f['line']}` {f['issue'].strip()}")
+            lines.append(f"- `{_loc(f)}` {f.get('issue', '').strip()}")
             lines.append(f"  - drop reason: {f.get('drop_reason', '').strip()}")
         lines += ["", "</details>", ""]
 

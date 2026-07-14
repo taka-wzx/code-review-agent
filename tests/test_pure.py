@@ -7,13 +7,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent import validate_review
+from code_review_agent.agent import validate_review
 from cost_report import billed_cost, collect, iter_trace_files, run_stats
-from findings import dedup_union, is_duplicate, similarity, split_by_scope
+from code_review_agent.findings import dedup_union, is_duplicate, similarity, split_by_scope
 from judge import compute_metrics, validate_verdict
 from replay_verifier import reconstruct_candidates
-from verifier import (apply_verdicts, classify_drop, merge_verdicts,
-                      rescue_forbidden_drops, validate_verdicts)
+from code_review_agent.sentinels import classify_drop, rescue_forbidden_drops
+from code_review_agent.verifier import (apply_verdicts, merge_verdicts,
+                                        validate_verdicts)
 
 
 def finding(**over):

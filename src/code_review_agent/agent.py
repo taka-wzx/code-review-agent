@@ -5,11 +5,13 @@ via a read_file tool when it wants to -> prints a structured JSON review.
 
 Works on any OpenAI-compatible API (provider selection lives in llm.py).
 
-Usage:
-    python agent.py sample.diff [--repo path/to/repo]
+Usage (after `pip install -e .`):
+    crag sample.diff [--repo path/to/repo]
+    python -m code_review_agent sample.diff
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,13 +19,13 @@ from pathlib import Path
 from openai import OpenAI
 import openai
 
-from agentloop import run_submit_loop
-from context import build_context, parse_diff
-from findings import dedup_union, split_by_scope
-from llm import make_client
-from tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
-from tracelog import Trace, force_utf8, tev
-from verifier import verify_findings
+from code_review_agent.agentloop import run_submit_loop
+from code_review_agent.context import build_context, parse_diff
+from code_review_agent.findings import dedup_union, split_by_scope
+from code_review_agent.llm import make_client
+from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
+from code_review_agent.tracelog import Trace, force_utf8, tev
+from code_review_agent.verifier import verify_findings
 
 force_utf8()
 
@@ -245,12 +247,15 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         # Persist the verifier's exact input (W13): replays reuse it
         # verbatim, keeping candidate order identical to the live run.
         review["candidate_findings"] = [dict(f) for f in in_scope]
-        kept, dropped = verify_findings(client, model, user, in_scope,
-                                        repo_root, trace=trace)
+        kept, dropped, vstatus = verify_findings(client, model, user, in_scope,
+                                                 repo_root, trace=trace)
         print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",
               file=sys.stderr)
         review["findings"] = kept
         review["dropped_findings"] = dropped
+        # "failed_open" means these findings are UNFILTERED (broken verifier
+        # kept everything) -- consumers must see that, not infer it.
+        review["verifier_status"] = vstatus
     tev(trace, "review", steps=steps, findings=len(review["findings"]),
         dropped=len(review.get("dropped_findings", [])),
         out_of_scope=len(out_of_scope))
@@ -265,11 +270,19 @@ def _git_diff_text(args) -> str:
     reviewed (HEAD for --commit HEAD, the PR branch for --pr, the current
     tree for --uncommitted).
     """
+    # Values are passed to git/gh as separate argv entries (no shell), but a
+    # leading "-" would still be parsed as an option by the tool itself
+    # (argument injection, e.g. --commit=--output=x). Reject those outright.
     if args.pr:
-        cmd = ["gh", "pr", "diff", str(args.pr)]
+        pr = str(args.pr).strip()
+        if not (pr.isdigit() or pr.startswith("https://")):
+            sys.exit(f"--pr must be a PR number or https URL, got {args.pr!r}")
+        cmd = ["gh", "pr", "diff", pr]
     elif args.uncommitted:
         cmd = ["git", "diff", "HEAD", "--no-color", "--unified=3"]
     else:
+        if args.commit.startswith("-"):
+            sys.exit(f"--commit must be a revision, not an option: {args.commit!r}")
         cmd = ["git", "show", args.commit, "--format=", "--no-color", "--unified=3"]
         if args.commit != "HEAD":
             print(f"[warn] reviewing {args.commit} but read_file sees the current "
@@ -320,6 +333,11 @@ def main():
         diff_text = _git_diff_text(args)
     client, model = make_client()
     trace = Trace(args.trace) if args.trace else None
+    # Reproducibility: record what actually served this run -- provider
+    # model ids are aliases the vendor can repoint, so cross-run comparisons
+    # need the id (and date) on the trace itself.
+    tev(trace, "meta", provider=os.environ.get("LLM_PROVIDER", "deepseek"),
+        model=model)
     try:
         review = run_review(client, diff_text, Path(args.repo), model,
                             use_context=not args.no_context,
@@ -338,7 +356,7 @@ def main():
             trace.close()
 
     if args.format == "md":
-        from render import render_markdown
+        from code_review_agent.render import render_markdown
         src = args.diff or (f"PR #{args.pr}" if args.pr else
                             "uncommitted changes" if args.uncommitted else args.commit)
         output = render_markdown(review, title=f"Code review: {src}")

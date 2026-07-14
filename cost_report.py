@@ -24,7 +24,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from tracelog import force_utf8, iter_events
+from code_review_agent.tracelog import force_utf8, iter_events
 
 force_utf8()
 

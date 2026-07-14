@@ -18,7 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from tracelog import tev
+from code_review_agent.tracelog import tev
 
 
 @dataclass

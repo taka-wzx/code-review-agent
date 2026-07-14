@@ -9,15 +9,25 @@ executes tool calls with two guardrails from the failure-mode playbook:
   * repeat-call short-circuit: an identical call in the same session gets
     a stub answer instead of re-burning tokens (loop guard).
 """
+import fnmatch
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-from tracelog import tev
+from code_review_agent.tracelog import tev
 
 SKIP_DIRS = {".git", ".venv", "__pycache__", "node_modules"}
 TEXT_SUFFIXES = {".py", ".md", ".txt", ".toml", ".cfg", ".ini", ".json", ".yaml", ".yml"}
+# Secrets-shaped files the model must never read: their contents would land
+# in the conversation and any --trace file on disk. Matched against the
+# lowercased basename (search/listings already exclude them via TEXT_SUFFIXES,
+# so this guard only needs to cover direct read_file/run_linter paths).
+SENSITIVE_FILE_PATTERNS = (
+    ".env", ".env.*", "*.pem", "*.key", "*.pfx", "*.p12", ".netrc",
+    "id_rsa*", "id_dsa*", "id_ecdsa*", "id_ed25519*", "credentials*",
+)
 READ_CAP = 50_000        # chars per read_file result
 SEARCH_MAX_HITS = 40     # lines returned per search
 SEARCH_LINE_CAP = 200    # chars per returned hit line
@@ -93,10 +103,33 @@ SEARCH_REPO_TOOL = {
 
 
 def _iter_text_files(root: Path):
-    for p in sorted(root.rglob("*")):
-        if (p.is_file() and p.suffix.lower() in TEXT_SUFFIXES
-                and not any(part in SKIP_DIRS for part in p.parts)):
-            yield p
+    # os.walk with in-place pruning: SKIP_DIRS are never descended into
+    # (rglob("*") walked the whole .venv/.git tree before filtering).
+    # Collected then sorted so the ordering matches the old sorted(rglob).
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.suffix.lower() in TEXT_SUFFIXES and p.is_file():
+                found.append(p)
+    yield from sorted(found)
+
+
+def _refuse_read(root: Path, target: Path, rel_path: str) -> str | None:
+    """Guard for tools that read one file directly: refuse non-project
+    directories and secrets-shaped files. Returns an Error string, or None
+    when the read is allowed."""
+    if any(part in SKIP_DIRS for part in target.relative_to(root).parts):
+        return (f"Error: {rel_path} is inside a non-project directory "
+                "(vcs/venv/cache) -- these are not part of the code under "
+                "review.")
+    name = target.name.lower()
+    if any(fnmatch.fnmatch(name, pat) for pat in SENSITIVE_FILE_PATTERNS):
+        return (f"Error: refusing to read {rel_path}: it matches a secrets "
+                "file pattern (.env, keys, credentials). Its contents are "
+                "never needed for a code review.")
+    return None
 
 
 def _missing_file_msg(root: Path, rel_path: str) -> str:
@@ -119,6 +152,9 @@ def read_file(repo_root: Path, rel_path: str, start_line: int = 1) -> str:
     target = (root / rel_path).resolve()
     if not target.is_relative_to(root):
         return f"Error: path escapes repo root: {rel_path}. Use repo-relative paths only."
+    refusal = _refuse_read(root, target, rel_path)
+    if refusal:
+        return refusal
     if target.is_dir():
         listing = [p.relative_to(root).as_posix() for p in _iter_text_files(root)
                    if p.is_relative_to(target)][:50]
@@ -184,6 +220,9 @@ def run_linter(repo_root: Path, rel_path: str) -> str:
     target = (root / rel_path).resolve()
     if not target.is_relative_to(root):
         return f"Error: path escapes repo root: {rel_path}. Use repo-relative paths only."
+    refusal = _refuse_read(root, target, rel_path)
+    if refusal:
+        return refusal
     if not target.is_file():
         return _missing_file_msg(root, rel_path)
     if target.suffix.lower() != ".py":

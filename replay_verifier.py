@@ -36,7 +36,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tracelog import Trace, force_utf8
+from code_review_agent.tracelog import Trace, force_utf8
 
 force_utf8()
 
@@ -57,7 +57,8 @@ def reconstruct_candidates(result: dict) -> list:
     recorded = result.get("candidate_findings")
     if isinstance(recorded, list):
         return [dict(f) for f in recorded]
-    strip = lambda f: {k: v for k, v in f.items() if k not in VERIFIER_KEYS}
+    def strip(f):
+        return {k: v for k, v in f.items() if k not in VERIFIER_KEYS}
     return ([strip(f) for f in result.get("findings", [])]
             + [strip(f) for f in result.get("dropped_findings", [])])
 
@@ -80,7 +81,7 @@ def sweep(source: Path, only: set) -> int:
     """Zero-LLM: classify every recorded dropped finding under the sentinel
     patterns. Prints would-rescues and duplicate-guard blocks; returns the
     number of would-rescues (for scripting)."""
-    from verifier import classify_drop
+    from code_review_agent.sentinels import classify_drop
     n_drops = n_rescue = n_guard = 0
     for run_dir in source_run_dirs(source):
         for name, result in iter_results(run_dir, only):
@@ -130,8 +131,8 @@ def replay_run(client, model, run_dir: Path, out: Path, tag: str,
                diffs_dir: Path, repo: Path, only: set) -> None:
     """Replay one recorded run dir: B view (sentinel active) written from
     the live execution, A view derived. Resumable per diff."""
-    from agent import build_review_input
-    from verifier import verify_findings
+    from code_review_agent.agent import build_review_input
+    from code_review_agent.verifier import verify_findings
     a_dir, b_dir = out / f"A_{tag}", out / f"B_{tag}"
     a_dir.mkdir(parents=True, exist_ok=True)
     b_dir.mkdir(parents=True, exist_ok=True)
@@ -150,8 +151,9 @@ def replay_run(client, model, run_dir: Path, out: Path, tag: str,
         user = build_review_input(diff_text, repo)
         trace = Trace(b_dir / "traces" / f"{name}.jsonl")
         try:
-            kept, dropped = verify_findings(client, model, user, candidates,
-                                            repo, trace=trace)
+            kept, dropped, _status = verify_findings(client, model, user,
+                                                     candidates, repo,
+                                                     trace=trace)
         finally:
             trace.close()
         b_view = {"summary": source.get("summary", ""),
@@ -202,7 +204,7 @@ def main():
 
     if not args.out:
         sys.exit("--out is required for live replay")
-    from llm import make_client
+    from code_review_agent.llm import make_client
     from repeat_eval import aggregate, print_summary
     out = Path(args.out)
     client, model = make_client()

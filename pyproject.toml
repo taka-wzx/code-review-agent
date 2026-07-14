@@ -9,26 +9,43 @@ description = "Two-pass (finder + verifier) code-review agent over OpenAI-compat
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "wang" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# Upper bounds: the OpenAI SDK has a history of breaking changes at majors;
+# a lockfile (requirements.lock) pins the exact CI/dev environment.
 dependencies = [
-    "openai>=1.40",
-    "pyflakes",
+    "openai>=1.40,<3",
+    "pyflakes>=3.0,<4",
 ]
 
 [project.scripts]
-crag = "agent:main"
+crag = "code_review_agent.agent:main"
 
-# Only the runtime review pipeline is installable. The eval harness
-# (run_eval/repeat_eval/judge/replay_verifier/bench_verifier/cost_report)
-# resolves eval/ assets relative to the repo and stays repo-only.
+# src/ layout: only the code_review_agent package is installable. The eval
+# harness (run_eval/repeat_eval/judge/replay_verifier/bench_verifier/
+# cost_report) resolves eval/ assets relative to the repo and stays repo-only.
 [tool.setuptools]
-py-modules = [
-    "agent",
-    "agentloop",
-    "context",
-    "findings",
-    "llm",
-    "render",
-    "tools",
-    "tracelog",
-    "verifier",
-]
+package-dir = { "" = "src" }
+packages = ["code_review_agent"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# eval/ holds fixture repos with DELIBERATELY planted bugs (undefined
+# names included) -- linting them would "fix" the eval set.
+exclude = ["eval"]
+
+[tool.ruff.lint]
+# E/F/W to start (pyflakes + pycodestyle): catches real defects without
+# imposing a style rewrite; tighten later if wanted.
+select = ["E", "F", "W"]
+ignore = ["E501"]  # long lines exist in prompts/docstrings; cap unenforced

@@ -16,7 +16,7 @@ budgeted so the pack cannot blow up the prompt.
 import re
 from pathlib import Path
 
-from tools import SKIP_DIRS
+from code_review_agent.tools import SKIP_DIRS
 
 CONVENTION_FILES = ("CLAUDE.md", "CONVENTIONS.md", "CONTRIBUTING.md")
 CONVENTIONS_CAP = 6_000      # chars per conventions file
@@ -28,7 +28,11 @@ MAX_CALLER_FILES = 3         # caller files per symbol
 MAX_HITS_PER_FILE = 3        # snippets per caller file
 PACK_CAP = 28_000            # total chars for the whole pack
 
-_DIFF_FILE_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
+# Accepts both `+++ b/path` (default git) and `+++ path` (--no-prefix);
+# stops at a tab so `+++ path<TAB>timestamp` (diff -u style) keeps only the
+# path. A silent parse failure here is costly: empty changed_files makes
+# split_by_scope fail open and scope filtering vanishes without a trace.
+_DIFF_FILE_RE = re.compile(r"^\+\+\+ (?:b/)?([^\t\r\n]+)", re.MULTILINE)
 _ADDED_DEF_RE = re.compile(r"^\+\s*def\s+(\w+)", re.MULTILINE)
 _HUNK_DEF_RE = re.compile(r"^@@[^@]*@@\s*def\s+(\w+)", re.MULTILINE)
 _IMPORT_RE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))",
@@ -37,7 +41,8 @@ _IMPORT_RE = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))",
 
 def parse_diff(diff_text: str) -> tuple[list[str], list[str]]:
     """Changed file paths + names of functions the diff adds or touches."""
-    files = [f for f in _DIFF_FILE_RE.findall(diff_text) if f != "/dev/null"]
+    files = [f.rstrip() for f in _DIFF_FILE_RE.findall(diff_text)]
+    files = [f for f in files if f != "/dev/null"]
     symbols = set(_ADDED_DEF_RE.findall(diff_text)) | set(_HUNK_DEF_RE.findall(diff_text))
     return files, sorted(symbols)
 
@@ -64,8 +69,13 @@ def find_callers(repo: Path, symbol: str, exclude: set[str]) -> list[tuple[str, 
             lines = py.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
+        # Word-boundary call match: `run(` must not hit `overrun(`, and a
+        # def line (sync or async) is the definition, not a caller. A dot
+        # before the name stays a match -- `obj.run(` is a genuine call site.
+        call_re = re.compile(r"(?<!\w)" + re.escape(symbol) + r"\s*\(")
         hits = [i for i, ln in enumerate(lines)
-                if symbol + "(" in ln and not re.match(r"\s*def\s", ln)]
+                if call_re.search(ln)
+                and not re.match(r"\s*(?:async\s+)?def\s", ln)]
         if not hits:
             continue
         snippets = []

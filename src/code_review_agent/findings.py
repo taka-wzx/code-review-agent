@@ -6,10 +6,13 @@ no stable ID, so duplicates are detected structurally: same file plus
 token-set Jaccard similarity of the issue text, with a line-distance
 band. Thresholds were measured against cross-run pairs in
 eval/results_repeat_w10: same-bug pairs score jac .26-.67 at line
-distance 0-7, while distinct-bug pairs on the same line stay <= .22 --
-the two-tier rule below accepts all measured same-bug pairs except one
-.20 outlier (left to the verifier's duplicate->DROP rule) and rejects
-the .22 distinct pair.
+distance 0-7, while distinct-bug pairs on the same line stay <= .22.
+sim_near=0.25 is deliberately placed between those bands (above the .22
+distinct ceiling, below the .26 same-bug floor), so the two-tier rule
+accepts all measured same-bug pairs except one .20 outlier (left to the
+verifier's duplicate->DROP rule) and rejects the .22 distinct pair.
+Single-repo measurement -- revalidate the bands before trusting them on
+a different codebase or model.
 
 Merging is one-directional: anchor findings pass through verbatim and are
 never removed or reworded; only the extra run's duplicate copies are

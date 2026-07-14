@@ -28,8 +28,12 @@ REQUEST_TIMEOUT = 120.0  # seconds per API call
 
 
 def load_dotenv() -> None:
-    """Load KEY=VALUE lines from .env next to this file (real env vars win)."""
-    env_file = Path(__file__).parent / ".env"
+    """Load KEY=VALUE lines from ./.env (real env vars win).
+
+    Resolved against the current working directory, not this file: once the
+    package is pip-installed, __file__ lives in site-packages where no .env
+    will ever be."""
+    env_file = Path.cwd() / ".env"
     if not env_file.is_file():
         return
     for line in env_file.read_text(encoding="utf-8-sig").splitlines():
@@ -41,7 +45,13 @@ def load_dotenv() -> None:
 
 
 def make_client() -> tuple[OpenAI, str]:
-    """Build a provider-agnostic client + model id from LLM_PROVIDER env."""
+    """Build a provider-agnostic client + model id from LLM_PROVIDER env.
+
+    LLM_MODEL overrides the provider's default model id -- e.g. to pin a
+    dated snapshot for reproducible evals, or to try another model on the
+    same endpoint. Note the defaults above are provider ALIASES the vendor
+    can repoint at new weights; cross-run comparisons should record the
+    model id (traces do) and treat alias drift as a confound."""
     load_dotenv()
     provider = os.environ.get("LLM_PROVIDER", "deepseek").lower()
     if provider not in PROVIDERS:
@@ -54,4 +64,4 @@ def make_client() -> tuple[OpenAI, str]:
                  f'  PowerShell:  $env:{cfg["key_envs"][0]} = "..."')
     client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
                     timeout=REQUEST_TIMEOUT, max_retries=2)
-    return client, cfg["model"]
+    return client, os.environ.get("LLM_MODEL") or cfg["model"]
