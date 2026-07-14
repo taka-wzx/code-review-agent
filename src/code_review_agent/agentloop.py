@@ -56,6 +56,7 @@ def run_submit_loop(client, model: str, messages: list, *,
     submit_name = submit_tool["function"]["name"]
     step_label = f"{label} step" if label else "step"
     bad_submits = 0
+    empty_retried = False
     last_problems: list = []
     for step in range(1, max_steps + 1):
         # Graceful stop condition: on the last step, withdraw the explore
@@ -105,6 +106,19 @@ def run_submit_loop(client, model: str, messages: list, *,
                                   reason="bad_submits")
 
         if not tool_calls:
+            # One free retry on a completely empty response (no text, no
+            # tool calls): a W16 real-PR run hit this provider glitch mid-
+            # exploration and the fatal anchor run died on it. Nothing is
+            # appended, so the identical request is re-sent; a second empty
+            # response falls through to the normal text-answer handling.
+            # The retry consumes a step, keeping the loop bounded.
+            if not (msg.content or "").strip() and not empty_retried:
+                empty_retried = True
+                print(f"[{step_label} {step}] empty response; retrying once",
+                      file=sys.stderr)
+                tev(trace, "empty_response_retry", component=component,
+                    step=step)
+                continue
             if on_text_answer == "raise":
                 raise RuntimeError(
                     f"model stopped without calling {submit_name}; got:\n"

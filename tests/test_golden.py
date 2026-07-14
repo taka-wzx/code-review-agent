@@ -198,6 +198,31 @@ class TestFinderGolden(RepoCase):
                       str(cm.exception))
         self.assertEqual(len(client.requests), 1)
 
+    # W17: a completely empty response (no text, no tool calls) gets one
+    # free identical-request retry instead of killing the anchor run.
+    def test_empty_response_retried_once(self):
+        client = FakeClient([
+            response(content=None),   # provider glitch
+            response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+            response([tool_call("c2", "submit_review", DUP_REVIEW)]),
+        ])
+        trace = FakeTrace()
+        review = self.run_finder(client, trace)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
+        # nothing was appended: the retry re-sent the identical request
+        self.assertEqual(client.requests[1]["messages"],
+                         client.requests[0]["messages"])
+        self.assertIn({"kind": "empty_response_retry", "component": "finder",
+                       "step": 1}, trace.events)
+
+    def test_second_empty_response_still_raises(self):
+        client = FakeClient([response(content=None), response(content="")])
+        with self.assertRaises(RuntimeError) as cm:
+            self.run_finder(client)
+        self.assertIn("model stopped without calling submit_review",
+                      str(cm.exception))
+        self.assertEqual(len(client.requests), 2)
+
     def test_run2_bad_submits_degrade_to_anchor(self):
         client = FakeClient([
             response([tool_call("c1", "submit_review", VALID_REVIEW)]),
@@ -314,7 +339,7 @@ class TestVerifierGolden(RepoCase):
         self.assertEqual(len(client.requests), 3)
         r1 = client.requests[0]
         self.assertEqual(r1["model"], "test-model")
-        self.assertEqual(r1["max_tokens"], 4000)
+        self.assertEqual(r1["max_tokens"], 8000)
         self.assertEqual(r1["temperature"], 0.0)
         self.assertEqual(r1["tool_choice"], "auto")
         self.assertEqual(r1["tools"], [READ_FILE_TOOL, SEARCH_REPO_TOOL,

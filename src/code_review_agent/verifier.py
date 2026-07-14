@@ -232,7 +232,10 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
         submit_tool=VERDICT_TOOL, parse=parse_verdicts,
         session=ToolSession(repo_root, trace=trace, component=component),
         max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
-        max_tokens=4000,
+        # 8000, not 4000: a W16 real-PR run with 11 candidates x long
+        # reasons truncated the submit_verdicts JSON mid-string and the
+        # pass failed. Sized to the finder's budget.
+        max_tokens=8000,
         budget_msg="Step budget exhausted. Call submit_verdicts NOW, covering "
                    "every finding index exactly once, based on what you have "
                    "verified so far.",
