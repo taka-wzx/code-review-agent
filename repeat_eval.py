@@ -4,9 +4,16 @@ The 30-bug rerun raised questions a single run cannot answer (is the V1
 recall drop real? how often does the verifier flip?). This script runs
 run_eval.py + judge.py N times per version, resumably, then aggregates:
 
-  * per version: recall / precision / F1 / FP / noise as mean [min..max]
+  * per version: recall / precision / F1 / FP / noise as mean [min..max],
+    plus stdev and a seeded percentile-bootstrap 95% CI
   * per bug: hit stability across runs -- the flip list IS the variance
     attribution (a bug hit 1/3 runs is a variance problem, 0/3 a real miss)
+  * recall additionally gets a BUG-level bootstrap CI (resampling the ~30
+    planted bugs, each scored by its cross-run hit rate). With only n=3
+    runs the run-level interval is descriptive, not decision-grade; the
+    bug-level CI reflects the eval-set sampling uncertainty that actually
+    dominates. Judge bias and provider alias drift stay un-modeled
+    confounds either way -- see README "限制".
   * per run: token totals from the traces
 
 Resumable: a run directory with scores.json is done and skipped; one with
@@ -19,16 +26,20 @@ Usage:
 """
 import argparse
 import json
+import random
+import statistics
 import subprocess
 import sys
 from pathlib import Path
 
-from tracelog import force_utf8, iter_events
+from code_review_agent.tracelog import force_utf8, iter_events
+from judge import scores_is_stale
 
 force_utf8()
 
 HERE = Path(__file__).parent
 DIFFS = HERE / "eval" / "diffs"
+TRUTH = HERE / "eval" / "truth.json"
 
 VERSIONS = {
     "v0": ["--no-context", "--no-verify"],   # passive tools only
@@ -45,15 +56,57 @@ def f1(recall, precision):
     return round(2 * recall * precision / (recall + precision), 3)
 
 
+def bootstrap_ci(values, n_boot=2000, seed=0, alpha=0.05):
+    """Seeded percentile-bootstrap CI of the mean: (lo, hi), or None with
+    fewer than 2 non-None values. Deterministic for a given seed, so
+    aggregation reruns reproduce the same interval. Pure function."""
+    vals = [v for v in values if v is not None]
+    if len(vals) < 2:
+        return None
+    rng = random.Random(seed)
+    k = len(vals)
+    means = sorted(statistics.fmean(rng.choices(vals, k=k))
+                   for _ in range(n_boot))
+    lo = means[int(n_boot * alpha / 2)]
+    hi = means[min(n_boot - 1, int(n_boot * (1 - alpha / 2)))]
+    return (round(lo, 3), round(hi, 3))
+
+
+def stat_block(values) -> dict:
+    """mean/min/max/stdev/ci95 over a metric's per-run values. stdev is the
+    sample stdev (None for a single run); ci95 is the run-level bootstrap
+    interval -- descriptive only at n=3. Pure function."""
+    vals = [v for v in values if v is not None]
+    if not vals:   # e.g. recall on a bug-free trap slice
+        return {"mean": None, "min": None, "max": None,
+                "stdev": None, "ci95": None}
+    return {"mean": round(statistics.fmean(vals), 3),
+            "min": min(vals), "max": max(vals),
+            "stdev": round(statistics.stdev(vals), 3) if len(vals) > 1 else None,
+            "ci95": bootstrap_ci(vals)}
+
+
+def bug_level_recall_ci(bug_hits: dict, n_boot=2000, seed=0):
+    """95% CI of recall from resampling BUGS, each bug scored by its mean
+    hit rate across completed runs. The eval set (~30 bugs), not the run
+    count (n=3), is the unit that carries the sampling uncertainty."""
+    rates = [statistics.fmean(map(bool, h)) for h in bug_hits.values() if h]
+    return bootstrap_ci(rates, n_boot=n_boot, seed=seed)
+
+
 def run_one(ver: str, run_dir: Path, only: str) -> bool:
     """Ensure run_dir contains eval results + scores.json. True on success."""
     expected = sorted(p.stem for p in DIFFS.glob("*.diff"))
     if only:
         expected = [s for s in expected if s in {x.strip() for x in only.split(",")}]
 
-    if (run_dir / "scores.json").is_file():
-        print(f"[skip] {run_dir.name}: already judged")
-        return True
+    sp = run_dir / "scores.json"
+    if sp.is_file():
+        if not scores_is_stale(sp, TRUTH):
+            print(f"[skip] {run_dir.name}: already judged")
+            return True
+        print(f"[stale] {run_dir.name}: scores.json was judged against a "
+              "different truth.json -- re-judging", file=sys.stderr)
 
     have = {p.stem for p in run_dir.glob("*.json")} - {"scores"}
     if not set(expected) <= have:
@@ -120,11 +173,7 @@ def aggregate(out: Path, versions: list[str], runs: int) -> dict:
             continue
 
         def stat(key):
-            vals = [r[key] for r in rows if r[key] is not None]
-            if not vals:   # e.g. recall on a bug-free trap slice
-                return {"mean": None, "min": None, "max": None}
-            return {"mean": round(sum(vals) / len(vals), 3),
-                    "min": min(vals), "max": max(vals)}
+            return stat_block([r[key] for r in rows])
 
         n = len(rows)
         flappers = {b: f"{sum(h)}/{len(h)}" for b, h in sorted(bug_hits.items())
@@ -136,6 +185,7 @@ def aggregate(out: Path, versions: list[str], runs: int) -> dict:
             "f1": stat("f1"), "fp": stat("fp"), "noise": stat("noise"),
             "out_of_scope": stat("out_of_scope"),
             "tokens_in": stat("tokens_in"), "tokens_out": stat("tokens_out"),
+            "recall_ci95_bugs": bug_level_recall_ci(bug_hits),
             "runs": rows,
             "unstable_bugs": flappers,   # hit in some runs, missed in others
             "never_hit_bugs": never_hit, # real misses, not variance
@@ -150,17 +200,24 @@ def print_summary(summary: dict) -> None:
         if not s.get("completed_runs"):
             print(f"{ver:<4}  0  (no completed runs)")
             continue
-        fmt = lambda st: ("n/a" if st["mean"] is None
-                          else f"{st['mean']:.3f} [{st['min']:.3f}-{st['max']:.3f}]")
-        fmt_i = lambda st: ("n/a" if st["mean"] is None
-                            else f"{st['mean']:.1f} [{st['min']}-{st['max']}]")
+        def fmt(st):
+            return ("n/a" if st["mean"] is None
+                    else f"{st['mean']:.3f} [{st['min']:.3f}-{st['max']:.3f}]")
+
+        def fmt_i(st):
+            return ("n/a" if st["mean"] is None
+                    else f"{st['mean']:.1f} [{st['min']}-{st['max']}]")
         print(f"{ver:<4} {s['completed_runs']:>2} {fmt(s['recall']):>18} "
               f"{fmt(s['precision']):>18} {fmt(s['f1']):>18} "
               f"{fmt_i(s['fp']):>7} {fmt_i(s['noise']):>9} "
               f"{fmt_i(s['out_of_scope']):>9}")
     for ver, s in summary.items():
+        if s.get("recall_ci95_bugs"):
+            lo, hi = s["recall_ci95_bugs"]
+            print(f"\n{ver} recall 95% CI (bootstrap over bugs, seeded): "
+                  f"[{lo:.3f}, {hi:.3f}]")
         if s.get("unstable_bugs"):
-            print(f"\n{ver} unstable bugs (variance, hit x/n): {s['unstable_bugs']}")
+            print(f"{ver} unstable bugs (variance, hit x/n): {s['unstable_bugs']}")
         if s.get("never_hit_bugs"):
             print(f"{ver} never hit (real misses): {s['never_hit_bugs']}")
 

@@ -11,12 +11,15 @@ Usage (run after run_eval.py):
     python judge.py [--results-dir eval/results]
 """
 import argparse
+import hashlib
 import json
+import os
 import sys
+import time
 from pathlib import Path
 
-from llm import make_client
-from tracelog import force_utf8
+from code_review_agent.llm import make_client
+from code_review_agent.tracelog import Trace, force_utf8, tev
 
 force_utf8()
 
@@ -145,6 +148,25 @@ def validate_verdict(verdict: dict, bugs: list, findings: list) -> list[str]:
     return problems
 
 
+def truth_sha256(truth_path: Path) -> str:
+    return hashlib.sha256(Path(truth_path).read_bytes()).hexdigest()
+
+
+def scores_is_stale(scores_path: Path, truth_path: Path) -> bool:
+    """True when scores.json was judged against a different truth.json than
+    the current one (or is unreadable). Resume logic uses this so a stale
+    or half-baked scores file is re-judged instead of silently trusted.
+    Legacy scores without a meta block are trusted (pre-W16 dirs stay
+    skippable). Pure function of the two files."""
+    try:
+        meta = json.loads(Path(scores_path).read_text(encoding="utf-8")).get("meta")
+    except (OSError, json.JSONDecodeError):
+        return True
+    if not isinstance(meta, dict) or "truth_sha256" not in meta:
+        return False
+    return meta["truth_sha256"] != truth_sha256(truth_path)
+
+
 def compute_metrics(verdicts: dict) -> dict:
     """Aggregate per-diff verdicts into hit/fp/noise counts and totals.
     verdicts: {diff_name: {"verdict": ..., "n_findings": int}}"""
@@ -163,17 +185,24 @@ def compute_metrics(verdicts: dict) -> dict:
         per_diff[name] = {"bugs": len(v["bugs"]), "hits": hits, "findings": n,
                           "matched_findings": matched, "false_positives": fp,
                           "noise": noise, "out_of_scope": oos}
-        tot["bugs"] += len(v["bugs"]); tot["hits"] += hits
-        tot["findings"] += n; tot["matched"] += matched
-        tot["false_positives"] += fp; tot["noise"] += noise
+        tot["bugs"] += len(v["bugs"])
+        tot["hits"] += hits
+        tot["findings"] += n
+        tot["matched"] += matched
+        tot["false_positives"] += fp
+        tot["noise"] += noise
         tot["out_of_scope"] += oos
     tot["recall"] = round(tot["hits"] / tot["bugs"], 3) if tot["bugs"] else None
     tot["precision"] = round(tot["matched"] / tot["findings"], 3) if tot["findings"] else None
     return {"per_diff": per_diff, "total": tot}
 
 
-def judge_one(client, model: str, name: str, bugs: list, findings: list) -> dict:
-    """Ask the judge model for a verdict on one diff; validate; retry once."""
+def judge_one(client, model: str, name: str, bugs: list, findings: list,
+              trace=None) -> dict:
+    """Ask the judge model for a verdict on one diff; validate; retry once.
+    trace (optional) gets one llm_response event per attempt plus
+    judge_rejected / judge_verdict -- the judge's behavior becomes as
+    attributable as the agent's (B2)."""
     payload = json.dumps({"planted_bugs": bugs, "agent_findings": findings},
                          ensure_ascii=False, indent=2)
     messages = [
@@ -187,6 +216,10 @@ def judge_one(client, model: str, name: str, bugs: list, findings: list) -> dict
             tools=[SCORE_TOOL], tool_choice="auto", messages=messages,
         )
         msg = response.choices[0].message
+        u = response.usage
+        tev(trace, "llm_response", component="judge", diff=name, step=attempt,
+            tool_calls=[tc.function.name for tc in (msg.tool_calls or [])],
+            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens)
         call = next((tc for tc in (msg.tool_calls or [])
                      if tc.function.name == "submit_scores"), None)
         if call is None:
@@ -199,7 +232,11 @@ def judge_one(client, model: str, name: str, bugs: list, findings: list) -> dict
             else:
                 last_problems = validate_verdict(verdict, bugs, findings)
                 if not last_problems:
+                    tev(trace, "judge_verdict", diff=name, attempts=attempt,
+                        hits=sum(1 for b in verdict["bugs"] if b["hit"]),
+                        n_findings=len(findings))
                     return verdict
+        tev(trace, "judge_rejected", diff=name, problems=last_problems)
         print(f"  [attempt {attempt}] invalid verdict: {last_problems}", file=sys.stderr)
         # feed the errors back and retry once
         messages.append({"role": "assistant", "content": msg.content or "",
@@ -229,29 +266,41 @@ def main():
 
     truth = json.loads(Path(args.truth).read_text(encoding="utf-8"))
     client, model = make_client()
+    provider = os.environ.get("LLM_PROVIDER", "deepseek")
+    trace = Trace(results_dir / "judge_trace.jsonl")
+    tev(trace, "meta", provider=provider, model=model, truth=str(args.truth))
 
     verdicts = {}
-    for name, bugs in sorted(truth.items()):
-        result_path = results_dir / f"{name}.json"
-        if not result_path.is_file():
-            print(f"SKIP {name}: no result file (run run_eval.py first)", file=sys.stderr)
-            continue
-        data = json.loads(result_path.read_text(encoding="utf-8"))
-        findings = data["findings"]
-        indexed = [{"index": i, **f} for i, f in enumerate(findings)]
-        print(f"judging {name} ({len(bugs)} bugs vs {len(findings)} findings)...",
-              file=sys.stderr)
-        verdict = judge_one(client, model, name, bugs, indexed)
-        verdicts[name] = {"verdict": verdict, "n_findings": len(findings),
-                          "n_out_of_scope":
-                              len(data.get("out_of_scope_findings", []))}
+    try:
+        for name, bugs in sorted(truth.items()):
+            result_path = results_dir / f"{name}.json"
+            if not result_path.is_file():
+                print(f"SKIP {name}: no result file (run run_eval.py first)", file=sys.stderr)
+                continue
+            data = json.loads(result_path.read_text(encoding="utf-8"))
+            findings = data["findings"]
+            indexed = [{"index": i, **f} for i, f in enumerate(findings)]
+            print(f"judging {name} ({len(bugs)} bugs vs {len(findings)} findings)...",
+                  file=sys.stderr)
+            verdict = judge_one(client, model, name, bugs, indexed, trace=trace)
+            verdicts[name] = {"verdict": verdict, "n_findings": len(findings),
+                              "n_out_of_scope":
+                                  len(data.get("out_of_scope_findings", []))}
+    finally:
+        trace.close()
 
     if not verdicts:
         sys.exit("nothing judged")
 
     metrics = compute_metrics(verdicts)
+    # meta makes the scores file self-describing: which judge produced it,
+    # against which truth -- resume logic (repeat_eval) checks the hash.
+    meta = {"judge_provider": provider, "judge_model": model,
+            "truth_path": str(args.truth),
+            "truth_sha256": truth_sha256(Path(args.truth)),
+            "judged_at": time.strftime("%Y-%m-%d %H:%M:%S")}
     scores_path.write_text(
-        json.dumps({"metrics": metrics, "verdicts": verdicts},
+        json.dumps({"meta": meta, "metrics": metrics, "verdicts": verdicts},
                    indent=2, ensure_ascii=False), encoding="utf-8")
 
     t = metrics["total"]
