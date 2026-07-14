@@ -183,15 +183,20 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
 
 def _tiebreak_pass(client, model, review_input: str, kept: list,
                    dropped: list, repo_root, trace=None) -> tuple[list, list]:
-    """Third vote on A/B disagreements only (W17). The uncertain channel
-    measured 43% matched / 49% noise / 8% FP across W10-W14 -- half real
-    value, half precision leak -- so instead of capping the channel, a
-    pass C re-judges JUST the disputed findings and the 2/3 majority
-    lands: keep -> confirmed (tiebreak-tagged for audit), drop -> dropped
-    with a "2/3:" reason (the sentinel still applies to those drops
-    afterwards). A failed pass C fails open to the W9 uncertain
-    semantics. Cost is proportional to the disagreement count (~1-3
-    findings/diff), not the full candidate list."""
+    """Third vote on A/B disagreements only (W17) -- KEPT OFF BY DEFAULT,
+    refuted by data. Motivation: the uncertain channel measured 43%
+    matched / 49% noise / 8% FP across W10-W14, so a pass C re-judging
+    just the disputed findings looked like a cheap precision lever
+    (2/3 keep -> confirmed, 2/3 drop -> dropped with a "2/3:" reason,
+    sentinel still applying afterwards; failed pass C fails open).
+    Refutation (W17 bench iteration 1): (a) live bench re-killed the
+    frozen d7-r1 dead-flag true bug -- pass C voted drop on BOTH disputed
+    findings; (b) offline, family patterns on dissent_reason protect only
+    8/46 matched-uncertains, leaving 38 recorded true-bug hits exposed to
+    a drop-biased third vote; (c) this is W9's founding observation --
+    boundary-case verdicts are coin flips and extra votes do not converge.
+    Scaffolding kept for future study (e.g. a confirm-only variant), off
+    in production; behavior pinned by goldens with tiebreak=True."""
     disputed = [f for f in kept if f.get("verification") == "uncertain"]
     if not disputed:
         return kept, dropped
@@ -313,7 +318,7 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
 
 def verify_findings(client, model: str, review_input: str, findings: list,
                     repo_root, trace=None,
-                    tiebreak: bool = True) -> tuple[list, list, str]:
+                    tiebreak: bool = False) -> tuple[list, list, str]:
     """Double-verification orchestrator (W9). review_input is the exact
     user content the finder saw, so all passes share one view; the tools
     let each pass check anything beyond that view itself.

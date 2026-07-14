@@ -323,9 +323,6 @@ class TestVerifierGolden(RepoCase):
             # pass B: verdicts immediately
             response([tool_call("v3", "submit_verdicts", verdicts_payload(
                 (0, "keep", "b0"), (1, "drop", "b1"), (2, "drop", "b2")))]),
-            # pass C (W17 tiebreak): only the disputed finding 1, kept 2/3
-            response([tool_call("v4", "submit_verdicts", verdicts_payload(
-                (0, "keep", "c1")))]),
         ])
         trace = FakeTrace()
         kept, dropped, status = verify_findings(client, "test-model",
@@ -334,17 +331,12 @@ class TestVerifierGolden(RepoCase):
         self.assertEqual(status, "ok")
         self.assertEqual(kept, [
             {**FINDINGS[0], "verification": "confirmed"},
-            {**FINDINGS[1], "verification": "confirmed", "tiebreak": "2/3"},
+            {**FINDINGS[1], "verification": "uncertain",
+             "dissent_reason": "b1"},
         ])
         self.assertEqual(dropped, [{**FINDINGS[2], "drop_reason": "2/2: a2"}])
 
-        self.assertEqual(len(client.requests), 4)
-        # pass C saw ONLY the disputed finding, re-indexed from 0
-        r4 = client.requests[3]
-        self.assertEqual(r4["messages"], [
-            {"role": "system", "content": VERIFIER_SYSTEM},
-            {"role": "user", "content": verifier_user_msg([FINDINGS[1]])},
-        ])
+        self.assertEqual(len(client.requests), 3)
         r1 = client.requests[0]
         self.assertEqual(r1["model"], "test-model")
         self.assertEqual(r1["max_tokens"], 8000)
@@ -382,14 +374,34 @@ class TestVerifierGolden(RepoCase):
              "tool_calls": ["submit_verdicts"], "tokens_in": 100,
              "tokens_out": 20},
             {"kind": "verifier_pass", "pass_id": "B", "steps": 1, "drops": 2},
-            {"kind": "llm_response", "component": "verifierC", "step": 1,
-             "tool_calls": ["submit_verdicts"], "tokens_in": 100,
-             "tokens_out": 20},
-            {"kind": "verifier_pass", "pass_id": "C", "steps": 1, "drops": 0},
-            {"kind": "tiebreak", "n_disputed": 1, "confirmed": 1,
-             "dropped": 0},
             {"kind": "verdicts", "kept": 2, "dropped": 1,
-             "confirmed": 2, "uncertain": 0},
+             "confirmed": 1, "uncertain": 1},
+        ])
+
+    # W17 tiebreak: refuted mechanism, kept OFF by default (see
+    # _tiebreak_pass docstring). These goldens pin the opt-in behavior.
+    def test_tiebreak_keep_confirms_disagreement(self):
+        client = FakeClient([
+            response([tool_call("v1", "submit_verdicts", verdicts_payload(
+                (0, "keep", "a0"), (1, "keep", "a1"), (2, "drop", "a2")))]),
+            response([tool_call("v2", "submit_verdicts", verdicts_payload(
+                (0, "keep", "b0"), (1, "drop", "b1"), (2, "drop", "b2")))]),
+            # pass C: only the disputed finding 1, re-indexed from 0
+            response([tool_call("v3", "submit_verdicts", verdicts_payload(
+                (0, "keep", "c1")))]),
+        ])
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, FINDINGS,
+                                                self.repo, tiebreak=True)
+        self.assertEqual(status, "ok")
+        self.assertEqual(kept, [
+            {**FINDINGS[0], "verification": "confirmed"},
+            {**FINDINGS[1], "verification": "confirmed", "tiebreak": "2/3"},
+        ])
+        r3 = client.requests[2]
+        self.assertEqual(r3["messages"], [
+            {"role": "system", "content": VERIFIER_SYSTEM},
+            {"role": "user", "content": verifier_user_msg([FINDINGS[1]])},
         ])
 
     def test_tiebreak_drop_resolves_disagreement(self):
@@ -403,7 +415,7 @@ class TestVerifierGolden(RepoCase):
         ])
         kept, dropped, status = verify_findings(client, "test-model",
                                                 REVIEW_INPUT, FINDINGS,
-                                                self.repo)
+                                                self.repo, tiebreak=True)
         self.assertEqual(status, "ok")
         self.assertEqual(kept, [{**FINDINGS[0], "verification": "confirmed"}])
         self.assertEqual(dropped, [
@@ -424,7 +436,8 @@ class TestVerifierGolden(RepoCase):
         trace = FakeTrace()
         kept, dropped, status = verify_findings(client, "test-model",
                                                 REVIEW_INPUT, FINDINGS,
-                                                self.repo, trace=trace)
+                                                self.repo, trace=trace,
+                                                tiebreak=True)
         self.assertEqual(status, "ok")
         self.assertEqual(kept[1], {**FINDINGS[1], "verification": "uncertain",
                                    "dissent_reason": "b1"})
@@ -439,7 +452,8 @@ class TestVerifierGolden(RepoCase):
                 (0, "keep", "b0"), (1, "keep", "b1"), (2, "keep", "b2")))]),
         ])
         kept, dropped, _ = verify_findings(client, "test-model",
-                                           REVIEW_INPUT, FINDINGS, self.repo)
+                                           REVIEW_INPUT, FINDINGS, self.repo,
+                                           tiebreak=True)
         self.assertEqual(len(client.requests), 2)   # no pass C
         self.assertEqual(len(kept), 3)
 

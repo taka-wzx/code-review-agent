@@ -132,7 +132,7 @@ def derive_head_view(result: dict) -> dict:
 
 def replay_run(client, model, run_dir: Path, out: Path, tag: str,
                diffs_dir: Path, repo: Path, only: set,
-               tiebreak: bool = True) -> None:
+               tiebreak: bool = False) -> None:
     """Replay one recorded run dir: B view (sentinel active) written from
     the live execution, A view derived. Resumable per diff."""
     from code_review_agent.agent import build_review_input
@@ -197,9 +197,9 @@ def main():
                         help="Run judge.py on each replayed output dir")
     parser.add_argument("--sweep", action="store_true",
                         help="Zero-LLM sentinel sweep over recorded drops")
-    parser.add_argument("--no-tiebreak", action="store_true",
-                        help="Disable the W17 disagreement tiebreak pass "
-                             "(A/B comparison baseline)")
+    parser.add_argument("--tiebreak", action="store_true",
+                        help="Enable the W17 disagreement tiebreak pass "
+                             "(refuted, off by default -- see verifier.py)")
     args = parser.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
     source = Path(args.source)
@@ -221,7 +221,7 @@ def main():
     for i, run_dir in enumerate(run_dirs, 1):
         replay_run(client, model, run_dir, out, f"run{i}",
                    Path(args.diffs_dir), Path(args.repo), only,
-                   tiebreak=not args.no_tiebreak)
+                   tiebreak=args.tiebreak)
         if args.judge:
             for tag in ("A", "B"):
                 if not judge_dir(out / f"{tag}_run{i}"):

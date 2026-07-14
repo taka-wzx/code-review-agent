@@ -596,3 +596,21 @@ verifier max_tokens 4000→8000(W16 两个实证失败模式),golden 锁定,121 
 6. **G-holdout(×1)**:≥6/7 且 h2 若仍 miss 须归因非新机制;h6 kept=0;族四零触发(holdout
    无已知缺失反转砍杀)。
 预算:replay-1 ~¥1.2 + replay-2 ~¥1.5 + bench ~¥0.3 + holdout ~¥0.6 ≈ **¥3.6**,内环零成本。
+
+**内环执行与迭代(2026-07-15)**:
+
+- **G-pure ✅**(族四 3 正反例 + 守卫精化 3 例,142 零 API 测试);**G-sweep ✅ 六向**(523 条
+  历史 drop:W12 恰 4 救+1 守卫与 W13/W15 基线一致,W14 新增恰 w14r3-d7=absence-inverted
+  目标,零计划外命中)。**守卫精化=本轮迭代 1**:w14r3-d7 的 reason 尾部"essentially a
+  restatement of Finding 1"触发 `restat*` 守卫,但 Finding 1 自己也死了——守卫本意是防
+  一 bug 膨胀两条 kept,故改为"仅当存活孪生存在(kept 或本轮已救)才拦",孪生判定
+  sim_near=.15(实测锚点:W12 双副本 .227 须拦 / w14r3 无关邻居 .066 不可拦);W12 双救
+  回归由两阶段(先净救后查守卫)消除。
+- **第三票被三重证据否决(bench 迭代 1,机制默认关闭保留脚手架——X8 先例)**:①G-bench
+  32/33,**唯一失败=冻结 case d7-r1 的死旗真 bug 被 pass C 重杀**(C 对两条分歧全投 drop,
+  drop 倾向实证);②离线暴露面:家族模式套 dissent_reason 仅护住 8/46 条 matched-uncertain,
+  **38 条历史真 bug 命中暴露给第三票**(d1_sign 八个 run 全在内);③W9 立论本身——边界裁决
+  是掷硬币,加票不收敛。`tiebreak=False` 默认,golden 以 tiebreak=True 锁行为;
+  **G-replay-2 取消**(省 ~¥1.5),uncertain 方差记开放问题(W18 候选:渲染降级/容量口径,
+  或 confirm-only 变体研究)。tiebreak-off 单 case 复测 d7-r1 3/3 ✅;全量 bench 出厂配置
+  复跑进行中。
