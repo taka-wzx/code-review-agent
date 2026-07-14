@@ -326,13 +326,83 @@ class TestRescueForbiddenDrops(unittest.TestCase):
                                 "scaffolding, not wired yet")
         self.assertIsNone(classify_drop(f))
 
+    # W17 family 4: absence-inverted refutation. The verifier verifies a
+    # correct absence (constant never referenced) and uses it to refute the
+    # config-disabled dead path that the absence actually proves.
+    def test_absence_inversion_rescues_dead_path(self):
+        # the recorded w14r3-d7 kill wording
+        f = finding(issue="PREDICT_DISPLAY_ONLY_FROZEN=True causes an early "
+                          "return unless frozen=True, but "
+                          "FREEZE_PREDICTION_ON_COMMIT=False means there is "
+                          "no mechanism to set frozen",
+                    drop_reason="2/2: The claim assumes a coupling that "
+                                "doesn't exist in the code -- "
+                                "FREEZE_PREDICTION_ON_COMMIT is never "
+                                "imported or referenced by any module; no "
+                                "existing definition proves it can only be "
+                                "False")
+        self.assertEqual(classify_drop(f), "absence-inverted")
+
+    def test_presence_refutation_stays_dropped(self):
+        # a LEGITIMATE dead-path refutation asserts presence, with a source
+        f = finding(issue="dead path: RENDER_GRID=False disables the branch "
+                          "so it never runs",
+                    drop_reason="2/2: wrong -- pipeline.py:42 sets "
+                                "grid_enabled=True at startup and passes it "
+                                "through, so the branch runs on every frame")
+        self.assertIsNone(classify_drop(f))
+
+    def test_absence_reason_without_config_issue_stays_dropped(self):
+        # d4-style: "never used" absence reason against a speculative
+        # crash finding (no config-disabled claim) is a legitimate drop
+        f = finding(issue="dt can be None when passed from the caller, "
+                          "which would crash the divide once used",
+                    drop_reason="2/2: dt_s is never used in the current "
+                                "code, so no None defect exists today")
+        self.assertIsNone(classify_drop(f))
+
     def test_duplicate_guard_blocks_rescue(self):
         f = finding(issue="dead path: flag is False so branch never runs",
                     drop_reason="2/2: duplicate of finding 1 -- any caller "
                                 "could pass frozen=True")
         self.assertEqual(classify_drop(f), "duplicate-guard")
-        rescued, still = rescue_forbidden_drops([f])
+        # W17 guard refinement: blocking requires a surviving twin -- the
+        # guard prevents re-inflation, not rescue per se.
+        twin = finding(line=3, issue="dead path: the flag is False so the "
+                                     "branch never runs at all")
+        rescued, still = rescue_forbidden_drops([f], kept=[twin])
         self.assertEqual((rescued, still), ([], [f]))
+
+    def test_guard_hit_without_surviving_twin_rescues(self):
+        # w14r3-d7: "restatement of Finding 1" where finding 1 also died --
+        # no re-inflation risk, the family tag applies.
+        f = finding(issue="dead path: PREDICT_FROZEN=True and no mechanism "
+                          "sets frozen",
+                    drop_reason="2/2: FREEZE_ON_COMMIT is never imported or "
+                                "referenced; essentially a restatement of "
+                                "finding 1")
+        self.assertEqual(classify_drop(f), "duplicate-guard")
+        unrelated_kept = finding(line=24, issue="draw_observed lacks the "
+                                                "MAX_POLYLINE_POINTS guard")
+        rescued, still = rescue_forbidden_drops([f], kept=[unrelated_kept])
+        self.assertEqual(still, [])
+        self.assertEqual(rescued[0]["rescue"], "absence-inverted")
+
+    def test_guard_hit_duplicate_of_same_pass_rescue_stays_down(self):
+        # W12 r1 shape: the clean-reason copy is rescued, its guard-hit
+        # duplicate must NOT become a second live finding.
+        clean = finding(line=17, issue="dead path: ENABLE_X flag is False so "
+                                       "the branch never runs",
+                        drop_reason="2/2: a future caller could pass "
+                                    "enable=True")
+        dup = finding(line=15, issue="dead path: the ENABLE_X flag is False "
+                                     "so this branch never runs either",
+                      drop_reason="2/2: duplicate of the flag finding; "
+                                  "callers could pass enable=True")
+        rescued, still = rescue_forbidden_drops([clean, dup], kept=[])
+        self.assertEqual([r["rescue"] for r in rescued],
+                         ["dead-path-dismissed"])
+        self.assertEqual(still, [dup])
 
     def test_named_invariant_rescues_numeric(self):
         f = finding(issue="covariance update can lose symmetry and positive "

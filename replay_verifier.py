@@ -78,27 +78,30 @@ def iter_results(run_dir: Path, only: set):
 
 
 def sweep(source: Path, only: set) -> int:
-    """Zero-LLM: classify every recorded dropped finding under the sentinel
-    patterns. Prints would-rescues and duplicate-guard blocks; returns the
-    number of would-rescues (for scripting)."""
-    from code_review_agent.sentinels import classify_drop
+    """Zero-LLM: apply the live sentinel semantics (rescue_forbidden_drops
+    against each result's kept list, so the W17 guard refinement is
+    reflected) to every recorded dropped finding. Prints would-rescues and
+    guard blocks; returns the number of would-rescues (for scripting)."""
+    from code_review_agent.sentinels import classify_drop, rescue_forbidden_drops
     n_drops = n_rescue = n_guard = 0
     for run_dir in source_run_dirs(source):
         for name, result in iter_results(run_dir, only):
-            for f in result.get("dropped_findings", []):
-                n_drops += 1
-                verdict = classify_drop(f)
-                if verdict is None:
-                    continue
+            drops = result.get("dropped_findings", [])
+            n_drops += len(drops)
+            rescued, still = rescue_forbidden_drops(
+                drops, kept=result.get("findings", []))
+            for f in rescued:
+                n_rescue += 1
                 where = f"{run_dir.name}/{name} {f['file']}:{f['line']}"
-                if verdict == "duplicate-guard":
+                print(f"[rescue] {where}  tag={f['rescue']}")
+                print(f"         issue:  {f['issue'][:110]}")
+                print(f"         reason: {f.get('dissent_reason', '')[:110]}")
+            for f in still:
+                if classify_drop(f) == "duplicate-guard":
                     n_guard += 1
-                    print(f"[guard ] {where}  (pattern hit, duplicate blocked)")
-                else:
-                    n_rescue += 1
-                    print(f"[rescue] {where}  tag={verdict}")
-                    print(f"         issue:  {f['issue'][:110]}")
-                    print(f"         reason: {f.get('drop_reason', '')[:110]}")
+                    print(f"[guard ] {run_dir.name}/{name} "
+                          f"{f['file']}:{f['line']}  (pattern hit, "
+                          "surviving twin, rescue blocked)")
     print(f"\nsweep: {n_rescue} would-rescue, {n_guard} guard-blocked, "
           f"out of {n_drops} recorded drops")
     return n_rescue
@@ -128,7 +131,8 @@ def derive_head_view(result: dict) -> dict:
 
 
 def replay_run(client, model, run_dir: Path, out: Path, tag: str,
-               diffs_dir: Path, repo: Path, only: set) -> None:
+               diffs_dir: Path, repo: Path, only: set,
+               tiebreak: bool = True) -> None:
     """Replay one recorded run dir: B view (sentinel active) written from
     the live execution, A view derived. Resumable per diff."""
     from code_review_agent.agent import build_review_input
@@ -153,7 +157,8 @@ def replay_run(client, model, run_dir: Path, out: Path, tag: str,
         try:
             kept, dropped, _status = verify_findings(client, model, user,
                                                      candidates, repo,
-                                                     trace=trace)
+                                                     trace=trace,
+                                                     tiebreak=tiebreak)
         finally:
             trace.close()
         b_view = {"summary": source.get("summary", ""),
@@ -192,6 +197,9 @@ def main():
                         help="Run judge.py on each replayed output dir")
     parser.add_argument("--sweep", action="store_true",
                         help="Zero-LLM sentinel sweep over recorded drops")
+    parser.add_argument("--no-tiebreak", action="store_true",
+                        help="Disable the W17 disagreement tiebreak pass "
+                             "(A/B comparison baseline)")
     args = parser.parse_args()
     only = {s.strip() for s in args.only.split(",") if s.strip()}
     source = Path(args.source)
@@ -212,7 +220,8 @@ def main():
     failures = 0
     for i, run_dir in enumerate(run_dirs, 1):
         replay_run(client, model, run_dir, out, f"run{i}",
-                   Path(args.diffs_dir), Path(args.repo), only)
+                   Path(args.diffs_dir), Path(args.repo), only,
+                   tiebreak=not args.no_tiebreak)
         if args.judge:
             for tag in ("A", "B"):
                 if not judge_dir(out / f"{tag}_run{i}"):

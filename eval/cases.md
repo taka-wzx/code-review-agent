@@ -556,3 +556,43 @@ T1 本地自测 7 项全过(3 连败触发/计数递增/命中清零/regex miss 
 - 全轮实耗 ≈ ¥4.5(交叉判 ~¥1 + 抽查含失败重试 ~¥3.4),略超预估 <¥3,归因 43fc78c 体量与重试。
 
 **门裁决(用户批准,2026-07-14):通过。** GLM 零翻转 + 新失败模式全为工程鲁棒性类(非评测有效性类)→ **不触发第二域 fixture 周**;W17 = 既定路线(d7 实质性驳斥族 + uncertain 通道方差 + B3 GitHub 闭环搭车),外加鲁棒性双修进搭车清单:anchor 空响应重试一次、verifier max_tokens 提额或候选分块。结果 JSON/MD/trace 三件套在 eval/results_w16_real/(gitignore 内,复核入口)。
+
+## W17(2026-07-14~):d7 驳斥族 + uncertain 第三票 + B3(dry-run)
+
+**立项(用户定四取舍)**:全做(d7 族+uncertain 方差+B3+鲁棒性双修);动工前分块提交两轮工作
+(5 commit);B3 走 dry-run+单测(无 GitHub remote);h2 走"fixture CLAUDE.md 补声明后果"。
+预算 ¥3-6。搭车 A 已落地:anchor 空响应重试一次(同请求原样重发,不占 bad_submit)、
+verifier max_tokens 4000→8000(W16 两个实证失败模式),golden 锁定,121 测试全绿。
+
+**T 归因(零 LLM,扫 W10-W16 全部 523 条已录 drop + trace 工具计数)**:
+
+- **"查证门"候选被数据推翻**:14 条实质性驳斥砍杀(三族排除后)的 verifier pass **全部 ≥1 次
+  工具调用,零查证 0 条**——错误驳斥不是不查,是查对了推错。放弃行为级查证门。
+- **d7 族真实形态 = 缺失反转驳斥(absence-inverted refutation)**:典型 w14r3-d7 的
+  drop_reason="assumes a coupling that doesn't exist — FREEZE_PREDICTION_ON_COMMIT is
+  **never imported or referenced by any module**; no existing definition proves it can
+  only be False"——工具查证的事实(常量无引用)完全正确,但**该缺失恰是死路径成立的证据**,
+  被当成反驳使用(举证责任反转)。判别器:**合法的死路径驳斥断言"存在"**(某处确实设了
+  frozen=True,给出出处);**非法驳斥断言"缺失"**(never imported/no mechanism/doesn't exist)。
+- **uncertain 通道账(13 个有 scores 的 run,n=429 kept)**:confirmed 88% matched/11% noise/
+  1% FP;**uncertain 43% matched/49% noise/8% FP**,每 run 3-14 条(均值 ~8)——一半真价值
+  砍不得,一半噪音在吃 precision;分歧第三票(2/3 落定)是对症机制,风险面=matched 半区被
+  误落(闸门盯 recall)。
+
+**预写闸门(先写后跑)**:
+1. **G-pure**:族四正反例先行——正例=w14r3-d7 措辞;反例=存在型驳斥("frozen is set True in
+   pipeline.py:42")、三族既有正反例零回归、"新函数无调用者"类合法 drop(issue 门不含
+   config-disabled 则不触发)。
+2. **G-sweep(六向,零成本)**:族四对 W10-W16 全部已录 drop 恰命中已知 d7 型砍杀(预期 ≥1:
+   w14r3-d7;W10/W11 向由 sweep 揭示),523 条中合法驳斥**零误救**;任何计划外命中逐条人工
+   裁决,误救→收紧门(≤2 轮迭代,W13/W15 先例)。
+3. **G-bench**:既有 30/30 不破 + 新增 1 冻结 kill-case(w14r3-d7 缺失反转措辞)。
+4. **G-replay-1(族四主判,配对回放×3,source=results_repeat_w14,零额外变量:tiebreak 关)**:
+   B(四族)vs A(派生视图,demote 族四救援)——d7-dead-flag 在"有候选且被缺失反转砍"的 run
+   救活入 uncertain;A 命中 B 无一丢;FP 差 0;noise_B ≤ noise_A+2;precision_B ≥ A−0.03。
+5. **G-replay-2(第三票主判,tiebreak 开,同 source 再回放×3,与 replay-1 B 视图按相同候选
+   配对比较)**:noise mean 下降 ≥2;precision +≥0.02;**recall 相对 replay-1-B 均值回退
+   ≤1 bug**(matched-uncertain 半区保护);第三票只对分歧子集调用(成本 ≈ 分歧条数)。
+6. **G-holdout(×1)**:≥6/7 且 h2 若仍 miss 须归因非新机制;h6 kept=0;族四零触发(holdout
+   无已知缺失反转砍杀)。
+预算:replay-1 ~¥1.2 + replay-2 ~¥1.5 + bench ~¥0.3 + holdout ~¥0.6 ≈ **¥3.6**,内环零成本。

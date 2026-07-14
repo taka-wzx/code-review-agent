@@ -41,6 +41,8 @@ All functions here are pure and unit-testable offline.
 """
 import re
 
+from code_review_agent.findings import is_duplicate
+
 _GUARD_RE = re.compile(
     r"\b(duplicate|restat\w*|already\s+(kept|covered|dropped))\b", re.I)
 
@@ -67,6 +69,29 @@ _CONFIG_DISABLED_ISSUE_RE = re.compile(
     r"|\b(flag|guard|condition|config)\b[^.]{0,40}\b"
     r"(true|false|set|unset|disabled|never\s+(holds|runs|executes|true))",
     re.I)
+
+# Absence-inverted refutation family (W17). The recorded d7 kill
+# (w14r3-d7): the verifier tool-verified that FREEZE_PREDICTION_ON_COMMIT
+# is never imported or referenced -- a correct fact -- and then used that
+# ABSENCE to refute a config-disabled dead-path finding ("assumes a
+# coupling that doesn't exist; no existing definition proves it can only
+# be False"), when the absence of any code setting the flag is precisely
+# what makes the path dead. Burden-of-proof inversion. Discriminator: a
+# legitimate refutation of a dead-path claim asserts PRESENCE ("frozen is
+# set True in pipeline.py:42"); an absence assertion in this position
+# argues FOR the finding. The issue gate reuses the config-disabled
+# discriminator, so "no callers"-style drops on non-config findings stay
+# out. W17 attribution note: all 14 recorded substantive-refutation drops
+# had >=1 verifier tool call -- the failure is inference, not diligence,
+# so no tool-count gate can separate these.
+_ABSENCE_REFUTATION_RE = re.compile(
+    r"never\s+(imported|referenced|read|set|assigned|used|called)"
+    r"|(coupling|mechanism|link|connection)[^.]{0,50}"
+    r"(does\s*n.?t|do(es)?\s+not)\s+exist"
+    r"|no\s+(existing\s+)?(definition|mechanism|code|caller|assignment|"
+    r"reference)[^.]{0,60}(proves|sets|forces|enables|makes|establishes)"
+    r"|nothing\s+in\s+the\s+(code|repo\w*|diff)[^.]{0,40}"
+    r"(sets|forces|makes|enables)", re.I)
 
 # Numeric family. A generic/speculative dismissal against a finding that
 # CLAIMS an invariant is lost across repeated updates (or a missing term).
@@ -112,11 +137,9 @@ _DOC_CITED_ISSUE_RE = re.compile(
     r"|with\s+(the\s+)?comment\s+[\"'“]", re.I)
 
 
-def classify_drop(f: dict) -> str | None:
-    """Sentinel verdict for one dropped finding: a rescue tag, the string
-    "duplicate-guard" (pattern hit but the drop is a duplicate call -- never
-    rescue those, one bug must not re-inflate into two findings), or None.
-    Pure function, unit-testable offline."""
+def _family_tag(f: dict) -> str | None:
+    """The raw family classification of one dropped finding, ignoring the
+    duplicate guard. Pure function."""
     reason = f.get("drop_reason", "")
     issue = f.get("issue", "")
     tag = None
@@ -126,29 +149,71 @@ def classify_drop(f: dict) -> str | None:
     if (_DEAD_PATH_DISMISS_REASON_RE.search(reason)
             and _CONFIG_DISABLED_ISSUE_RE.search(issue)):
         tag = "dead-path-dismissed"
+    elif (_ABSENCE_REFUTATION_RE.search(reason)
+            and _CONFIG_DISABLED_ISSUE_RE.search(issue)):
+        tag = "absence-inverted"
     elif _GENERIC_DISMISS_REASON_RE.search(reason) and claims_invariant:
         tag = "numeric-invariant"
     elif (_DOC_DISMISS_REASON_RE.search(reason)
             and _DOC_CITED_ISSUE_RE.search(issue)):
         tag = "doc-condition-dismissed"
-    if tag and _GUARD_RE.search(reason):
+    return tag
+
+
+def classify_drop(f: dict) -> str | None:
+    """Sentinel verdict for one dropped finding: a rescue tag, the string
+    "duplicate-guard" (pattern hit but the reason also calls the finding a
+    duplicate/restatement), or None. Whether a guard hit actually blocks
+    the rescue is decided in rescue_forbidden_drops, which can see the
+    surviving findings. Pure function, unit-testable offline."""
+    tag = _family_tag(f)
+    if tag and _GUARD_RE.search(f.get("drop_reason", "")):
         return "duplicate-guard"
     return tag
 
 
-def rescue_forbidden_drops(dropped: list) -> tuple[list, list]:
+def _rescued(f: dict, tag: str) -> dict:
+    r = {k: v for k, v in f.items() if k != "drop_reason"}
+    r["verification"] = "uncertain"
+    r["dissent_reason"] = f"[sentinel:{tag}] {f.get('drop_reason', '')}"
+    r["rescue"] = tag
+    return r
+
+
+def rescue_forbidden_drops(dropped: list, kept: list = ()) -> tuple[list, list]:
     """(rescued_as_uncertain, still_dropped). Rescued findings lose the
     drop_reason and enter the uncertain channel; the fixed "[sentinel:tag] "
-    prefix keeps the original reason machine-recoverable. Pure function."""
-    rescued, still = [], []
+    prefix keeps the original reason machine-recoverable. Pure function.
+
+    Guard refinement (W17): the duplicate guard exists so one bug cannot
+    re-inflate into two LIVE findings -- so it only blocks when a
+    surviving twin actually exists among `kept` or the findings rescued in
+    this same pass. w14r3-d7 showed the failure of the blanket guard: the
+    verifier killed the config-disabled dead path calling it a
+    "restatement" of the no-callers finding, but that twin was ALSO dead,
+    so blocking the rescue just re-killed the bug. Clean-reason rescues
+    are processed first so a guard-hit duplicate of a rescued copy still
+    stays down (the W12 re-inflation case)."""
+    rescued, still, guard_hits = [], [], []
     for f in dropped:
         tag = classify_drop(f)
-        if tag and tag != "duplicate-guard":
-            r = {k: v for k, v in f.items() if k != "drop_reason"}
-            r["verification"] = "uncertain"
-            r["dissent_reason"] = f"[sentinel:{tag}] {f.get('drop_reason', '')}"
-            r["rescue"] = tag
-            rescued.append(r)
+        if tag == "duplicate-guard":
+            guard_hits.append(f)
+        elif tag:
+            rescued.append(_rescued(f, tag))
         else:
             still.append(f)
+    alive = list(kept) + rescued
+    for f in guard_hits:
+        # Guard twin-matching runs looser than finder dedup (sim_near .15
+        # vs .25): the verifier itself asserted duplication, we only need
+        # to locate the surviving referent. Measured anchors: the w12r1
+        # double-copy pair scores .227 (must block) while the w14r3
+        # unrelated same-file neighbor scores .066 (must not block).
+        if any(is_duplicate(f, twin, sim_near=0.15) for twin in alive):
+            still.append(f)
+        else:
+            r = _rescued(f, _family_tag(f))
+            rescued.append(r)
+            alive.append(r)
     return rescued, still

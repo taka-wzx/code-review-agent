@@ -814,6 +814,62 @@
           ]
         }
       ]
+    },
+    {
+      "id": "d7-w14r3-absence-inversion",
+      "diff": "d7_display",
+      "source": "results_repeat_w14/v2_run3/d7_display.json",
+      "candidates": [
+        {
+          "file": "tracker/display.py",
+          "line": 17,
+          "severity": "medium",
+          "issue": "`draw_predicted` will never draw anything with the current config: `PREDICT_DISPLAY_ONLY_FROZEN=True` causes an early return unless `frozen=True`, but `FREEZE_PREDICTION_ON_COMMIT=False` means there is no code path in the repo that ever passes `frozen=True`. The function is effectively dead code until the freeze-on-commit wiring is implemented.",
+          "suggestion": "Either implement the freeze wiring before merging this function, or temporarily set `PREDICT_DISPLAY_ONLY_FROZEN=False` during development so the prediction path can be exercised."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 15,
+          "severity": "low",
+          "issue": "Neither `draw_predicted` nor `draw_observed` has any caller in the repository. They are defined but not yet wired into `pipeline.py` or any other module.",
+          "suggestion": "Integrate calls to these functions into the session rendering loop (e.g., `pipeline.py` where `frame.annotated` is written)."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 16,
+          "severity": "low",
+          "issue": "The `frozen` parameter is not documented in `draw_predicted`'s docstring. Callers cannot know when to pass `True` without reading the config comments.",
+          "suggestion": "Document the `frozen` parameter and the PREDICT_DISPLAY_ONLY_FROZEN no-op behavior."
+        },
+        {
+          "file": "tracker/display.py",
+          "line": 18,
+          "severity": "low",
+          "issue": "No None-guard on `pred_polyline`. If `pred_polyline` is `None`, `pred_polyline[:MAX_POLYLINE_POINTS]` raises `TypeError`. Same applies to `detections` in `draw_observed` (line 31).",
+          "suggestion": "Add `if pred_polyline is None: return`, or document that None is not a valid input.",
+          "origin": "finder2"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "survives",
+          "issue_contains_any": [
+            "PREDICT_DISPLAY_ONLY_FROZEN"
+          ]
+        },
+        {
+          "kind": "stays_dropped",
+          "issue_contains_any": [
+            "has any caller in the repository"
+          ]
+        },
+        {
+          "kind": "never_rescued",
+          "issue_contains_any": [
+            "is not documented in"
+          ]
+        }
+      ]
     }
   ]
 }

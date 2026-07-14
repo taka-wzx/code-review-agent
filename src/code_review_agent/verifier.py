@@ -181,12 +181,62 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
     return kept, dropped
 
 
+def _tiebreak_pass(client, model, review_input: str, kept: list,
+                   dropped: list, repo_root, trace=None) -> tuple[list, list]:
+    """Third vote on A/B disagreements only (W17). The uncertain channel
+    measured 43% matched / 49% noise / 8% FP across W10-W14 -- half real
+    value, half precision leak -- so instead of capping the channel, a
+    pass C re-judges JUST the disputed findings and the 2/3 majority
+    lands: keep -> confirmed (tiebreak-tagged for audit), drop -> dropped
+    with a "2/3:" reason (the sentinel still applies to those drops
+    afterwards). A failed pass C fails open to the W9 uncertain
+    semantics. Cost is proportional to the disagreement count (~1-3
+    findings/diff), not the full candidate list."""
+    disputed = [f for f in kept if f.get("verification") == "uncertain"]
+    if not disputed:
+        return kept, dropped
+    sub = [{k: v for k, v in f.items()
+            if k not in ("verification", "dissent_reason")} for f in disputed]
+    vc = _verify_pass(client, model, review_input, sub, repo_root,
+                      trace=trace, pass_id="C", reverse_order=False)
+    if vc is None:
+        print("[verifier] tiebreak pass failed -- disagreements stay "
+              "uncertain", file=sys.stderr)
+        tev(trace, "tiebreak_failed", n_disputed=len(disputed))
+        return kept, dropped
+    votes = {v["finding_index"]: v for v in vc}
+    new_kept, resolved = [], []
+    di = 0
+    for f in kept:
+        if f.get("verification") != "uncertain":
+            new_kept.append(f)
+            continue
+        v = votes[di]
+        di += 1
+        if v["verdict"] == "keep":
+            r = {k: x for k, x in f.items() if k != "dissent_reason"}
+            r["verification"] = "confirmed"
+            r["tiebreak"] = "2/3"
+            new_kept.append(r)
+        else:
+            d = {k: x for k, x in f.items()
+                 if k not in ("verification", "dissent_reason")}
+            d["drop_reason"] = "2/3: " + v["reason"]
+            resolved.append(d)
+    print(f"[verifier] tiebreak: {len(disputed)} disputed -> "
+          f"{len(disputed) - len(resolved)} confirmed, "
+          f"{len(resolved)} dropped", file=sys.stderr)
+    tev(trace, "tiebreak", n_disputed=len(disputed),
+        confirmed=len(disputed) - len(resolved), dropped=len(resolved))
+    return new_kept, dropped + resolved
+
+
 # The rule-firing sentinel (W13-W15) lives in sentinels.py: pattern-gated
 # rescue of drops whose drop_reason uses reasoning the Evidence rules above
 # forbid. See that module's docstring for the design rationale, validation
 # method (sweeps/bench/replay), and known generalization limits.
 def _apply_sentinel(kept: list, dropped: list, trace) -> tuple[list, list]:
-    rescued, dropped = rescue_forbidden_drops(dropped)
+    rescued, dropped = rescue_forbidden_drops(dropped, kept)
     if rescued:
         print(f"[verifier] sentinel rescued {len(rescued)} dropped "
               "finding(s) -> uncertain", file=sys.stderr)
@@ -262,7 +312,8 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
 
 
 def verify_findings(client, model: str, review_input: str, findings: list,
-                    repo_root, trace=None) -> tuple[list, list, str]:
+                    repo_root, trace=None,
+                    tiebreak: bool = True) -> tuple[list, list, str]:
     """Double-verification orchestrator (W9). review_input is the exact
     user content the finder saw, so all passes share one view; the tools
     let each pass check anything beyond that view itself.
@@ -299,6 +350,9 @@ def verify_findings(client, model: str, review_input: str, findings: list,
         return kept, dropped, "degraded"
 
     kept, dropped = merge_verdicts(findings, va, vb)
+    if tiebreak:
+        kept, dropped = _tiebreak_pass(client, model, review_input, kept,
+                                       dropped, repo_root, trace=trace)
     kept, dropped = _apply_sentinel(kept, dropped, trace)
     n_unc = sum(1 for f in kept if f.get("verification") == "uncertain")
     print(f"[verifier] merged: {len(kept)} kept "
