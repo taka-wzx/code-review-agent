@@ -321,12 +321,21 @@ def main():
                         help="Output format: json (default) or md (PR-comment markdown)")
     parser.add_argument("--out", metavar="PATH",
                         help="Also write the formatted review to this file")
+    parser.add_argument("--post", action="store_true",
+                        help="Post the review to the PR as inline comments "
+                             "via gh api (requires --pr)")
+    parser.add_argument("--post-dry-run", action="store_true",
+                        help="Print the gh command and review payload "
+                             "without posting (requires --pr)")
     args = parser.parse_args()
 
     sources = [bool(args.diff), bool(args.commit), args.uncommitted, bool(args.pr)]
     if sum(sources) != 1:
         parser.error("give exactly one diff source: a diff file, --commit, "
                      "--uncommitted, or --pr")
+    if (args.post or args.post_dry_run) and not args.pr:
+        parser.error("--post/--post-dry-run need --pr (inline comments "
+                     "attach to a pull request)")
     if args.diff:
         diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
     else:
@@ -369,6 +378,27 @@ def main():
             print(f"[hint] post it with: gh pr comment {args.pr} "
                   f"--body-file {args.out}", file=sys.stderr)
     print(output)
+
+    if args.post or args.post_dry_run:
+        from code_review_agent.github_review import (build_review_payload,
+                                                     format_dry_run,
+                                                     gh_post_command)
+        payload = build_review_payload(review, diff_text,
+                                       title=f"Code review: PR #{args.pr}")
+        if args.post_dry_run:
+            print(format_dry_run(args.pr, payload))
+        else:
+            proc = subprocess.run(gh_post_command(args.pr, payload),
+                                  cwd=args.repo,
+                                  input=json.dumps(payload,
+                                                   ensure_ascii=False),
+                                  capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode != 0:
+                sys.exit(f"gh api post failed:\n{proc.stderr.strip()}")
+            print(f"[post] review posted to PR #{args.pr} "
+                  f"({len(payload['comments'])} inline comment(s))",
+                  file=sys.stderr)
 
 
 if __name__ == "__main__":
