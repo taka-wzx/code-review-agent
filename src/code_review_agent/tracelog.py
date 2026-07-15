@@ -11,6 +11,7 @@ force_utf8() and iter_events().
 """
 import json
 import sys
+from threading import Lock
 import time
 from pathlib import Path
 
@@ -34,14 +35,18 @@ class Trace:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._f = self.path.open("w", encoding="utf-8")
+        self._lock = Lock()
 
     def event(self, kind: str, **data) -> None:
         rec = {"t": round(time.time(), 3), "kind": kind, **data}
-        self._f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
-        self._f.flush()
+        line = json.dumps(rec, ensure_ascii=False, default=str) + "\n"
+        with self._lock:
+            self._f.write(line)
+            self._f.flush()
 
     def close(self) -> None:
-        self._f.close()
+        with self._lock:
+            self._f.close()
 
 
 def tev(trace, kind: str, **data) -> None:

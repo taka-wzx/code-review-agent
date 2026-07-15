@@ -23,15 +23,22 @@ from code_review_agent.agentloop import run_submit_loop
 from code_review_agent.context import build_context, parse_diff
 from code_review_agent.findings import dedup_union, split_by_scope
 from code_review_agent.llm import make_client
+from code_review_agent.orchestration import (
+    DEFAULT_REVIEW_TIMEOUT_SECONDS,
+    Deadline,
+    run_parallel_pair,
+)
 from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from code_review_agent.tracelog import Trace, force_utf8, tev
-from code_review_agent.verifier import verify_findings
+from code_review_agent.verifier import _verify_findings
 
 force_utf8()
 
 MAX_STEPS = 10           # hard cap on loop iterations
 MAX_SUBMIT_ATTEMPTS = 2  # invalid submit_review payloads before giving up
 FINDER2_TEMPERATURE = 0.7  # second finder run samples; run 1 stays at 0.0
+REVIEW_TIMEOUT_SECONDS = DEFAULT_REVIEW_TIMEOUT_SECONDS
+_run_pair = run_parallel_pair
 
 SYSTEM = """You are a code reviewer. You are given a unified diff.
 Use the read_file tool when you need context beyond the diff (the full
@@ -136,7 +143,7 @@ def validate_review(review) -> list[str]:
 
 
 def _finder_pass(client, model: str, user: str, repo_root: Path, *,
-                 trace, component: str, temperature: float):
+                 trace, component: str, temperature: float, deadline=None):
     """One finder conversation: fresh messages and a fresh ToolSession per
     pass (run_submit_loop mutates messages in place, and the repeat-call
     cache / miss-streak state are per-conversation by design)."""
@@ -167,6 +174,7 @@ def _finder_pass(client, model: str, user: str, repo_root: Path, *,
         trace=trace, component=component,
         label="" if component == "finder" else component,
         on_text_answer="raise",
+        deadline=deadline,
     )
 
 
@@ -189,15 +197,32 @@ def build_review_input(diff_text: str, repo_root: Path,
 def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
                use_context: bool = True, use_verify: bool = True,
                trace: Trace | None = None) -> dict:
+    deadline = Deadline.after(REVIEW_TIMEOUT_SECONDS)
     user = build_review_input(diff_text, repo_root, use_context,
-                              log=lambda m: print(f"[context] {m}", file=sys.stderr))
+                               log=lambda m: print(f"[context] {m}", file=sys.stderr))
 
-    # Anchor run (temperature 0): its failure is fatal, exactly as before.
-    result = _finder_pass(client, model, user, repo_root, trace=trace,
-                          component="finder", temperature=0.0)
+    # The anchor and sampling conversations are independent and share only
+    # their immutable input/client.  Join both before applying the historical
+    # fatal-anchor / fail-open-sampler policy below.
+    anchor_outcome, sample_outcome = _run_pair(
+        lambda: _finder_pass(client, model, user, repo_root, trace=trace,
+                             component="finder", temperature=0.0,
+                             deadline=deadline),
+        lambda: _finder_pass(client, model, user, repo_root, trace=trace,
+                             component="finder2",
+                             temperature=FINDER2_TEMPERATURE,
+                             deadline=deadline),
+        stage="finder", trace=trace,
+    )
+    if anchor_outcome.error is not None:
+        raise anchor_outcome.error
+    result = anchor_outcome.value
     if result.reason == "bad_submits":
         raise RuntimeError(f"submit_review still invalid after "
                            f"{MAX_SUBMIT_ATTEMPTS} attempts: {result.problems}")
+    if result.reason == "deadline":
+        raise RuntimeError("review deadline exhausted before the anchor finder "
+                           "submitted a valid review")
     if result.reason != "ok":
         raise RuntimeError(f"agent did not finish within {MAX_STEPS} steps")
 
@@ -210,23 +235,25 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
     # must never be able to break a review (mirrors the verifier fail-open).
     steps = result.steps
     extra = []
-    try:
-        result2 = _finder_pass(client, model, user, repo_root, trace=trace,
-                               component="finder2",
-                               temperature=FINDER2_TEMPERATURE)
+    if sample_outcome.error is None:
+        result2 = sample_outcome.value
         reason2 = result2.reason
-    except RuntimeError:
+    elif isinstance(sample_outcome.error, RuntimeError):
         result2, reason2 = None, "text_answer"
-    except (openai.AuthenticationError, openai.RateLimitError):
+    elif isinstance(sample_outcome.error,
+                    (openai.AuthenticationError, openai.RateLimitError)):
         # Account-level failures poison every later call (the verifier
         # would fail open on the same cause) and main() has dedicated
         # actionable exits for exactly these two -- let them through.
-        raise
-    except openai.OpenAIError as e:
+        raise sample_outcome.error
+    elif isinstance(sample_outcome.error, openai.OpenAIError):
         # Per-request failures (timeout, 5xx, connection) degrade exactly
         # like protocol failures -- otherwise an exception here discards
         # the completed anchor run.
+        e = sample_outcome.error
         result2, reason2 = None, f"api_error:{type(e).__name__}"
+    else:
+        raise sample_outcome.error
     if result2 is not None and reason2 == "ok":
         u2 = result2.usage
         print(f"[finder2 done] steps={result2.steps} "
@@ -257,8 +284,10 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         # Persist the verifier's exact input (W13): replays reuse it
         # verbatim, keeping candidate order identical to the live run.
         review["candidate_findings"] = [dict(f) for f in in_scope]
-        kept, dropped, vstatus = verify_findings(client, model, user, in_scope,
-                                                 repo_root, trace=trace)
+        kept, dropped, vstatus = _verify_findings(
+            client, model, user, in_scope, repo_root, trace=trace,
+            deadline=deadline,
+        )
         print(f"[verifier] kept {len(kept)}/{len(kept) + len(dropped)}",
               file=sys.stderr)
         review["findings"] = kept
