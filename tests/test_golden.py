@@ -15,6 +15,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import httpx
+import openai
+
 from code_review_agent import agent
 from code_review_agent.agent import SUBMIT_TOOL, SYSTEM, run_review
 from code_review_agent.context import build_context
@@ -22,6 +25,18 @@ from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO
 from code_review_agent.verifier import VERDICT_TOOL, VERIFIER_SYSTEM, verify_findings
 
 from fakes import FakeClient, FakeTrace, response, tool_call
+
+
+def api_error() -> openai.APIConnectionError:
+    """A transport failure as the SDK raises it after its own retries."""
+    return openai.APIConnectionError(
+        request=httpx.Request("POST", "https://api.invalid"))
+
+
+def _status_error(cls, status: int):
+    req = httpx.Request("POST", "https://api.invalid")
+    return cls("account-level failure",
+               response=httpx.Response(status, request=req), body=None)
 
 DIFF = ("--- a/mod.py\n+++ b/mod.py\n@@ -1 +1 @@\n"
         "-VALUE = 2\n+VALUE = 3\n")
@@ -247,6 +262,30 @@ class TestFinderGolden(RepoCase):
         self.assertEqual(review, reviewed(VALID_REVIEW))
         self.assertIn({"kind": "finder2_failed", "reason": "text_answer"},
                       trace.events)
+
+    def test_run2_api_error_degrades_to_anchor(self):
+        client = FakeClient([
+            response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+            api_error(),   # transport failure on finder2's first request
+        ])
+        trace = FakeTrace()
+        review = self.run_finder(client, trace)
+        self.assertEqual(review, reviewed(VALID_REVIEW))
+        self.assertIn({"kind": "finder2_failed",
+                       "reason": "api_error:APIConnectionError"},
+                      trace.events)
+
+    def test_run2_account_level_errors_still_propagate(self):
+        # Auth/rate-limit poison every later call; degrading would mask
+        # main()'s dedicated actionable exits -- they must pass through.
+        for exc_cls, status in ((openai.AuthenticationError, 401),
+                                (openai.RateLimitError, 429)):
+            client = FakeClient([
+                response([tool_call("c1", "submit_review", VALID_REVIEW)]),
+                _status_error(exc_cls, status),
+            ])
+            with self.assertRaises(exc_cls):
+                self.run_finder(client, FakeTrace())
 
     def test_union_dedup_and_scope(self):
         # run 2 contributes one duplicate (merged away) and one new finding
@@ -483,6 +522,47 @@ class TestVerifierGolden(RepoCase):
                       trace.events)
         self.assertIn({"kind": "verdicts", "kept": 1, "dropped": 1,
                        "degraded": True, "failed_pass": "A"}, trace.events)
+
+    def test_pass_api_error_degrades_to_single(self):
+        two = FINDINGS[:2]
+        client = FakeClient([
+            api_error(),   # pass A dies on transport
+            response([tool_call("v1", "submit_verdicts", verdicts_payload(
+                (0, "keep", "b0"), (1, "drop", "b1")))]),
+        ])
+        trace = FakeTrace()
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, two,
+                                                self.repo, trace=trace)
+        self.assertEqual(status, "degraded")
+        self.assertEqual(kept, [two[0]])   # single-pass: no verification tag
+        self.assertEqual(dropped, [{**two[1], "drop_reason": "b1"}])
+        self.assertIn({"kind": "verifier_pass_failed", "pass_id": "A",
+                       "problems": ["api_error:APIConnectionError"]},
+                      trace.events)
+
+    def test_both_passes_api_error_fail_open(self):
+        client = FakeClient([api_error(), api_error()])
+        trace = FakeTrace()
+        kept, dropped, status = verify_findings(client, "test-model",
+                                                REVIEW_INPUT, FINDINGS,
+                                                self.repo, trace=trace)
+        self.assertEqual(status, "failed_open")
+        self.assertEqual(kept, FINDINGS)
+        self.assertEqual(dropped, [])
+        self.assertIn({"kind": "verifier_fail_open", "n_findings": 3},
+                      trace.events)
+
+    def test_account_level_errors_do_not_fail_open(self):
+        # An expired key / exhausted quota must surface as the typed
+        # exception (main() exits with the actionable message), not as an
+        # exit-0 failed_open review of unfiltered findings.
+        for exc_cls, status in ((openai.AuthenticationError, 401),
+                                (openai.RateLimitError, 429)):
+            client = FakeClient([_status_error(exc_cls, status)])
+            with self.assertRaises(exc_cls):
+                verify_findings(client, "test-model", REVIEW_INPUT,
+                                FINDINGS, self.repo, trace=FakeTrace())
 
     def test_text_answers_fail_open(self):
         client = FakeClient([response(content=f"t{i}") for i in range(4)])

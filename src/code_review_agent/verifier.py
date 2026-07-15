@@ -26,6 +26,8 @@ is the boundary-case detector -- no prompt self-reports doubt.
 import json
 import sys
 
+import openai
+
 from code_review_agent.agentloop import run_submit_loop
 from code_review_agent.sentinels import rescue_forbidden_drops
 from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
@@ -281,27 +283,43 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
         return verdicts, validate_verdicts(verdicts, len(findings))
 
     component = f"verifier{pass_id}"
-    result = run_submit_loop(
-        client, model, messages,
-        explore_tools=[READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL],
-        submit_tool=VERDICT_TOOL, parse=parse_verdicts,
-        session=ToolSession(repo_root, trace=trace, component=component),
-        max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
-        # 8000, not 4000: a W16 real-PR run with 11 candidates x long
-        # reasons truncated the submit_verdicts JSON mid-string and the
-        # pass failed. Sized to the finder's budget.
-        max_tokens=8000,
-        budget_msg="Step budget exhausted. Call submit_verdicts NOW, covering "
-                   "every finding index exactly once, based on what you have "
-                   "verified so far.",
-        reject_msg=lambda problems: "Verdicts rejected: " + "; ".join(problems),
-        trace=trace, component=component, label=component,
-        on_text_answer="count",
-        text_answer_problem="verifier answered in text instead of calling "
-                            "submit_verdicts",
-        text_answer_nudge="You must call submit_verdicts covering "
-                          "every finding index exactly once.",
-    )
+    try:
+        result = run_submit_loop(
+            client, model, messages,
+            explore_tools=[READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL],
+            submit_tool=VERDICT_TOOL, parse=parse_verdicts,
+            session=ToolSession(repo_root, trace=trace, component=component),
+            max_steps=MAX_STEPS, max_submit_attempts=MAX_SUBMIT_ATTEMPTS,
+            # 8000, not 4000: a W16 real-PR run with 11 candidates x long
+            # reasons truncated the submit_verdicts JSON mid-string and the
+            # pass failed. Sized to the finder's budget.
+            max_tokens=8000,
+            budget_msg="Step budget exhausted. Call submit_verdicts NOW, covering "
+                       "every finding index exactly once, based on what you have "
+                       "verified so far.",
+            reject_msg=lambda problems: "Verdicts rejected: " + "; ".join(problems),
+            trace=trace, component=component, label=component,
+            on_text_answer="count",
+            text_answer_problem="verifier answered in text instead of calling "
+                                "submit_verdicts",
+            text_answer_nudge="You must call submit_verdicts covering "
+                              "every finding index exactly once.",
+        )
+    except (openai.AuthenticationError, openai.RateLimitError):
+        # Account-level failures hit every pass the same way; degrading
+        # would fail open with exit 0 and mask an actionable cause that
+        # main() reports with a dedicated message -- let them through.
+        raise
+    except openai.OpenAIError as e:
+        # Per-request transport/API failure mid-pass gets the same degrade
+        # semantics as a protocol failure: one dead pass must not crash the
+        # review and lose the finder's output (verify_findings degrades /
+        # fails open).
+        print(f"[{component}] pass FAILED ({type(e).__name__}: {e})",
+              file=sys.stderr)
+        tev(trace, "verifier_pass_failed", pass_id=pass_id,
+            problems=[f"api_error:{type(e).__name__}"])
+        return None
     if result.reason == "ok":
         verdicts = result.payload
         tev(trace, "verifier_pass", pass_id=pass_id, steps=result.steps,

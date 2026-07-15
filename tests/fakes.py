@@ -32,7 +32,9 @@ def response(tool_calls=None, content=None, tokens_in=100, tokens_out=20):
 
 class FakeClient:
     """Pops scripted responses in order; raises if the code under test
-    makes more requests than the script provides."""
+    makes more requests than the script provides. A scripted entry that is
+    an Exception instance is raised instead of returned (transport/API
+    failure injection)."""
 
     def __init__(self, responses):
         self._responses = list(responses)
@@ -47,7 +49,10 @@ class FakeClient:
         if not self._responses:
             raise AssertionError("FakeClient: script exhausted, unexpected "
                                  f"request #{len(self.requests)}")
-        return self._responses.pop(0)
+        resp = self._responses.pop(0)
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
 
 
 class FakeTrace:

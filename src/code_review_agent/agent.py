@@ -217,6 +217,16 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         reason2 = result2.reason
     except RuntimeError:
         result2, reason2 = None, "text_answer"
+    except (openai.AuthenticationError, openai.RateLimitError):
+        # Account-level failures poison every later call (the verifier
+        # would fail open on the same cause) and main() has dedicated
+        # actionable exits for exactly these two -- let them through.
+        raise
+    except openai.OpenAIError as e:
+        # Per-request failures (timeout, 5xx, connection) degrade exactly
+        # like protocol failures -- otherwise an exception here discards
+        # the completed anchor run.
+        result2, reason2 = None, f"api_error:{type(e).__name__}"
     if result2 is not None and reason2 == "ok":
         u2 = result2.usage
         print(f"[finder2 done] steps={result2.steps} "
