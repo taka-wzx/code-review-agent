@@ -18,6 +18,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from code_review_agent.llm import REQUEST_TIMEOUT
 from code_review_agent.tracelog import tev
 
 
@@ -27,7 +28,7 @@ class LoopResult:
     steps: int = 0         # LLM rounds consumed
     usage: Any = None      # usage of the last LLM response
     problems: list = field(default_factory=list)  # last validation problems
-    reason: str = ""       # "ok" | "bad_submits" | "text_answer" | "step_cap"
+    reason: str = ""       # ok | bad_submits | text_answer | step_cap | deadline
 
 
 def run_submit_loop(client, model: str, messages: list, *,
@@ -39,10 +40,11 @@ def run_submit_loop(client, model: str, messages: list, *,
                     budget_msg: str,
                     reject_msg: Callable[[list], str],
                     trace=None, component: str = "",
-                    label: str = "",
-                    on_text_answer: str = "raise",
-                    text_answer_problem: str = "",
-                    text_answer_nudge: str = "") -> LoopResult:
+                     label: str = "",
+                     on_text_answer: str = "raise",
+                     text_answer_problem: str = "",
+                     text_answer_nudge: str = "",
+                     deadline=None) -> LoopResult:
     """Run the loop until a validated submit, a failure, or the step cap.
 
     parse: raw submit-arguments JSON -> (payload, problems); the payload
@@ -59,15 +61,31 @@ def run_submit_loop(client, model: str, messages: list, *,
     empty_retried = False
     last_problems: list = []
     for step in range(1, max_steps + 1):
+        request_timeout = None
+        if deadline is not None:
+            # Take one monotonic snapshot for both the go/no-go decision and
+            # the request cap.  Reading the clock twice leaves a boundary race
+            # where the second read can reach zero after the first passed.
+            request_timeout = deadline.request_timeout(REQUEST_TIMEOUT)
+            if request_timeout <= 0.0:
+                tev(trace, "deadline_exhausted", component=component,
+                    completed_steps=step - 1,
+                    budget_seconds=deadline.timeout_seconds)
+                return LoopResult(steps=step - 1, problems=last_problems,
+                                  reason="deadline")
         # Graceful stop condition: on the last step, withdraw the explore
         # tools and demand the submit, instead of failing at the cap.
         final = step == max_steps
         if final:
             messages.append({"role": "user", "content": budget_msg})
+        request_options = {}
+        if request_timeout is not None:
+            request_options["timeout"] = request_timeout
         response = client.chat.completions.create(
             model=model, max_tokens=max_tokens, temperature=temperature,
             tools=[submit_tool] if final else explore_tools + [submit_tool],
             tool_choice="auto", messages=messages,
+            **request_options,
         )
         msg = response.choices[0].message
         tool_calls = msg.tool_calls or []
