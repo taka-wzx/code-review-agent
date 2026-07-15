@@ -16,7 +16,7 @@ budgeted so the pack cannot blow up the prompt.
 import re
 from pathlib import Path
 
-from code_review_agent.tools import SKIP_DIRS
+from code_review_agent.tools import _iter_text_files
 
 CONVENTION_FILES = ("CLAUDE.md", "CONVENTIONS.md", "CONTRIBUTING.md")
 CONVENTIONS_CAP = 6_000      # chars per conventions file
@@ -59,8 +59,12 @@ def find_callers(repo: Path, symbol: str, exclude: set[str]) -> list[tuple[str, 
     their full content is already in the pack).
     """
     out = []
-    for py in sorted(repo.rglob("*.py")):
-        if any(part in SKIP_DIRS for part in py.parts):
+    # Shared pruned walk (tools._iter_text_files): never descends into
+    # vcs/venv/cache trees (rglob walked all of .venv before filtering, and
+    # find_callers runs once per changed symbol), and matches the suffix
+    # case-insensitively like every other repo tool.
+    for py in _iter_text_files(repo):
+        if py.suffix.lower() != ".py":
             continue
         rel = py.relative_to(repo).as_posix()
         if rel in exclude:

@@ -61,6 +61,15 @@ class TestFindCallers(RepoCase):
         callers = find_callers(self.repo, "run", set())
         self.assertEqual([rel for rel, _ in callers], ["m.py"])
 
+    def test_uppercase_extension_still_scanned(self):
+        # rglob("*.py") matched Foo.PY on Windows; the pruned walk must not
+        # silently drop such callers (suffix is matched case-insensitively,
+        # same as tools._iter_text_files).
+        (self.repo / "Caller.PY").write_text(
+            "job.run(now=True)\n", encoding="utf-8")
+        callers = find_callers(self.repo, "run", set())
+        self.assertEqual([rel for rel, _ in callers], ["Caller.PY"])
+
 
 class TestReadFileGuards(RepoCase):
     def test_refuses_dotenv(self):
