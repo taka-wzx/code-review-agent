@@ -354,6 +354,34 @@ the real issue is sufficient for this contract's completion count.
 
 ## Delivery and handoff
 
+### Manual Claude Code Phase 1 review
+
+After Codex commits implementation sequence step 1, ownership transfers for a
+time-bounded manual Claude Code review. Codex makes no further edits until the
+Claude commit is returned. During this review Claude Code may edit only:
+
+- `src/code_review_agent/repair_state.py`
+- `src/code_review_agent/repair_budget.py`
+- `src/code_review_agent/repair_approval.py`
+- `src/code_review_agent/repair_checkpoint.py`
+- `tests/test_week3_state.py`
+- `tests/test_week3_recovery.py`
+- new `docs/reviews/week3-phase1-claude.md`
+
+All other paths are read-only. Claude reviews state-transition correctness,
+concurrent and restart-safe budget accounting, approval replay/scope/expiry
+guards, checkpoint atomicity and corruption handling, and tests for bypasses or
+unsafe recovery. It may fix confirmed defects only within the writable paths;
+it must not add runtime integration, CLI behavior, sandbox commands, worktree
+management, dependencies, prompts, eval changes, or unrelated refactors.
+
+Claude runs both focused Week 3 suites and `scripts/verify.py` without
+`--eval-assets`, reviews its complete diff, writes the review report, and
+creates one local commit on `claude/week3-phase1-review`. It must not merge,
+push, or modify `master`. The returned handoff includes branch, full commit
+SHA, changed files, commands/results, findings fixed or rejected, and remaining
+risks.
+
 Codex reports changed files, focused and full validation results, Docker test
 results or the exact unavailable-environment limitation, branch and commit,
 known risks, and any ownership deviation. If the user elects a manual Claude
