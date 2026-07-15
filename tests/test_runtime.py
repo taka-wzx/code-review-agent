@@ -138,10 +138,17 @@ class TestRepoTools(RepoCase):
         self.assertEqual(run_linter(self.repo, "app.py"), "No lint findings in app.py.")
         run.return_value = SimpleNamespace(stdout="", stderr="No module named pyflakes")
         self.assertIn("pyflakes is not installed", run_linter(self.repo, "app.py"))
-        run.return_value = SimpleNamespace(stdout=str(source) + ":1: issue" + "x" * 5000,
-                                           stderr="")
+        # run_linter resolves the target before passing it to pyflakes.  On
+        # Windows runners a TemporaryDirectory path may use an 8.3 alias
+        # (RUNNER~1) while Path.resolve() expands it; make the double echo the
+        # exact subprocess argv instead of a platform-dependent spelling.
+        resolved_source = source.resolve()
+        run.return_value = SimpleNamespace(
+            stdout=str(resolved_source) + ":1: issue" + "x" * 5000,
+            stderr="",
+        )
         result = run_linter(self.repo, "app.py")
-        self.assertNotIn(str(source), result)
+        self.assertNotIn(str(resolved_source), result)
         self.assertIn("...[truncated]", result)
         run.side_effect = subprocess.TimeoutExpired("pyflakes", 30)
         self.assertIn("timed out", run_linter(self.repo, "app.py"))
