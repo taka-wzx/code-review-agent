@@ -16,7 +16,9 @@ def _loc(f: dict) -> str:
 
 
 def _finding_lines(f: dict) -> list[str]:
-    badge = _SEV_BADGE.get(f.get("severity"), f.get("severity", "?"))
+    raw_severity = f.get("severity")
+    severity = raw_severity if isinstance(raw_severity, str) else "?"
+    badge = _SEV_BADGE.get(severity, severity)
     out = [f"- **{badge}** `{_loc(f)}` — {f.get('issue', '').strip()}"]
     suggestion = f.get("suggestion", "").strip()
     if suggestion:

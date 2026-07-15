@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.10", "3.11", "3.12"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
         include:
           - os: windows-latest
             python: "3.11"
@@ -21,22 +21,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install package (editable) + dev tools
-        run: |
-          python -m pip install -e .
-          python -m pip install ruff coverage
-      - name: Lint (ruff)
-        run: python -m ruff check .
-      - name: Unit + golden tests (zero API calls) with coverage
-        run: python -m coverage run --source=src -m unittest discover -s tests -v
-      - name: Coverage report (informational, no threshold yet)
-        run: python -m coverage report --show-missing
-      - name: Packaging smoke (console script starts)
-        run: |
-          crag --help
-          python -m code_review_agent --help
-      - name: Eval asset consistency (diffs vs fixture repo vs truth)
-        run: python eval/check_consistency.py eval eval/holdout
+      - name: Install package and dev validation tools
+        run: python -m pip install -e ".[dev]"
+      - name: Offline validation
+        run: python scripts/verify.py --eval-assets
 
   lock-check:
     # The lockfile documents the exact environment evals were run in;
@@ -52,3 +40,12 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install -e . --no-deps
           python -c "import code_review_agent"
+
+  container-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build CLI image
+        run: docker build --tag code-review-agent:ci .
+      - name: Start CLI image
+        run: docker run --rm code-review-agent:ci --help

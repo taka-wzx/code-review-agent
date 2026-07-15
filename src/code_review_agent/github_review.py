@@ -67,7 +67,9 @@ def snap_line(path: str, line, commentable: dict, tol: int = SNAP_TOL):
 
 
 def _comment_body(f: dict) -> str:
-    badge = _SEV_BADGE.get(f.get("severity"), f.get("severity", "?"))
+    raw_severity = f.get("severity")
+    severity = raw_severity if isinstance(raw_severity, str) else "?"
+    badge = _SEV_BADGE.get(severity, severity)
     out = [f"**{badge}** {f.get('issue', '').strip()}"]
     if f.get("verification") == "uncertain":
         out.append("\n> ⚠️ the two verification passes disagreed"

@@ -52,6 +52,40 @@ def _read_capped(path: Path, cap: int) -> str:
     return text if len(text) <= cap else text[:cap] + "\n...[truncated]"
 
 
+def _source_roots(repo: Path, importing_rel: str) -> list[Path]:
+    """Import search roots for the repository's post-change source tree.
+
+    A conventional ``src/`` layout puts importable packages under ``repo/src``
+    rather than directly under ``repo``. Prefer that root when the importing
+    file itself lives under ``src/``; keep the repository root as a fallback
+    for flat-layout projects and repo-local helper modules.
+    """
+    src = repo / "src"
+    importer_in_src = Path(importing_rel).parts[:1] == ("src",)
+    roots = ([src, repo] if importer_in_src else [repo, src])
+    return [root for root in roots if root.is_dir()]
+
+
+def _resolve_module_file(repo: Path, mod: str, importing_rel: str) -> Path | None:
+    """Resolve ``pkg.mod`` to a repo file across flat and ``src/`` layouts."""
+    parts = mod.split(".")
+    for root in _source_roots(repo, importing_rel):
+        base = root.joinpath(*parts)
+        for candidate in (base.with_suffix(".py"), base / "__init__.py"):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _looks_in_project(repo: Path, mod: str, importing_rel: str) -> bool:
+    """Whether the import's top-level name belongs to this repository."""
+    top = mod.split(".")[0]
+    for root in _source_roots(repo, importing_rel):
+        if (root / top).is_dir() or (root / (top + ".py")).is_file():
+            return True
+    return False
+
+
 def find_callers(repo: Path, symbol: str, exclude: set[str]) -> list[tuple[str, str]]:
     """(rel_path, snippet) for files that call `symbol(` outside its def.
 
@@ -137,11 +171,19 @@ def build_context(diff_text: str, repo: Path, log=lambda msg: None) -> str:
             if not mod or mod.startswith(".") or mod in seen_mods:
                 continue
             seen_mods.add(mod)
-            mod_rel = mod.replace(".", "/") + ".py"
+            mp = _resolve_module_file(repo, mod, rel)
+            if mp is not None:
+                mod_rel = mp.relative_to(repo).as_posix()
+            else:
+                # Use the source root that best matches the importing file in
+                # the diagnostic. This is a hint only; resolution above checks
+                # every supported root.
+                preferred = _source_roots(repo, rel)[0]
+                mod_rel = (preferred.joinpath(*mod.split("."))
+                           .with_suffix(".py").relative_to(repo).as_posix())
             if mod_rel in files:
                 continue   # full content already in the pack
-            mp = repo / mod_rel
-            if mp.is_file():
+            if mp is not None:
                 if n_imports >= MAX_IMPORT_FILES:
                     log(f"import cap reached; skipping {mod_rel}")
                     continue
@@ -150,8 +192,7 @@ def build_context(diff_text: str, repo: Path, log=lambda msg: None) -> str:
                 n_imports += 1
                 log(f"import: {mod_rel} (from {rel})")
             else:
-                top = mod.split(".")[0]
-                if (repo / top).is_dir() or (repo / (top + ".py")).is_file():
+                if _looks_in_project(repo, mod, rel):
                     sections.append(f"## Import note\n\n`{mod}` is imported by {rel} "
                                     f"but `{mod_rel}` does not exist in this "
                                     "repository -- the import cannot resolve.")
