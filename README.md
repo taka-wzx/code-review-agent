@@ -321,6 +321,13 @@ truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM
 - **holdout 满分 7/7/零噪音,h2_hud 2/2**——W15 砍杀经"补声明后果"truth-set 修正后首次
   观察即修复。
 - **鲁棒性双修**(W16 实证失败模式):anchor 空响应重试一次、verifier max_tokens 8000。
+- **鲁棒性补丁(W17 后审阅轮)**:finder2 与 verifier 各 pass 的**每请求级** API 异常
+  (超时/5xx/连接)改走既有降级语义(finder2 退锚定单跑、verifier degraded/failed_open),
+  不再击穿整个 run 丢弃已完成结果;**账号级异常(AuthenticationError/RateLimitError)仍
+  穿透**到 main 的专用出口——凭据/配额问题必须响亮失败,不得静默 fail-open;`--post` 的
+  --pr 支持 URL 形式(URL 显式钉 owner/repo,不再依赖 cwd remote 解析),发帖路径在
+  review 运行前先验证(fail-fast);find_callers 复用 tools 的剪枝遍历(后缀大小写不
+  敏感;与工具链一致,不再跟随目录符号链接)。
 - **B3(dry-run 口径)**:`github_review.py` 行映射+行内评论载荷,`crag --pr N --post[-dry-run]`,
   CI 模板 docs/examples/review.yml;真实 b489ae7 数据 4/5 内联。live posting 待 GitHub 仓库。
 - 全轮 LLM 实耗 ≈ ¥3.4(预算 ≤¥6);142 零 API 测试。验收判定:**通过、不回滚**(详见
@@ -329,6 +336,10 @@ truth-set 张力待 W16)。VERIFIER_SYSTEM 连续第三周零改动。全周 LLM
 ## 限制
 
 - 不跑测试(read_file/search_repo/run_linter 均为静态/只读)
+- **context pack 的 import 追踪不识别 src/ 布局**:`context.py` 按 `mod.replace('.','/')+'.py'`
+  从仓库根解析,src/ 布局仓库(含本仓库自身)的包内 import 会静默走"external/stdlib"分支,
+  flag/常量定义不被预取(finder 仍可用 read_file 自取)。修复会改变 finder 输入分布,
+  按纪律需全量 sweep+回放验收,挂 W18 候选
 - **成本已按真实计费裁决(W14 关闭)**:全量单轮实测 **¥1.72**(deepseek-v4-pro,hit 价=miss
   的 1/120、cache 命中 90%),单次 review 均值 ¥0.11——W12 双跑 +69.7%(原始 tokens_in)豁免
   转为"实测不重要"的永久结论,回收机制不做。**输出占真实账单 72.6%**,今后成本杠杆在
