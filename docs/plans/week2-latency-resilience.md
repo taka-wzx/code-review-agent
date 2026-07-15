@@ -58,7 +58,7 @@ Each path has exactly one writer during the manual two-agent phase.
 - Required tests: focused Week 2 tests, full unittest discovery, Ruff, mypy,
   both CLI smoke tests, and eval-asset consistency through
   `scripts/verify.py --eval-assets` without any LLM calls.
-- Delivery commit: filled after completion.
+- Delivery commit: `8b8fd978172f9ef4ebf518af065a954bdf93e409`
 
 ### Claude Code
 
@@ -119,10 +119,23 @@ external LLM calls.
 
 ## Delivery report
 
-- Summary: pending
-- Changed files: pending
-- Commit: pending
-- Commands run and results: pending
-- Known risks or assumptions: pending
-- Suggested review focus: deadline boundaries, shared-client thread safety,
-  trace serialization, and preservation of degradation semantics
+- Summary: finder anchor/sampling and verifier A/B now run as concurrent lane
+  pairs. All loops share a monotonic 300-second soft deadline, cap new request
+  timeouts by remaining budget, and retain the original fatal/degraded/fail-open
+  policies. JSONL trace writes are serialized and parallel stage timings are
+  recorded.
+- Changed files: `agent.py`, `agentloop.py`, new `orchestration.py`,
+  `tracelog.py`, `verifier.py`, `test_golden.py`, and new
+  `test_week2_orchestration.py`.
+- Commit: `8b8fd978172f9ef4ebf518af065a954bdf93e409`
+- Commands run and results: focused Week 2 tests 12/12; full offline entry
+  point 190/190 tests, 96% branch coverage (85% gate), Ruff clean, mypy clean
+  across 14 source files, both CLI smoke tests passed, eval 16/30 and holdout
+  6/7 asset consistency passed; zero LLM API calls.
+- Known risks or assumptions: the deadline is cooperative and cannot force-kill
+  an in-flight synchronous SDK request; live provider latency was not measured;
+  parallel calls increase instantaneous provider concurrency and may encounter
+  stricter rate limits even though the planned number of calls is unchanged.
+- Suggested review focus: deadline boundaries, shared OpenAI-compatible client
+  use across two threads, exception priority, trace serialization, eager
+  finder2 launch on anchor failure, and preservation of degradation semantics.
