@@ -29,9 +29,16 @@ import sys
 import openai
 
 from code_review_agent.agentloop import run_submit_loop
+from code_review_agent.orchestration import (
+    DEFAULT_REVIEW_TIMEOUT_SECONDS,
+    Deadline,
+    run_parallel_pair,
+)
 from code_review_agent.sentinels import rescue_forbidden_drops
 from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
 from code_review_agent.tracelog import tev
+
+_run_pair = run_parallel_pair
 
 VERIFIER_SYSTEM = """You are a strict code-review verifier. You receive a
 diff, repository context, and a numbered list of candidate findings from a
@@ -184,7 +191,8 @@ def merge_verdicts(findings: list, verdicts_a: list, verdicts_b: list) -> tuple[
 
 
 def _tiebreak_pass(client, model, review_input: str, kept: list,
-                   dropped: list, repo_root, trace=None) -> tuple[list, list]:
+                   dropped: list, repo_root, trace=None,
+                   deadline=None) -> tuple[list, list]:
     """Third vote on A/B disagreements only (W17) -- KEPT OFF BY DEFAULT,
     refuted by data. Motivation: the uncertain channel measured 43%
     matched / 49% noise / 8% FP across W10-W14, so a pass C re-judging
@@ -205,7 +213,8 @@ def _tiebreak_pass(client, model, review_input: str, kept: list,
     sub = [{k: v for k, v in f.items()
             if k not in ("verification", "dissent_reason")} for f in disputed]
     vc = _verify_pass(client, model, review_input, sub, repo_root,
-                      trace=trace, pass_id="C", reverse_order=False)
+                      trace=trace, pass_id="C", reverse_order=False,
+                      deadline=deadline)
     if vc is None:
         print("[verifier] tiebreak pass failed -- disagreements stay "
               "uncertain", file=sys.stderr)
@@ -255,7 +264,7 @@ def _apply_sentinel(kept: list, dropped: list, trace) -> tuple[list, list]:
 
 def _verify_pass(client, model: str, review_input: str, findings: list,
                  repo_root, trace=None, pass_id: str = "A",
-                 reverse_order: bool = False):
+                 reverse_order: bool = False, deadline=None):
     """One independent verifier conversation (unchanged baseline prompt).
 
     reverse_order presents the numbered findings back-to-front -- explicit
@@ -303,7 +312,8 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
             text_answer_problem="verifier answered in text instead of calling "
                                 "submit_verdicts",
             text_answer_nudge="You must call submit_verdicts covering "
-                              "every finding index exactly once.",
+                               "every finding index exactly once.",
+            deadline=deadline,
         )
     except (openai.AuthenticationError, openai.RateLimitError):
         # Account-level failures hit every pass the same way; degrading
@@ -326,6 +336,9 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
             drops=sum(1 for v in verdicts if v["verdict"] == "drop"))
         return verdicts
 
+    if result.reason == "deadline":
+        result.problems = ["review_deadline_exhausted"]
+
     print(f"[{component}] pass FAILED ({result.reason} at step "
           f"{result.steps}); last problems: {result.problems}",
           file=sys.stderr)
@@ -334,9 +347,9 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
     return None
 
 
-def verify_findings(client, model: str, review_input: str, findings: list,
-                    repo_root, trace=None,
-                    tiebreak: bool = False) -> tuple[list, list, str]:
+def _verify_findings(client, model: str, review_input: str, findings: list,
+                     repo_root, trace=None, tiebreak: bool = False, *,
+                     deadline: Deadline) -> tuple[list, list, str]:
     """Double-verification orchestrator (W9). review_input is the exact
     user content the finder saw, so all passes share one view; the tools
     let each pass check anything beyond that view itself.
@@ -352,10 +365,20 @@ def verify_findings(client, model: str, review_input: str, findings: list,
     """
     if not findings:
         return [], [], "ok"
-    va = _verify_pass(client, model, review_input, findings, repo_root,
-                      trace=trace, pass_id="A", reverse_order=False)
-    vb = _verify_pass(client, model, review_input, findings, repo_root,
-                      trace=trace, pass_id="B", reverse_order=True)
+    outcome_a, outcome_b = _run_pair(
+        lambda: _verify_pass(client, model, review_input, findings, repo_root,
+                             trace=trace, pass_id="A", reverse_order=False,
+                             deadline=deadline),
+        lambda: _verify_pass(client, model, review_input, findings, repo_root,
+                             trace=trace, pass_id="B", reverse_order=True,
+                             deadline=deadline),
+        stage="verifier", trace=trace,
+    )
+    if outcome_a.error is not None:
+        raise outcome_a.error
+    if outcome_b.error is not None:
+        raise outcome_b.error
+    va, vb = outcome_a.value, outcome_b.value
 
     if va is None and vb is None:
         print(f"[verifier] both passes FAILED, failing open -- keeping all "
@@ -375,7 +398,8 @@ def verify_findings(client, model: str, review_input: str, findings: list,
     kept, dropped = merge_verdicts(findings, va, vb)
     if tiebreak:
         kept, dropped = _tiebreak_pass(client, model, review_input, kept,
-                                       dropped, repo_root, trace=trace)
+                                       dropped, repo_root, trace=trace,
+                                       deadline=deadline)
     kept, dropped = _apply_sentinel(kept, dropped, trace)
     n_unc = sum(1 for f in kept if f.get("verification") == "uncertain")
     print(f"[verifier] merged: {len(kept)} kept "
@@ -384,3 +408,14 @@ def verify_findings(client, model: str, review_input: str, findings: list,
     tev(trace, "verdicts", kept=len(kept), dropped=len(dropped),
         confirmed=len(kept) - n_unc, uncertain=n_unc)
     return kept, dropped, "ok"
+
+
+def verify_findings(client, model: str, review_input: str, findings: list,
+                    repo_root, trace=None,
+                    tiebreak: bool = False) -> tuple[list, list, str]:
+    """Public standalone verifier entry point with its own latency budget."""
+    return _verify_findings(
+        client, model, review_input, findings, repo_root, trace=trace,
+        tiebreak=tiebreak,
+        deadline=Deadline.after(DEFAULT_REVIEW_TIMEOUT_SECONDS),
+    )

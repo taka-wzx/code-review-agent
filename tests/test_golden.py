@@ -21,6 +21,7 @@ import openai
 from code_review_agent import agent
 from code_review_agent.agent import SUBMIT_TOOL, SYSTEM, run_review
 from code_review_agent.context import build_context
+from code_review_agent.orchestration import CallOutcome
 from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL
 from code_review_agent.verifier import VERDICT_TOOL, VERIFIER_SYSTEM, verify_findings
 
@@ -66,6 +67,17 @@ EXPLORE_AND_SUBMIT = [READ_FILE_TOOL, SEARCH_REPO_TOOL, RUN_LINTER_TOOL,
                       SUBMIT_TOOL]
 
 
+def serial_pair(first, second, **_kwargs):
+    """Keep protocol goldens deterministic; Week 2 tests exercise threads."""
+    outcomes = []
+    for call in (first, second):
+        try:
+            outcomes.append(CallOutcome(value=call()))
+        except Exception as exc:
+            outcomes.append(CallOutcome(error=exc))
+    return tuple(outcomes)
+
+
 def assistant_msg(call_id, name, arguments) -> dict:
     """The assistant message the loop reconstructs for one tool call."""
     return {"role": "assistant", "content": "",
@@ -76,6 +88,11 @@ def assistant_msg(call_id, name, arguments) -> dict:
 
 class RepoCase(unittest.TestCase):
     def setUp(self):
+        for target in ("code_review_agent.agent._run_pair",
+                       "code_review_agent.verifier._run_pair"):
+            patcher = mock.patch(target, side_effect=serial_pair)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.repo = Path(self._tmp.name)
@@ -166,13 +183,14 @@ class TestFinderGolden(RepoCase):
         client = FakeClient([
             response([tool_call("c1", "submit_review", BAD_REVIEW)]),
             response([tool_call("c2", "submit_review", BAD_REVIEW)]),
+            # Finder2 starts eagerly in parallel but cannot hide anchor failure.
+            response([tool_call("c3", "submit_review", DUP_REVIEW)]),
         ])
         with self.assertRaises(RuntimeError) as cm:
             self.run_finder(client)
         self.assertIn("submit_review still invalid after 2 attempts",
                       str(cm.exception))
-        # a fatal anchor run never launches the sampling run
-        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(len(client.requests), 3)
 
     def test_budget_exhaustion_withdraws_tools_and_nudges(self):
         client = FakeClient([
@@ -195,6 +213,7 @@ class TestFinderGolden(RepoCase):
     def test_step_cap_raises(self):
         client = FakeClient([
             response([tool_call("c1", "read_file", {"path": "mod.py"})]),
+            response([tool_call("c2", "submit_review", DUP_REVIEW)]),
         ])
         with mock.patch.object(agent, "MAX_STEPS", 1):
             with self.assertRaises(RuntimeError) as cm:
@@ -203,15 +222,18 @@ class TestFinderGolden(RepoCase):
                       str(cm.exception))
         # Step 1 is already the final step: submit-only tools + nudge.
         self.assertEqual(client.requests[0]["tools"], [SUBMIT_TOOL])
-        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(len(client.requests), 2)
 
     def test_text_answer_raises(self):
-        client = FakeClient([response(content="looks fine to me")])
+        client = FakeClient([
+            response(content="looks fine to me"),
+            response([tool_call("c2", "submit_review", DUP_REVIEW)]),
+        ])
         with self.assertRaises(RuntimeError) as cm:
             self.run_finder(client)
         self.assertIn("model stopped without calling submit_review",
                       str(cm.exception))
-        self.assertEqual(len(client.requests), 1)
+        self.assertEqual(len(client.requests), 2)
 
     # W17: a completely empty response (no text, no tool calls) gets one
     # free identical-request retry instead of killing the anchor run.
@@ -231,12 +253,15 @@ class TestFinderGolden(RepoCase):
                        "step": 1}, trace.events)
 
     def test_second_empty_response_still_raises(self):
-        client = FakeClient([response(content=None), response(content="")])
+        client = FakeClient([
+            response(content=None), response(content=""),
+            response([tool_call("c2", "submit_review", DUP_REVIEW)]),
+        ])
         with self.assertRaises(RuntimeError) as cm:
             self.run_finder(client)
         self.assertIn("model stopped without calling submit_review",
                       str(cm.exception))
-        self.assertEqual(len(client.requests), 2)
+        self.assertEqual(len(client.requests), 3)
 
     def test_run2_bad_submits_degrade_to_anchor(self):
         client = FakeClient([
