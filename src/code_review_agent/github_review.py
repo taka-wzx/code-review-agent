@@ -110,10 +110,34 @@ def build_review_payload(review: dict, diff_text: str,
             "comments": comments}
 
 
+_PR_URL_RE = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)",
+                        re.IGNORECASE)
+
+
+def pr_api_path(pr: str) -> str:
+    """REST path of the reviews endpoint for a --pr value.
+
+    `gh pr diff` accepts both a number and a PR URL, but the URL cannot be
+    embedded in the API path verbatim. A number keeps the {owner}/{repo}
+    placeholder form (resolved from the cwd remote, as before); a URL pins
+    owner/repo explicitly -- the cwd remote may point at a different repo
+    than the URL, and the placeholder form would silently post to the wrong
+    PR of the same number. Anything else raises ValueError."""
+    pr = str(pr).strip().rstrip("/")
+    if pr.isdigit():
+        return f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews"
+    m = _PR_URL_RE.match(pr)
+    if m:
+        owner, repo, number = m.groups()
+        return f"repos/{owner}/{repo}/pulls/{number}/reviews"
+    raise ValueError(f"--post needs a PR number or a github.com PR URL; "
+                     f"cannot derive one from {pr!r}")
+
+
 def gh_post_command(pr: str, payload: dict) -> list[str]:
-    """argv for posting the payload via gh (reads owner/repo from the cwd
-    remote). The payload itself travels on stdin (--input -)."""
-    return ["gh", "api", f"repos/{{owner}}/{{repo}}/pulls/{pr}/reviews",
+    """argv for posting the payload via gh. The payload itself travels on
+    stdin (--input -)."""
+    return ["gh", "api", pr_api_path(pr),
             "--method", "POST", "--input", "-"]
 
 

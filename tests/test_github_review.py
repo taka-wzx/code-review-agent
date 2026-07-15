@@ -5,7 +5,8 @@ import unittest
 
 from code_review_agent.github_review import (build_review_payload,
                                              commentable_lines,
-                                             format_dry_run, snap_line)
+                                             format_dry_run, gh_post_command,
+                                             pr_api_path, snap_line)
 
 DIFF = """\
 diff --git a/pkg/mod.py b/pkg/mod.py
@@ -107,6 +108,36 @@ class TestBuildPayload(unittest.TestCase):
         text = format_dry_run("42", p)
         self.assertIn("gh api repos/{owner}/{repo}/pulls/42/reviews", text)
         self.assertIn('"event": "COMMENT"', text)
+
+
+class TestPrApiPath(unittest.TestCase):
+    def test_number_keeps_placeholder_form(self):
+        self.assertEqual(pr_api_path("42"),
+                         "repos/{owner}/{repo}/pulls/42/reviews")
+
+    def test_url_pins_owner_repo_explicitly(self):
+        self.assertEqual(pr_api_path("https://github.com/o/r/pull/7"),
+                         "repos/o/r/pulls/7/reviews")
+
+    def test_url_with_trailing_slash_or_suffix(self):
+        self.assertEqual(pr_api_path("https://github.com/o/r/pull/7/"),
+                         "repos/o/r/pulls/7/reviews")
+        self.assertEqual(pr_api_path("https://github.com/o/r/pull/7/files"),
+                         "repos/o/r/pulls/7/reviews")
+
+    def test_url_host_case_insensitive(self):
+        self.assertEqual(pr_api_path("https://GitHub.com/o/r/pull/7"),
+                         "repos/o/r/pulls/7/reviews")
+
+    def test_underivable_forms_raise(self):
+        for bad in ("", "abc", "-7", "https://github.com/o/r/issues/7",
+                    "https://evil.example/o/r/pull/7"):
+            with self.assertRaises(ValueError):
+                pr_api_path(bad)
+
+    def test_gh_post_command_embeds_the_derived_path(self):
+        cmd = gh_post_command("https://github.com/o/r/pull/7", {})
+        self.assertIn("repos/o/r/pulls/7/reviews", cmd)
 
 
 if __name__ == "__main__":

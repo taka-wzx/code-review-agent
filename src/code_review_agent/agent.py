@@ -343,9 +343,17 @@ def main():
     if sum(sources) != 1:
         parser.error("give exactly one diff source: a diff file, --commit, "
                      "--uncommitted, or --pr")
-    if (args.post or args.post_dry_run) and not args.pr:
-        parser.error("--post/--post-dry-run need --pr (inline comments "
-                     "attach to a pull request)")
+    if args.post or args.post_dry_run:
+        if not args.pr:
+            parser.error("--post/--post-dry-run need --pr (inline comments "
+                         "attach to a pull request)")
+        # Validate the API path now: an unpostable --pr form must fail
+        # before the review runs, not after the tokens are spent.
+        from code_review_agent.github_review import pr_api_path
+        try:
+            pr_api_path(args.pr)
+        except ValueError as e:
+            parser.error(str(e))
     if args.diff:
         diff_text = Path(args.diff).read_text(encoding="utf-8", errors="replace")
     else:
