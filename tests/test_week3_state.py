@@ -62,14 +62,59 @@ class TestRepairStateMachine(unittest.TestCase):
     def test_submit_can_return_for_new_commit_approval(self):
         machine = RepairStateMachine(
             state=RepairState.SUBMIT,
-            history=[RepairState.DISCOVER, RepairState.SUBMIT],
+            history=[
+                RepairState.DISCOVER,
+                RepairState.PLAN,
+                RepairState.PATCH,
+                RepairState.TEST,
+                RepairState.REFLECT,
+                RepairState.WAIT_APPROVAL,
+                RepairState.SUBMIT,
+            ],
         )
         machine.transition(RepairState.WAIT_APPROVAL)
         self.assertEqual(machine.state, RepairState.WAIT_APPROVAL)
 
+    def test_submit_can_still_fail_closed_or_cancel(self):
+        self.assertEqual(
+            allowed_targets(RepairState.SUBMIT),
+            frozenset(
+                {RepairState.WAIT_APPROVAL, RepairState.FAILED, RepairState.CANCELLED}
+            ),
+        )
+
+    def test_every_non_terminal_state_can_fail_closed_and_cancel(self):
+        for state in RepairState:
+            if state in (RepairState.FAILED, RepairState.CANCELLED):
+                continue
+            targets = allowed_targets(state)
+            self.assertIn(RepairState.FAILED, targets, state)
+            self.assertIn(RepairState.CANCELLED, targets, state)
+
     def test_history_must_end_at_current_state(self):
         with self.assertRaisesRegex(ValueError, "history must end"):
             RepairStateMachine(RepairState.PLAN, [RepairState.DISCOVER])
+
+    def test_restored_history_cannot_encode_an_illegal_path(self):
+        with self.assertRaisesRegex(IllegalTransitionError, "DISCOVER -> SUBMIT"):
+            RepairStateMachine(
+                state=RepairState.SUBMIT,
+                history=[RepairState.DISCOVER, RepairState.SUBMIT],
+            )
+
+    def test_restored_history_must_start_at_discover(self):
+        with self.assertRaisesRegex(ValueError, "start at DISCOVER"):
+            RepairStateMachine(state=RepairState.PLAN, history=[RepairState.PLAN])
+        with self.assertRaisesRegex(ValueError, "start at DISCOVER"):
+            RepairStateMachine(state=RepairState.FAILED, history=[])
+
+    def test_unknown_state_values_are_rejected(self):
+        machine = RepairStateMachine()
+        with self.assertRaises(ValueError):
+            machine.transition("NOT_A_STATE")
+        self.assertEqual(machine.state, RepairState.DISCOVER)
+        with self.assertRaises(ValueError):
+            RepairStateMachine(state="NOT_A_STATE", history=["NOT_A_STATE"])
 
 
 class TestBudgetManager(unittest.TestCase):
@@ -170,6 +215,32 @@ class TestBudgetManager(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid budget snapshot"):
             BudgetManager.from_dict(snapshot)
 
+    def test_snapshot_with_non_numeric_values_cannot_restore(self):
+        manager = BudgetManager()
+        cases = (
+            ("usage", "cost_usd", "0.0"),
+            ("usage", "elapsed_seconds", None),
+            ("limits", "total_seconds", "1800"),
+            ("limits", "total_cost_usd", True),
+        )
+        for section, name, value in cases:
+            snapshot = manager.to_dict()
+            snapshot[section][name] = value
+            with self.subTest(section=section, name=name), self.assertRaises(ValueError):
+                BudgetManager.from_dict(snapshot)
+
+    def test_truncated_snapshot_sections_cannot_reset_budget(self):
+        manager = BudgetManager()
+        manager.consume_tool_call()
+        snapshot = manager.to_dict()
+        del snapshot["usage"]["tool_calls"]
+        with self.assertRaisesRegex(ValueError, "usage is missing"):
+            BudgetManager.from_dict(snapshot)
+        snapshot = manager.to_dict()
+        del snapshot["limits"]["total_tokens"]
+        with self.assertRaisesRegex(ValueError, "limits is missing"):
+            BudgetManager.from_dict(snapshot)
+
 
 class TestApprovals(unittest.TestCase):
     @staticmethod
@@ -230,15 +301,35 @@ class TestApprovals(unittest.TestCase):
         self.assertEqual(ApprovalRecord.from_dict(record.to_dict()), record)
 
     def test_unsafe_write_paths_are_never_bindable(self):
-        for path in ("../outside.py", "/absolute.py", ".git/config", "C:/secret.txt"):
+        for path in (
+            "../outside.py",
+            "/absolute.py",
+            ".git/config",
+            "C:/secret.txt",
+            "vendor/.git/hooks/pre-commit",
+            "src/mod.py:stream",
+            "src/mod.py.",
+            "src/mod.py ",
+            "nul",
+            "src/CON.txt",
+            "//server/share/file.py",
+        ):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 self.write_approval(writable_paths=(path,))
+
+    def test_case_aliased_duplicate_paths_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unique"):
+            self.write_approval(writable_paths=("src/App.py", "src/app.py"))
 
     def test_serialized_paths_must_be_a_list_not_one_string(self):
         data = self.write_approval().binding.to_dict()
         data["writable_paths"] = "src/mod.py"
         with self.assertRaisesRegex(ValueError, "list of strings"):
             type(self.write_approval().binding).from_dict(data)
+
+    def test_directly_constructed_string_path_list_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "not one string"):
+            self.write_approval(writable_paths="src/mod.py")
 
 
 if __name__ == "__main__":

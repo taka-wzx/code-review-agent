@@ -15,11 +15,28 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
+from code_review_agent.repair_approval import (
+    WINDOWS_RESERVED_DEVICE_NAMES,
+    normalize_repo_paths,
+)
 from code_review_agent.repair_state import RepairState
 
 
 SCHEMA_VERSION = 1
-_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+# No trailing dot: Windows strips it, so "run." and "run" would alias the same
+# state directory and let one run clobber another run's snapshot.
+_RUN_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?\Z")
+
+
+def _require_valid_run_id(run_id: Any) -> str:
+    if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
+        raise ValueError(
+            "run_id must contain only letters, digits, dot, underscore, or dash, "
+            "start with a letter or digit, and not end with a dot"
+        )
+    if run_id.split(".")[0].upper() in WINDOWS_RESERVED_DEVICE_NAMES:
+        raise ValueError("run_id must not be a Windows reserved device name")
+    return run_id
 
 
 class CheckpointError(RuntimeError):
@@ -139,12 +156,15 @@ class RepairCheckpoint:
     updated_at: float = 0.0
 
     def __post_init__(self) -> None:
-        if not _RUN_ID.fullmatch(self.run_id):
-            raise ValueError("run_id must contain only letters, digits, dot, underscore, or dash")
+        _require_valid_run_id(self.run_id)
         for name in ("repository_id", "base_sha", "task_branch", "worktree"):
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
+        self.state = RepairState(self.state)
+        if not isinstance(self.writable_paths, (tuple, list)):
+            raise ValueError("writable_paths must be a sequence of path strings")
+        self.writable_paths = normalize_repo_paths(tuple(self.writable_paths))
         if isinstance(self.sequence, bool) or not isinstance(self.sequence, int) or self.sequence < 0:
             raise ValueError("sequence must be a non-negative integer")
         if not _finite_nonnegative(self.updated_at):
@@ -252,8 +272,7 @@ class CheckpointStore:
 
     @staticmethod
     def _validate_run_id(run_id: str) -> None:
-        if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
-            raise ValueError("invalid run_id")
+        _require_valid_run_id(run_id)
 
     def _run_dir(self, run_id: str) -> Path:
         self._validate_run_id(run_id)

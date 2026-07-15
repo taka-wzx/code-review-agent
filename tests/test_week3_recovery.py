@@ -170,6 +170,30 @@ class TestCheckpointStore(unittest.TestCase):
                 with self.subTest(run_id=run_id), self.assertRaises(ValueError):
                     store.snapshot_path(run_id)
 
+    def test_windows_aliasing_run_ids_are_rejected(self):
+        # "run." aliases "run" on Windows (trailing dot is stripped), which
+        # would let one run clobber another run's snapshot directory.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = CheckpointStore(Path(tmp))
+            for run_id in ("run.", "nul", "CON", "com1.log"):
+                with self.subTest(run_id=run_id), self.assertRaises(ValueError):
+                    store.snapshot_path(run_id)
+        with self.assertRaises(ValueError):
+            self.make_checkpoint("some-worktree", run_id="run-1.")
+
+    def test_checkpoint_writable_paths_cannot_escape_the_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = self.make_checkpoint(str(Path(tmp) / "worktree"))
+            for paths in (["../escape.py"], [".git/config"], ["src/mod.py:stream"]):
+                payload = checkpoint.to_dict()
+                payload["writable_paths"] = paths
+                with self.subTest(paths=paths), self.assertRaises(CheckpointCorrupt):
+                    RepairCheckpoint.from_dict(payload)
+            with self.assertRaises(ValueError):
+                self.make_checkpoint(
+                    str(Path(tmp) / "worktree"), writable_paths=("../escape.py",)
+                )
+
     def test_corrupt_journal_line_is_not_silently_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = CheckpointStore(Path(tmp))

@@ -1,6 +1,7 @@
 """One-use human approvals bound to an exact repair snapshot."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
 import math
@@ -36,25 +37,47 @@ def _required(name: str, value: str) -> None:
         raise ValueError(f"{name} must be a non-empty string")
 
 
-def _normalize_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
-    if not paths:
-        raise ValueError("write approval needs at least one writable path")
+# Reserved Win32 device basenames: writing to e.g. "nul" or "con.txt" inside a
+# worktree addresses a device, not a file, on Windows hosts.
+WINDOWS_RESERVED_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in range(1, 10)}
+    | {f"LPT{digit}" for digit in range(1, 10)}
+)
+
+
+def _validate_path_part(raw: str, part: str) -> None:
+    # ":" anywhere covers drive letters and NTFS alternate data streams
+    # ("src/mod.py:stream"); trailing dots/spaces alias a different file on
+    # Windows ("src/mod.py." opens "src/mod.py"), silently widening the scope.
+    if part in (".", "..") or ":" in part or part != part.rstrip(". "):
+        raise ValueError(f"writable path must be a normalized repo-relative path: {raw!r}")
+    if part.lower() == ".git":
+        raise ValueError(f".git cannot appear in a writable path: {raw!r}")
+    if part.split(".")[0].rstrip(" ").upper() in WINDOWS_RESERVED_DEVICE_NAMES:
+        raise ValueError(f"writable path contains a Windows reserved device name: {raw!r}")
+
+
+def normalize_repo_paths(paths: Iterable[str]) -> tuple[str, ...]:
+    """Normalize repo-relative POSIX paths, rejecting every escape or alias vector.
+
+    Shared by approval bindings and checkpoint payloads so both enforce the
+    same path scope. Accepts an empty iterable; callers that require at least
+    one path check that themselves.
+    """
+    if isinstance(paths, (str, bytes)):
+        raise ValueError("writable paths must be a sequence of path strings, not one string")
     normalized = []
     for raw in paths:
         _required("writable path", raw)
         path = PurePosixPath(raw.replace("\\", "/"))
-        if (
-            not path.parts
-            or path.is_absolute()
-            or ":" in path.parts[0]
-            or any(part in ("", ".", "..") for part in path.parts)
-        ):
+        if not path.parts or path.is_absolute():
             raise ValueError(f"writable path must be a normalized repo-relative path: {raw!r}")
-        if path.parts[0].lower() == ".git":
-            raise ValueError(".git cannot be approved as a writable path")
+        for part in path.parts:
+            _validate_path_part(raw, part)
         normalized.append(path.as_posix())
-    if len(set(normalized)) != len(normalized):
-        raise ValueError("writable paths must be unique")
+    if len({item.casefold() for item in normalized}) != len(normalized):
+        raise ValueError("writable paths must be unique (case-insensitively)")
     return tuple(sorted(normalized))
 
 
@@ -83,7 +106,11 @@ class ApprovalBinding:
                 or self.patch_attempt <= 0
             ):
                 raise ValueError("patch_attempt must be a positive integer")
-            object.__setattr__(self, "writable_paths", _normalize_paths(self.writable_paths))
+            if not self.writable_paths:
+                raise ValueError("write approval needs at least one writable path")
+            object.__setattr__(
+                self, "writable_paths", normalize_repo_paths(self.writable_paths)
+            )
             if self.test_result_hash or self.commit_message:
                 raise ValueError("write approval cannot contain commit-only fields")
         elif self.kind is ApprovalKind.COMMIT:

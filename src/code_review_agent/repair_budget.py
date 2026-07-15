@@ -1,7 +1,7 @@
 """Hard, restart-safe resource accounting for repair tasks."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 import math
 from threading import Lock
 from typing import Any
@@ -26,19 +26,40 @@ class BudgetAccountingError(BudgetError):
     pass
 
 
+def _real_number(name: str, value: Any) -> float:
+    """Reject non-numeric types outright: a parseable string must not linger in
+    the ledger only to break arithmetic (or comparisons) much later."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a real number, not {type(value).__name__}")
+    return float(value)
+
+
 def _positive_finite(name: str, value: float) -> None:
-    if not math.isfinite(float(value)) or float(value) <= 0:
+    number = _real_number(name, value)
+    if not math.isfinite(number) or number <= 0:
         raise ValueError(f"{name} must be a finite positive number")
 
 
 def _nonnegative_finite(name: str, value: float) -> None:
-    if not math.isfinite(float(value)) or float(value) < 0:
+    number = _real_number(name, value)
+    if not math.isfinite(number) or number < 0:
         raise ValueError(f"{name} must be a finite non-negative number")
 
 
 def _nonnegative_int(name: str, value: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _complete_section(name: str, data: Any, section_type: Any) -> dict[str, Any]:
+    """A restored snapshot section must carry every field: a truncated section
+    silently reverting to defaults would reset usage or relax limits."""
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} must be an object")
+    missing = sorted(item.name for item in fields(section_type) if item.name not in data)
+    if missing:
+        raise ValueError(f"{name} is missing required fields: {', '.join(missing)}")
+    return data
 
 
 @dataclass(frozen=True)
@@ -258,8 +279,8 @@ class BudgetManager:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "BudgetManager":
         try:
-            limits = BudgetLimits(**data["limits"])
-            usage = BudgetUsage(**data["usage"])
+            limits = BudgetLimits(**_complete_section("limits", data["limits"], BudgetLimits))
+            usage = BudgetUsage(**_complete_section("usage", data["usage"], BudgetUsage))
             reservations = [LLMReservation(**item) for item in data.get("reservations", [])]
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid budget snapshot: {exc}") from exc
