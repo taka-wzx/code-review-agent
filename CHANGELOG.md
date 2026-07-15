@@ -2,9 +2,26 @@
 
 本文件记录 code-review-agent 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+Week 2「延迟韧性」：审查通道阶段内并行 + 全程协作式软截止。公开接口、CLI、review JSON 结构、prompt/哨兵/评测资产均无变化。改动已在本地离线验证（190 测试 / 96% 分支覆盖率 / Ruff / mypy / 双 CLI 冒烟 / eval+holdout 一致性，零 LLM 调用），**尚未在 GitHub CI 上运行，也未做真实 provider 延迟基准**。
+
+### Added
+
+- **并行审查通道编排**（新模块 `orchestration.py`）：finder 锚定/采样两跑与 verifier A/B 两 pass 分别用两个线程阶段内并行（两阶段之间仍串联）；`run_parallel_pair` 收敛两 lane 的结果与异常后按原有优先级重放，保持锚定失败致命、采样/单 pass 失败降级、双 pass 失败 fail-open、AuthenticationError/RateLimitError 显式穿透的既有语义
+- **全 review 协作式延迟预算**：`run_review` 在上下文构建前启动 300 秒 monotonic 软截止，贯穿全部 finder/verifier loop；截止后不再发起新的 LLM 请求，每个新请求的 timeout 取剩余预算与原有 120s 单请求上限的较小值（软截止不强杀已在途的同步请求）
+- **并行阶段 / 截止 trace 遥测**：新增事件 `parallel_stage_started`、`parallel_stage_finished`（含阶段耗时与各 lane 异常类型）、`deadline_exhausted`（含组件与已完成步数）；既有事件的字段不变
+- **并发与超时回归测试**（`tests/test_week2_orchestration.py`，12 个，零 API）：barrier 验证两 lane 真实重叠、截止后零新请求、锚定截止致命 / finder2 截止降级 / verifier 截止 fail-open、全阶段共享同一 deadline、并发 trace 行完整性
+
+### Changed
+
+- finder 采样跑（finder2）不再等待锚定跑完成，随锚定跑并行提前启动——锚定快速失败时采样跑可能已发出请求（golden 测试已固化该行为）；正常路径的请求数与内容不变
+- trace 写入线程安全化：`Trace.event()` 行级加锁写入 + flush，并发 lane 不会交错破坏 JSONL 行；`cost_report` / `repeat_eval` / `bench_verifier` 按事件字段无序聚合，不受并行交错影响
+- 本地验证基线更新：190 个零 API 测试 / 96% 分支覆盖率（Week 1 为 178 / 95%），mypy 覆盖 14 个源文件
+
 ## [0.1.0] - 2026-07-15
 
-首个可安装版本（`pip install -e .` → `crag` 命令）。尚未发布公共 GitHub 仓库。
+首个可安装版本（`pip install -e .` → `crag` 命令），已以 v0.1.0 Release 发布于私有 GitHub 仓库（未公开）。
 
 ### Agent 架构
 
@@ -51,4 +68,4 @@
 - Sentinel 正则与特定模型族的措辞耦合，换 provider/改 prompt 需重跑 sweep
 - 实际审查需第三方模型 API 与费用（W14 实测均值约 ¥0.11/review）；模型 id 是服务端别名，存在漂移变量
 - 工具全部静态只读，不执行被审代码、不跑测试；封闭世界假设使 precision 有偏低估
-- Docker 构建与全矩阵 CI 均未实际运行（尚未创建公共 GitHub 仓库）；live PR post 未做过真实发帖
+- Docker 构建与全矩阵 CI 在本版发布时未实际运行（随后 Week 1 交付合入 master，私有 GitHub 仓库的 CI 含容器冒烟已运行通过，见 README）；live PR post 未做过真实发帖

@@ -2,7 +2,7 @@
 
 两阶段（**Finder + Verifier**）LLM 代码审查 Agent：**Finder 负责召回候选缺陷，Verifier 负责证据验证与过滤**，配套一套可复现的离线评测台架。走 OpenAI 兼容接口，provider 无关（目前支持 DeepSeek 与 GLM）。
 
-> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目尚未发布公共 GitHub 仓库，无线上用户、无生产部署。
+> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 1 交付的 master CI 已运行通过；无线上用户、无生产部署。
 
 ## 项目定位
 
@@ -22,7 +22,8 @@
 - **只读工具三件套**（`tools.py`）：`read_file`（路径逃逸检查、大文件按 `start_line` 续读、文件不存在时返回候选路径）、`search_repo`（字面量全仓 grep，目录剪枝遍历）、`run_linter`（pyflakes 静态检查，不执行代码）
 - **重复调用短路与失败恢复**：同参数重复工具调用直接短路；连续 3 次搜索 miss 注入"缺失本身可报告"提示；工具失败返回可行动的 `Error:` 文本而非崩溃；坏 submit 载荷回填问题重试（上限 2 次）；`MAX_STEPS=10` 步数护栏
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
-- **JSONL trace**（`tracelog.py`）：llm 调用 / 工具调用 / submit 拒绝 / 裁决全事件流落盘，含 provider/model 元数据与 token 计量，支撑成本报表与回放归因
+- **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
+- **JSONL trace**（`tracelog.py`）：llm 调用 / 工具调用 / submit 拒绝 / 裁决全事件流落盘，含 provider/model 元数据与 token 计量，支撑成本报表与回放归因；写入端线程安全（行级锁），并新增 `parallel_stage_started` / `parallel_stage_finished` / `deadline_exhausted` 事件记录阶段时序与截止
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）
 - **敏感文件防护**：`read_file` 黑名单拦截 `.env*` / `*.pem` / `*.key` / `id_rsa*` / `credentials*` 等；搜索与遍历跳过 vcs/venv/缓存目录；git/gh 子进程 list 形式无 shell 注入，`-` 开头参数注入有校验
@@ -45,6 +46,8 @@ flowchart LR
 ```
 
 Finder 与 Verifier 共用同一个 agent loop 引擎（`agentloop.py`）：调 API → 执行 `tool_calls` 并回填结果 → 循环直到模型提交通过结构校验的 `submit_review` 载荷。结构化输出做成 tool call、schema 当函数参数，不依赖任何厂商专有 JSON mode，跨 DeepSeek/GLM 通用。
+
+**并行编排与延迟预算（Week 2）**：finder 的锚定跑与采样跑、verifier 的 pass A/B 分别在各自阶段内用两个线程并行执行（`orchestration.py::run_parallel_pair`），两个阶段之间保持串联（verifier 的输入依赖 finder 的去重并集）。`run_review` 在构建上下文之前启动一个 300 秒的 monotonic 软截止（soft deadline），贯穿全部 finder/verifier loop：每个 loop 在步进前检查剩余预算，截止后不再发起新的 LLM 请求（trace 记 `deadline_exhausted`）；发出的每个请求 timeout 取剩余预算与原有 120 秒单请求上限的较小值。这是**协作式软截止而非硬实时超时**——已发出的同步 HTTP 请求无法被其他线程强制终止（SDK 层的自动重试也可能让在途请求略微越过截止点）。错误语义与串行版一致：锚定跑失败仍然致命、采样跑失败仍降级单跑、verifier 单 pass 失败仍降级、双失败仍 fail-open，AuthenticationError/RateLimitError 仍显式穿透。
 
 代码布局：运行时代码在 `src/code_review_agent/`（src/ 布局，`pip install -e .` 后获得 `crag` 命令）；评测脚本（`run_eval.py` / `judge.py` / `repeat_eval.py` / `replay_verifier.py` / `bench_verifier.py` / `cost_report.py`）留在仓库根，依赖 `eval/` 资产、不随包分发。
 
@@ -130,7 +133,7 @@ docker run --rm code-review-agent --help
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
 
-> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库的 CI 配置（`.github/workflows/ci.yml` 的 `container-smoke` job）会构建镜像并跑 `--help` 冒烟，但由于尚未创建远程 GitHub 仓库，**该 CI 尚未在 GitHub 上实际运行过**——Docker 构建当前状态为"等待 GitHub CI 验证"。
+> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 1 交付合入 `master` 后 CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过；Week 2 改动目前只在本地任务分支，**尚未经 GitHub CI 验证**。
 
 ## 测试与质量
 
@@ -138,14 +141,14 @@ docker run --rm code-review-agent --help
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **178 个测试全部通过**（unittest，零 API 调用，0.36s） |
-| 分支覆盖率 | **总计 95%**（`src/` 全包，门禁 `fail_under=85`） |
+| 单测 + golden 测试 | **190 个测试全部通过**（unittest，零 API 调用，0.40s） |
+| 分支覆盖率 | **总计 96%**（`src/` 全包，门禁 `fail_under=85`） |
 | Ruff（E/F/W） | 全部通过 |
-| mypy | 13 个源文件无问题（`check_untyped_defs` 等严格项开启） |
+| mypy | 14 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
 | 评测资产一致性 | eval：16 diffs / 30 埋点一致；holdout：6 diffs / 7 埋点一致 |
 
-测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径与工具协议。CI（GitHub Actions，已配置待远程运行）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟。
+测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟——Week 1 交付已在私有仓库 `master` 上实际运行通过；**Week 2 改动尚未在 GitHub CI 上运行**，上表为本地离线验证结果。
 
 ## 评测
 
@@ -183,7 +186,8 @@ docker run --rm code-review-agent --help
 - **W15**：哨兵第三族 + pyproject 打包/CI/LICENSE 搭车
 - **W16**：GLM 交叉重判（90/90 一致，收窄 judge 同模型偏置）+ 真实 PR 首次分布外抽查（11 kept ≈ 8 真，抽检零编造）
 - **W17**：哨兵族四（缺失反转）+ 鲁棒性双修（API 异常降级语义、anchor 重试）+ GitHub PR 行内评论载荷/dry-run
-- **Week 1 硬化（本轮）**：src-layout import 解析修复 + 回归测试、dev extra、覆盖率 85% 门禁、mypy 配置、`scripts/verify.py` 一键验证、Dockerfile + CI 容器冒烟、CI 矩阵扩至 3.13
+- **Week 1 硬化**：src-layout import 解析修复 + 回归测试、dev extra、覆盖率 85% 门禁、mypy 配置、`scripts/verify.py` 一键验证、Dockerfile + CI 容器冒烟、CI 矩阵扩至 3.13；交付后推送私有 GitHub 仓库，master CI 运行通过，发布 v0.1.0 Release
+- **Week 2 延迟韧性（本轮）**：finder 锚定/采样与 verifier A/B 改为阶段内双线程并行（两阶段仍串联）；全程 300s monotonic 软截止（截止后不发起新请求、单请求 timeout 封顶 min(剩余预算, 120s)）；trace 写入线程安全化并新增并行阶段/截止事件；新增并发与超时回归测试（本地离线验证 190 测试 / 96% 覆盖率，真实 provider 延迟基准未做）
 
 ## 已知限制
 
@@ -196,8 +200,9 @@ docker run --rm code-review-agent --help
 - **模型是服务端别名非快照**：跨代对比混入模型漂移变量；`LLM_MODEL` 可锁定快照 id，trace 记录 meta
 - **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise，precision 是有偏低估
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
-- **Docker 只配置了 CI smoke，本机尚未验证构建**；**尚未创建公共 GitHub 仓库**，CI（含容器冒烟）从未在 GitHub 上实际运行——本 README 不含任何 CI badge 或远程 URL，等仓库发布并跑通后再补
-- **verifier 串行执行，无整轮延迟预算兜底**：review 定位离线批处理，延迟不在关键路径（已测真实约束是 token 账单）
+- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 1 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布，但 **Week 2 改动尚未经 GitHub CI 验证**——本 README 不含公开 URL 或 CI badge
+- **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
+- **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 
 ## License
 

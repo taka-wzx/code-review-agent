@@ -3,7 +3,8 @@
 > 用途：面向华为、字节等大厂 AI Agent 岗位面试的中文答辩材料，面试前速览。
 > 回答姿态统一为：**承认问题曾存在 → 说明修复/取舍 → 给出代码或数据出处**。
 > 所有数字均有出处（本机实测或 eval 台账），不含虚构实验数字或生产效果。
-> 数据基线：2026-07-15 本机验证（178 测试 / 95% 覆盖率），评测数字截至 W17。
+> 数据基线：2026-07-15 本机验证（Week 2 后 190 测试 / 96% 覆盖率），评测数字截至 W17。
+> 措辞纪律：区分**已实现并本地验证** / **尚未在 Week 2 GitHub CI 验证** / **尚未做真实 provider 延迟基准**三档（见第八节）。
 
 ---
 
@@ -14,7 +15,8 @@
 两阶段 code review agent：finder 双跑（temp 0 锚定 + temp 0.7 采样）召回候选缺陷 →
 结构化去重 / 文件级 scope 过滤 → verifier 双 pass 独立证据复核（分歧进 uncertain 通道，
 禁止话术砍杀被哨兵兜底）→ JSON/Markdown/PR 行内评论输出。Provider 无关（OpenAI 兼容，
-DeepSeek/GLM 实测）。配套 16 diffs/30 埋点评测集 + holdout + LLM judge + n 次重复跑
+DeepSeek/GLM 实测）。Week 2 起 finder/verifier 阶段内双线程并行 + 整轮 300s 软截止。
+配套 16 diffs/30 埋点评测集 + holdout + LLM judge + n 次重复跑
 方差归因 + 全链 JSONL trace。核心数字：verifier 把 precision 从 ~0.35 提到 ~0.83
 （noise -86%），W12 后 recall 0.90、FP 三轮全 0；全量评测单轮真实计费 ¥1.72。
 
@@ -42,8 +44,9 @@ LLM judge 结构化裁决（GLM 交叉重判 90/90 一致收窄同模型偏置�
 有推翻自己（W7 复验证明"预取伤 recall"是单次噪声）、有负结果入档（W17 第三票被
 证据否决）——验收纪律是预写门槛，不是事后找理由。
 
-**工程质量**：178 个零 API 测试（golden 测试锁请求序列和 trace 事件流）、覆盖率 95%
-（门禁 85%）、mypy/ruff 干净、CI 矩阵 Linux 3.10–3.13 + Windows、Docker 打包、
+**工程质量**：190 个零 API 测试（golden 测试锁请求序列和 trace 事件流，Week 2 增并发/
+超时回归）、覆盖率 96%（门禁 85%）、mypy/ruff 干净、CI 矩阵 Linux 3.10–3.13 + Windows
+（Week 1 已在私有仓库 master 实际运行通过；Week 2 改动尚未经 GitHub CI）、Docker 打包、
 一键 `scripts/verify.py` 离线全验证。
 
 **限制我先说**：单项目人工埋点评测、规模小、judge 同模型偏置只被部分收窄、哨兵正则
@@ -70,6 +73,12 @@ diff（文件/--commit/--uncommitted/--pr）
 和成败映射；结构化输出做成 `submit_review` tool call，schema 当函数参数，不依赖厂商
 专有 JSON mode；护栏是 MAX_STEPS=10、坏载荷回填重试上限 2、同参数重复调用短路、
 temp=0、120s 超时 + SDK 重试 2 次。
+
+Week 2 起（`orchestration.py`）：finder 两跑与 verifier 两 pass 各自在阶段内用双线程
+并行（`run_parallel_pair`，两阶段仍串联）；整轮共享一个 300s monotonic 软截止——每个
+loop 步进前取一次时钟快照，剩余 ≤0 就不再发起新请求（trace 记 `deadline_exhausted`），
+>0 则该请求 timeout = min(剩余预算, 120s)；trace 写入行级加锁，新增
+`parallel_stage_started/finished` 事件。fatal/降级/fail-open 语义与串行版一致。
 
 ## 三、设计动机快答
 
@@ -155,13 +164,14 @@ diff 之外还有信息缺失问题：d16 用例（import 了仓库里不存在�
   把 verifier 迭代从"全量重跑 1.55M token"降到"回放 0.34M"。方法论沉淀：n=1 验收
   门会被 verifier 方差假触发，归因必须是验收判定的一部分。
 
-### 95% 覆盖率和 CI 的意义？
+### 96% 覆盖率和 CI 的意义？
 
-如实定位：覆盖率是**回归防护网的完备度指标**，不是正确性证明。95%（分支覆盖，
+如实定位：覆盖率是**回归防护网的完备度指标**，不是正确性证明。96%（分支覆盖，
 门禁 85%）的意义在于这个项目的核心资产是行为契约——golden 测试锁住的请求序列、
 降级语义、哨兵分类，任何人（包括另一个 agent）动代码，破坏契约会立刻红。CI 矩阵
 （Linux 3.10–3.13 + Windows 3.11）验证的是"干净克隆可复现"，lock-check job 验证
-评测环境存证可安装，container-smoke 验证打包链路。178 个测试全部零 API 调用，
+评测环境存证可安装，container-smoke 验证打包链路——Week 1 交付已在私有仓库 master
+实际运行通过，Week 2 改动尚未经 GitHub CI。190 个测试全部零 API 调用，
 CI 不需要任何 key——这是刻意的设计约束，评测（要花钱）和验证（免费）严格分层。
 
 ## 六、权衡与局限
@@ -174,9 +184,11 @@ CI 不需要任何 key——这是刻意的设计约束，评测（要花钱）�
 - **成本 vs 召回**：finder 双跑原始 tokens_in +69.7%，看起来贵；W14 用缓存感知计价
   实测（cache 命中 90%，hit 价 1/120）真实计费 ¥1.72/全量轮，裁决"不重要"，
   争论永久关闭。教训：**成本决策必须用真实账单口径**，原始 token 数高估一个量级。
-- **延迟**：诚实答案是并行化优先级输给了正确性——review 是离线批处理，延迟不在
-  关键路径；成本台账显示真实约束是 token 账单不是 wall-clock。最坏上界
-  (10+10+2×6) 步 × 120s/步，无整轮预算兜底，这是已知待办。
+- **延迟**：Week 1 及之前无整轮兜底，最坏上界 (10+10+2×6) 步 × 120s/步。Week 2 落地
+  阶段内并行（finder 两跑、verifier 两 pass 各双线程）+ 整轮 300s monotonic 软截止：
+  截止后不发新请求，单请求 timeout 封顶 min(剩余, 120s)。每阶段耗时从两 lane 之和变成
+  两 lane 取 max，理论加速上界 ~2x/阶段——这是结构性推断 + 离线测试验证，真实 provider
+  的 p50/p95 尚未实测。
 - **输出 token 占真实账单 72.6%**：今后的成本杠杆在压输出（简洁 submit schema），
   不在检索侧优化。
 
@@ -194,8 +206,9 @@ W16 一次 3-commit 抽查；② **哨兵正则措辞级耦合**——逆向自�
   行内评论（载荷构建和 dry-run 已就绪，差远程仓库和权限模型）
 - **正确性**：开放世界 truth 维护（把真实 PR 中的集外真发现回填评测集）、
   按 provider 重跑哨兵 sweep 的自动化门、人工反馈闭环（accept/reject 信号回流）
-- **性能**：finder1/2 与 verifier A/B 并行化（threading 即可，改动面在 trace 事件序
-  确定性）、整轮延迟预算兜底、大仓库增量上下文缓存
+- **性能**：阶段内并行与整轮软截止已落地（Week 2，本地验证）；下一步是真实 provider
+  延迟基准（p50/p95、stage latency、超时/429/降级率，见 Q28）、把 SDK 重试预算纳入
+  剩余时间、大仓库增量上下文缓存
 - **多语言**：run_linter/import 追踪目前 Python 特化，工具接口本身语言无关，
   按语言插件化 linter 和 import 解析器
 - **运维**：trace 已是 JSONL，接监控面板和成本告警是搭车工作；按 repo 的
@@ -203,7 +216,7 @@ W16 一次 3-commit 抽查；② **哨兵正则措辞级耦合**——逆向自�
 
 ---
 
-## 七、高频面试问题（17 问）
+## 七、高频面试问题（28 问）
 
 ### Q1「verifier 里那些正则哨兵，是不是把 eval 答案抄进了生产代码？」
 
@@ -242,13 +255,16 @@ search 都白走。已改 `os.walk` 进目录前剪枝（`dirnames[:] = ...`）�
 基础设施类异常；AuthenticationError/RateLimitError 刻意穿透崩掉——凭据/配额问题必须响亮
 失败，不允许静默降级。出处：`verifier.py::verify_findings`、golden 测试三个 status 值全锁。
 
-### Q5「finder 跑两遍、verifier 跑两遍，为什么串行？最坏延迟多少？」
+### Q5「finder 跑两遍、verifier 跑两遍，延迟怎么控？」
 
-**建议回答**：诚实答案是并行化在优先级上输给了正确性和评测工作——review 是离线批处理场景，
-延迟不在关键路径；成本台账显示真实约束是 token 账单不是 wall-clock。已知上界：最坏
-(10+10+2×6) 步 × 120s/步 + SDK 重试，确实没有整轮预算兜底，这是待办（和并行化一起，
-因为都要动 agentloop 的 golden 契约）。能并行的点我清楚：finder1/2 独立、verifierA/B 独立，
-threading 即可，改动面在 trace 事件序的确定性上。
+**建议回答**：Week 1 时的诚实答案是"并行化优先级输给了正确性，无整轮兜底"（最坏
+(10+10+2×6) 步 × 120s/步）。Week 2 已落地：finder 两跑、verifier 两 pass 各自阶段内
+双线程并行（两阶段仍串联，因为 verifier 的输入依赖 finder 的去重并集），整轮共享
+300s monotonic 软截止——截止后不再发起新请求，单请求 timeout 封顶 min(剩余, 120s)，
+原有 fatal/降级/fail-open 语义不变，golden 测试把并行 patch 成串行继续锁协议。边界
+如实说：软截止不强杀在途请求（同步 SDK，见 Q21），加速比是结构性推断（阶段耗时从
+两 lane 之和变 max），真实 provider 的 p50/p95 尚未实测（见 Q27/Q28）。深入追问的
+展开在 Q18–Q28。
 
 ### Q6「judge 和被测 agent 同一个模型，recall 数字可信吗？」
 
@@ -297,7 +313,8 @@ judge 偏置），要么周期性把集外真发现回填进 truth——我倾�
 确是 py-modules 平铺（`tools`/`llm`/`context` 这种通用名直接进 site-packages），是我做完
 打包后补的课——`pip install -e .` + golden 测试做安全网完成迁移，`crag` 和
 `python -m code_review_agent` 双入口，CI 里有装包冒烟，另有 Dockerfile（slim 基底、
-非 root 用户、.dockerignore 排除密钥与 VCS 元数据）等 CI 容器冒烟验证。
+非 root 用户、.dockerignore 排除密钥与 VCS 元数据）——容器冒烟已随 Week 1 master CI
+在私有 GitHub 仓库实际运行通过（本机无 Docker，本地构建仍未验证）。
 
 ### Q12「依赖怎么锁的？CI 和你本地跑的是同一份环境吗？」
 
@@ -305,8 +322,9 @@ judge 偏置），要么周期性把集外真发现回填进 truth——我倾�
 requirements.lock 精确锁定（评测环境的存证）、CI 双通道验证（矩阵装 `-e ".[dev]"` 跑
 Linux 3.10–3.13 + Windows 3.11；lock-check job 专门验证 lockfile 可安装）。本地和 CI
 跑的是**同一个入口** `scripts/verify.py`：ruff → coverage 单测（85% 门禁）→ mypy →
-双 CLI 冒烟 → 评测资产一致性，本地过 = CI 过（差异只剩平台）。如实声明：CI 配置齐了
-但还没建远程 GitHub 仓库，从未在 GitHub 上真正跑过。
+双 CLI 冒烟 → 评测资产一致性，本地过 = CI 过（差异只剩平台）。如实声明：私有 GitHub
+仓库已建，Week 1 交付的 master CI 已实际运行通过；Week 2 改动目前只在本地任务分支，
+尚未经 GitHub CI 验证。
 
 ### Q13「.env 在你仓库里，key 泄漏了吗？」
 
@@ -318,12 +336,14 @@ push，`git rm --cached` 不够（历史仍在）。
 
 ### Q14「测试测了什么？覆盖率多少？」
 
-**建议回答**：178 个零 API 测试、分支覆盖率 95%（门禁 85%，2026-07-15 本机实测）。
+**建议回答**：190 个零 API 测试、分支覆盖率 96%（门禁 85%，2026-07-15 本机实测）。
 三层——golden 测试用 FakeClient 锁**请求序列和 trace 事件流**（行为保持重构的安全网，
-src/ 迁移和哨兵外置都靠它兜底）、纯函数单测（校验/合并/去重/指标/哨兵分类含冻结负例）、
-回归测试（P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议、provider 构建）。
+src/ 迁移、哨兵外置、Week 2 并行化都靠它兜底：并行编排被 patch 成串行执行，协议语义
+不许变）、纯函数单测（校验/合并/去重/指标/哨兵分类含冻结负例）、回归测试（P0 安全修复、
+src-layout import 解析、CLI 参数路径、工具协议、provider 构建，Week 2 新增并发/超时
+回归 12 个：barrier 验证 lane 重叠、截止后零请求、截止降级语义、并发 trace 完整性）。
 已知缺口主动交代：judge 的 LLM 回路有 golden 测试但 repeat_eval 的编排逻辑无测（统计
-函数有测）；`__main__.py` 和 agent.py 的部分 live 异常分支未覆盖（91%），是 mock 成本
+函数有测）；`__main__.py` 和 agent.py 的部分 live 异常分支仍未覆盖，是 mock 成本
 最高的路径。
 
 ### Q15「为什么不用 embeddings/RAG 做上下文检索？」
@@ -354,31 +374,149 @@ LLM 对列表位置敏感（首因/近因效应），同一模型换呈现顺序
 任务上判定高度一致（90/90），异构收益可能有限。drop 需 2/2 票的结构下，单 pass
 误砍率 p 变 p²，这个数学不依赖 pass 之间完全独立，部分去相关就有收益。
 
+### Q18「并行为什么用线程，不用 asyncio 或多进程？」（Week 2）
+
+**建议回答**：瓶颈是网络 I/O 等待不是 CPU——两条 lane 的绝大部分时间在等 provider
+响应，请求期间 GIL 释放，threading 不受 GIL 约束。asyncio 语义上更优雅，但要把整条
+调用链改成 async（换 AsyncOpenAI、工具的文件/子进程操作、agentloop 全链）或在线程池里
+包同步调用——前者改动面横穿全部 golden 契约，后者本质还是线程只是多一层事件循环。
+多进程为隔离付出序列化和启动成本，还要跨进程共享 trace 文件句柄，而两条 lane 本来就
+只共享只读输入（review_input 字符串、client），线程共享内存正合适。并发度恒为 2，
+`ThreadPoolExecutor(max_workers=2)` 一个 with 块管完生命周期（`orchestration.py::
+run_parallel_pair`），agentloop 除注入 deadline 检查外一行不用为并发而改。
+
+### Q19「为什么只阶段内并行，不四路同时跑？」（Week 2）
+
+**建议回答**：数据依赖决定的——verifier 的输入是两个 finder 输出经去重并集 + scope
+过滤后的候选列表，finder 没跑完就没有 verifier 的输入，四路同跑在数据流上不成立。
+语义上也有依赖：anchor 失败是致命的，若 verifier 已经开跑而 anchor 失败，烧掉的是
+真金 token。所以形状是"两段串联、段内并行"：每段耗时从两 lane 之和变成两 lane 取
+max，理论加速上界 ~2x/阶段，这已是该数据流下可得的全部并行度。
+
+### Q20「为什么叫 soft deadline，不是 hard timeout？」（Week 2）
+
+**建议回答**：到期时它只保证"不再发起新请求"，不保证"在途请求立刻死"。实现是协作式
+的：每个 loop 步进前取一次 monotonic 时钟快照（单次快照同时做 go/no-go 判定和请求
+cap，避免读两次钟的边界竞态，`agentloop.py` 有注释），剩余 ≤0 → 返回
+`reason="deadline"` 不再调 API；>0 → 该请求 timeout = min(剩余, 120s)。所以整轮
+wall-clock 可能略超 300s——最后一个在途请求（加 SDK 重试）会跑完——但超出量被单请求
+timeout 封顶。文档措辞刻意不写"硬实时超时"或"精确 300s 停"，那不是这个实现能提供的
+保证。
+
+### Q21「同步 SDK 的在途请求为什么不能安全强杀？」（Week 2）
+
+**建议回答**：Python 线程没有安全的外部终止原语——`Thread` 没有 cancel，强行手段
+（ctypes 注异常、daemon 线程弃养）会把 httpx 连接池、锁和文件句柄留在中间态，破坏
+共享 client 的后续复用，换来的只是提前几十秒返回。要真正可取消，要么 asyncio（在
+await 点 cancel），要么进程级 kill——都在 Q18 的取舍里被否决。soft deadline +
+请求级 timeout 封顶是同步栈里最诚实的方案：新请求不发、在途请求限时，越界有上界。
+
+### Q22「deadline、单请求 timeout、SDK retry 三者什么关系？」（Week 2）
+
+**建议回答**：三层从外到内——review 级 deadline（300s，一个 review 一份，构建上下文前
+起算）→ 请求级 timeout（每次 `create` 传入 min(剩余预算, 120s)）→ SDK retry（client
+构造时 `max_retries=2`，SDK 内部）。已知交互如实说：传入的 timeout 是 per-attempt
+的，SDK 重试的每个 attempt 各自享有该 timeout，所以临近截止的一次请求最坏可以
+3 个 attempt + backoff，越过 deadline 的量可能数倍于当时的剩余预算。这是软截止已
+声明的越界来源之一；改进方向是把重试预算也纳入剩余时间（比如临近截止时把
+per-request 的 max_retries 降为 0），列在待办。loop 层面则简单：该请求返回后，下一次
+步进检查立即以 `deadline` 出局。
+
+### Q23「并行化会增加总 token 成本吗？」（Week 2）
+
+**建议回答**：计划内不增加——并行改变的是时间排布不是调用图，请求数与内容仍是
+anchor + finder2 + verifier A/B（+ 校验重试），正常路径成本与串行版完全一致。有一个
+真实的行为差异要交代：finder2 现在随 anchor 并行提前启动，anchor 快速致命失败时
+finder2 可能已经发出请求（串行版里 anchor 失败后 finder2 根本不启动）——golden 测试
+固化了这个差异（anchor 失败用例的请求数 2→3）。另一个未量化的点：两条 lane 同时
+首发，provider 前缀缓存（DeepSeek cache 命中 90% 是串行版实测）谁先建缓存不再确定，
+命中率变化未实测，列在真实基准待测项里。
+
+### Q24「为什么说并行可能增加 rate-limit 风险？」（Week 2）
+
+**建议回答**：总请求数不变，但瞬时并发从 1 变 2——同一时刻账号在 provider 侧有两个
+在途请求，RPM/并发型限流更容易触碰。语义上有兜底：RateLimitError 刻意穿透（不静默
+降级），真触发时响亮失败，不会污染评测结果。但真实 provider 上 429 率是否上升未实测，
+这正是不把"并行更快"写成已验证结论的原因之一（见 Q28 基准计划）。
+
+### Q25「anchor fatal 和 verifier fail-open 语义在并行下怎么保持？」（Week 2）
+
+**建议回答**：关键机制是**异常先捕获、join 后按固定优先级重放**。`run_parallel_pair`
+把每条 lane 的异常包进 `CallOutcome` 而不是当场抛；join 之后 `run_review` 先检查
+anchor 的 error 先 raise——所以无论两条 lane 谁先失败，anchor 失败都优先致命；finder2
+的 error 再按与旧 `except` 链等价的 isinstance 序列处理（RuntimeError→按协议失败降级、
+Auth/RateLimit→穿透、其他 OpenAIError→按请求失败降级、未知→raise）。verifier 侧
+`_verify_pass` 本来就把基础设施异常吞成 None（降级/fail-open 在返回值层裁决），只有
+Auth/RateLimit 以异常冒出，join 后 A 先 B 后 raise，与旧串行"A 先跑"的暴露序一致。
+测试证据双保险：golden 测试把 `_run_pair` patch 成串行执行锁协议语义，week2 测试再用
+真线程验证并发本身（含 anchor 截止致命、finder2 截止降级、verifier 双截止 fail-open）。
+
+### Q26「trace 并发交错会影响统计和审计吗？」（Week 2）
+
+**建议回答**：分两层。行完整性：`Trace.event()` 在锁内整行写 + flush，JSONL 每行原子，
+并发写不会交错损坏（week2 测试多线程压写验证）。事件顺序：不同 lane 的事件按真实时间
+交错，不再有"finder 事件全排在 finder2 之前"的隐含序——但消费端全部不依赖顺序：
+`cost_report` / `repeat_eval` / `bench_verifier` 都按事件自带的 `kind` 字段无序聚合
+token，组件归因用每条事件自带的 `component` 字段，交错无影响。审计能力反而增强：
+新增 `parallel_stage_started/finished`（含阶段耗时与各 lane 异常类型）和
+`deadline_exhausted`（含组件与已完成步数），阶段时序首次变得可直接审计。
+
+### Q27「离线测试证明了什么？还有什么没证明？」（Week 2）
+
+**建议回答**：证明了（FakeClient/barrier，零 API，190 测试 96% 覆盖率本机全绿）：
+两条 lane 真实重叠（barrier 要求双 lane 同时到达才放行）、截止后零新请求、anchor 截止
+致命 / finder2 截止降级 / verifier 截止 fail-open、全部 stage 共享同一个 deadline、
+并发 trace 行完整、请求协议与输出 shape 与串行版一致（golden）。没证明的如实列：
+真实 provider 下的 p50/p95 加速比（当前只是结构性推断）、单请求 timeout 在真实网络栈
+的行为、429 率变化、DeepSeek 前缀缓存命中率变化、长 review 的实际截止表现。另外
+Week 2 改动尚未在 GitHub CI 上运行（Week 1 master CI 通过的是并行化之前的代码），
+本地 `scripts/verify.py --eval-assets` 全绿是当前唯一的验证证据。
+
+### Q28「如果做真实 provider 基准，测什么？」（Week 2）
+
+**建议回答**：配对对比（并行 vs 串行同一评测集）测五组：① 整轮与每 stage 的 p50/p95
+wall-clock 和 lane 重叠率（trace 的 parallel_stage 事件直接可算）；② 单请求 timeout
+触发率与 `deadline_exhausted` 触发率；③ 429/5xx 率——验证 Q24 的并发限流假设；
+④ 降级率——finder2 失败率、verifier degraded/failed_open 率是否因并发上升；⑤ 前缀
+缓存命中率（trace 已带 cache_hit/miss 字段，`cost_report` 直接出）与真实计费。再加一组
+质量回归：并行版跑 `repeat_eval` 对比 recall/precision 无漂移——理论上请求内容不变，
+但缓存与限流重试路径的变化可能间接影响输出。
+
 ---
 
 ## 八、事实边界：已验证 / 待 CI 验证 / 计划
 
-面试中被问到任何能力，先落到这三档之一：
+面试中被问到任何能力，先落到这四档之一：
 
-**已实现并本机验证（2026-07-15，Windows 11 / Python 3.13）**：
+**已实现并本机验证（2026-07-15，Windows 11 / Python 3.13 独立 venv）**：
 
-- 178 个零 API 测试全过、分支覆盖率 95%（门禁 85%）、ruff/mypy 干净
+- 190 个零 API 测试全过、分支覆盖率 96%（门禁 85%）、ruff/mypy（14 源文件）干净
+- Week 2 并行编排 + 软截止：lane 重叠、截止后零新请求、截止降级/fail-open 语义、
+  并发 trace 完整性——全部由离线（FakeClient/barrier）测试验证
 - `python -m code_review_agent --help` 与 `crag --help` 双入口冒烟通过
 - eval（16 diffs/30 埋点）与 holdout（6 diffs/7 埋点）资产一致性校验通过
 - src-layout import 解析（含回归测试：flat/src 布局预取、缺失模块 note、外部静默）
 - 全部评测数字（截至 W17）产自真实 run 并有 trace/结果目录存证
 
-**已实现但只由 CI 待验证（尚无远程仓库，CI 从未实际运行）**：
+**已在 GitHub 上验证（私有仓库，Week 1）**：
 
-- GitHub Actions 矩阵（Linux 3.10–3.13 + Windows 3.11）——本机只验证了 3.13
-- Docker 镜像构建与容器冒烟（本机无 Docker，构建从未执行过）
-- lockfile 安装校验 job
-- live PR post（`--post`）——载荷构建与 dry-run 有测试，真实发帖待 GitHub 仓库
+- 私有 GitHub 仓库已建，v0.1.0 Release 已发布（未公开）
+- Week 1 交付合入 master 后 CI 已实际运行并通过：Actions 矩阵
+  （Linux 3.10–3.13 + Windows 3.11）、Docker 容器冒烟、lockfile 安装校验 job
 
-**后续计划（未实现，别说成已有）**：
+**已实现但尚未在 Week 2 GitHub CI 验证**：
 
-- 公共 GitHub 仓库发布（待密钥审计）、CI badge
-- finder/verifier 并行化与整轮延迟预算
+- Week 2 全部改动（并行编排、软截止、线程安全 trace 及其测试）——只在本地任务分支，
+  本地 `scripts/verify.py --eval-assets` 全绿；Week 1 master CI 通过的是并行化之前的代码
+- live PR post（`--post`）——载荷构建与 dry-run 有测试，真实发帖未做过
+- Docker 本地构建（本机无 Docker；CI 侧容器冒烟已通过）
+
+**后续计划（未实现/未测量，别说成已有）**：
+
+- 真实 provider 延迟基准：p50/p95、stage latency、超时率、429 率、降级率、
+  缓存命中变化（见 Q28）——"并行更快"目前是结构性推断不是实测数字
+- 把 SDK 重试预算纳入剩余时间（临近截止降 max_retries）
+- 公开仓库发布（待密钥审计）、CI badge
 - 开放世界 truth 回填、人工校准扩样、注入探针用例
 - 多语言 linter/import 插件化、GitHub App 自动触发
 
@@ -393,5 +531,6 @@ LLM 对列表位置敏感（首因/近因效应），同一模型换呈现顺序
 | 哨兵战绩 | 5/5 历史错杀命中、sweep 零误救、分布外零误触 | sentinels.py + W16 |
 | judge 交叉重判 | GLM 独立重判 90/90 一致、分类一致率 96% | cases.md W16 |
 | 成本 | ¥1.72/全量轮，¥0.11/review，输出占 72.6% | W14 台账 |
-| 测试 | **178 个零 API，覆盖率 95%（门禁 85%）** | 2026-07-15 本机实测 |
-| CI | Linux 3.10–3.13 + Win 3.11 + Docker smoke，**已配置未远程运行** | ci.yml |
+| 延迟预算 | 300s 软截止 + 单请求 min(剩余, 120s)，阶段内双线程并行 | orchestration.py（Week 2，离线验证） |
+| 测试 | **190 个零 API，覆盖率 96%（门禁 85%）** | 2026-07-15 本机实测 |
+| CI | Linux 3.10–3.13 + Win 3.11 + Docker smoke，**Week 1 master 已运行通过；Week 2 改动未经 CI** | ci.yml + 私有仓库 Actions |
