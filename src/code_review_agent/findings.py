@@ -92,7 +92,8 @@ def split_by_scope(findings: list, changed_files: list) -> tuple[list, list]:
     if not changed_files:
         return list(findings), []
     changed = {_norm(f) for f in changed_files}
-    in_scope, out_of_scope = [], []
+    in_scope: list = []
+    out_of_scope: list = []
     for f in findings:
         dest = in_scope if _norm(f.get("file", "")) in changed else out_of_scope
         dest.append(f)

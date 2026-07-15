@@ -180,7 +180,7 @@ def _rescued(f: dict, tag: str) -> dict:
     return r
 
 
-def rescue_forbidden_drops(dropped: list, kept: list = ()) -> tuple[list, list]:
+def rescue_forbidden_drops(dropped: list, kept: list | tuple = ()) -> tuple[list, list]:
     """(rescued_as_uncertain, still_dropped). Rescued findings lose the
     drop_reason and enter the uncertain channel; the fixed "[sentinel:tag] "
     prefix keeps the original reason machine-recoverable. Pure function.
@@ -213,7 +213,11 @@ def rescue_forbidden_drops(dropped: list, kept: list = ()) -> tuple[list, list]:
         if any(is_duplicate(f, twin, sim_near=0.15) for twin in alive):
             still.append(f)
         else:
-            r = _rescued(f, _family_tag(f))
+            family = _family_tag(f)
+            if family is None:  # classify_drop already proved this is a family hit
+                still.append(f)
+                continue
+            r = _rescued(f, family)
             rescued.append(r)
             alive.append(r)
     return rescued, still

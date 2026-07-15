@@ -8,3 +8,11 @@ eval/results*
 eval/bench_out/
 traces/
 .coverage
+.coverage.*
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+coverage.xml
+htmlcov/
+build/
+dist/

@@ -9,10 +9,18 @@ change. Pick the provider with LLM_PROVIDER:
 import os
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from openai import OpenAI
 
-PROVIDERS = {
+
+class ProviderConfig(TypedDict):
+    base_url: str
+    model: str
+    key_envs: tuple[str, ...]
+
+
+PROVIDERS: dict[str, ProviderConfig] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
         "model": "deepseek-v4-pro",
