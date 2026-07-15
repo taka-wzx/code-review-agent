@@ -16,6 +16,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def console_script(name: str) -> str | None:
+    """Find an entry point installed for this interpreter before PATH.
+
+    A globally installed command with the same name must not make validation
+    pass when the current virtual environment is missing its console script.
+    """
+    scripts_dir = Path(sysconfig.get_path("scripts"))
+    for candidate_name in (f"{name}.exe", name):
+        candidate = scripts_dir / candidate_name
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(name)
+
+
 def run(label: str, command: list[str]) -> None:
     print(f"\n== {label} ==", flush=True)
     print("+ " + subprocess.list2cmdline(command), flush=True)
@@ -54,14 +68,7 @@ def main() -> None:
     run("Mypy", [python, "-m", "mypy", "src/code_review_agent"])
     run("Module entry point", [python, "-m", "code_review_agent", "--help"])
 
-    crag = shutil.which("crag")
-    if crag is None:
-        scripts_dir = Path(sysconfig.get_path("scripts"))
-        for name in ("crag.exe", "crag"):
-            candidate = scripts_dir / name
-            if candidate.is_file():
-                crag = str(candidate)
-                break
+    crag = console_script("crag")
     if crag is None:
         raise SystemExit(
             "console entry point 'crag' was not found; install with "
