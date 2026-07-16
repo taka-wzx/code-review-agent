@@ -2767,9 +2767,21 @@ def _test_command_to_dict(result: TestCommandResult) -> dict[str, Any]:
 
 
 def _snapshot_diff_text(snapshot: RepairRepositorySnapshot) -> str:
+    # Concatenate the tracked and per-file untracked diffs into one multi-file
+    # unified diff. Each git-produced section already ends with a newline, so
+    # joining with "\n" would inject a blank line between sections; that blank
+    # line lands inside the previous hunk and makes the strict patch parser (via
+    # the commit-gate scope check) reject any patch that spans a tracked edit and
+    # a new file. Concatenate directly, guaranteeing each section is newline
+    # terminated, so the combined text stays a parseable, appliable patch.
     sections = [snapshot.base_diff]
     sections.extend(text for _path, text in snapshot.untracked_diffs)
-    return "\n".join(section for section in sections if section)
+    parts = []
+    for section in sections:
+        if not section:
+            continue
+        parts.append(section if section.endswith("\n") else section + "\n")
+    return "".join(parts)
 
 
 def _json_object(text: str) -> dict[str, Any]:

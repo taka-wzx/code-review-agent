@@ -51,8 +51,10 @@ from code_review_agent.repair_tools import (
     REVERSE_CHECK_COMMAND,
     REVERSE_COMMAND,
     STATUS_COMMAND,
+    GitStatusResult,
     ManifestState,
     PatchManifest,
+    RepairRepositorySnapshot,
     SnapshotMismatch,
     ToolQuarantined,
     parse_patch,
@@ -2165,6 +2167,66 @@ class TestRepairOrchestrator(OrchestratorCase):
         self.assertFalse(failed.success)
         self.assertFalse(failed_sandbox.staged)
         self.assertGreater(len(persisted), budget.usage.commands)
+
+    def test_snapshot_diff_text_stays_parseable_across_tracked_and_new_files(self):
+        # A repair that edits a tracked file and adds a new file yields a
+        # base diff plus a per-file untracked diff. The combined commit-gate
+        # patch must remain a single valid multi-file unified diff: joining the
+        # sections with "\n" injects a blank line inside the previous hunk and
+        # makes parse_patch (and therefore the commit scope check) reject it.
+        base_diff = (
+            "diff --git a/app.py b/app.py\n"
+            "--- a/app.py\n"
+            "+++ b/app.py\n"
+            "@@ -1 +1 @@\n"
+            "-VALUE = 1\n"
+            "+VALUE = 2\n"
+        )
+        new_file_diff = (
+            "diff --git a/tests/test_new.py b/tests/test_new.py\n"
+            "new file mode 100644\n"
+            "index 0000000000000000000000000000000000000000.."
+            "1111111111111111111111111111111111111111\n"
+            "--- /dev/null\n"
+            "+++ b/tests/test_new.py\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+def test_new():\n"
+            "+    assert True\n"
+        )
+        snapshot = RepairRepositorySnapshot(
+            status=GitStatusResult(operation_id="op-1", entries=(), ignored_paths=()),
+            base_diff=base_diff,
+            untracked_diffs=(("tests/test_new.py", new_file_diff),),
+            sha256="0" * 64,
+        )
+
+        diff_text = repair_module._snapshot_diff_text(snapshot)
+
+        self.assertNotIn("\n\n", diff_text)
+        document = parse_patch(diff_text)
+        self.assertEqual(document.paths, ("app.py", "tests/test_new.py"))
+        # The commit gate (expected_tree and commit) validates the same text.
+        SandboxedGitCommitControl._validate_patch_scope(
+            diff_text, ("app.py", "tests/test_new.py")
+        )
+
+        # Two new files with no tracked edit must also stay parseable.
+        second_new = new_file_diff.replace("test_new", "test_two")
+        untracked_only = RepairRepositorySnapshot(
+            status=GitStatusResult(operation_id="op-2", entries=(), ignored_paths=()),
+            base_diff="",
+            untracked_diffs=(
+                ("tests/test_new.py", new_file_diff),
+                ("tests/test_two.py", second_new),
+            ),
+            sha256="1" * 64,
+        )
+        multi_new = repair_module._snapshot_diff_text(untracked_only)
+        self.assertNotIn("\n\n", multi_new)
+        self.assertEqual(
+            parse_patch(multi_new).paths,
+            ("tests/test_new.py", "tests/test_two.py"),
+        )
 
     def test_commit_command_budget_is_persisted_before_and_after_interrupt(self):
         budget = BudgetManager()
