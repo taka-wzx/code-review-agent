@@ -187,6 +187,15 @@ class TestBudgetManager(unittest.TestCase):
         self.assertEqual(manager.usage.commands, 2)
         self.assertEqual(manager.usage.repair_attempts, 1)
 
+    def test_nested_commands_are_counted_without_spending_extra_tool_calls(self):
+        manager = BudgetManager()
+        manager.consume_tool_call()
+        manager.consume_command(3)
+        self.assertEqual(manager.usage.tool_calls, 1)
+        self.assertEqual(manager.usage.commands, 3)
+        with self.assertRaises(ValueError):
+            manager.consume_command(True)
+
     def test_actual_usage_over_reservation_is_retained_and_fails_closed(self):
         manager = BudgetManager(BudgetLimits(total_tokens=100, total_cost_usd=1.0))
         reservation = manager.reserve_llm(10, 0.1)
@@ -251,6 +260,7 @@ class TestApprovals(unittest.TestCase):
             "base_sha": "a" * 40,
             "diff_hash": "d" * 64,
             "plan_hash": "p" * 64,
+            "patch_hash": "f" * 64,
             "writable_paths": ("src/b.py", "src/a.py"),
             "patch_attempt": 1,
             "ttl_seconds": 60,
@@ -274,6 +284,8 @@ class TestApprovals(unittest.TestCase):
         record = self.write_approval()
         with self.assertRaises(ApprovalMismatch):
             record.consume(replace(record.binding, diff_hash="changed"), now=120.0)
+        with self.assertRaises(ApprovalMismatch):
+            record.consume(replace(record.binding, patch_hash="e" * 64), now=120.0)
         with self.assertRaises(ApprovalExpired):
             record.consume(record.binding, now=160.0)
 
@@ -284,6 +296,10 @@ class TestApprovals(unittest.TestCase):
         with self.assertRaises(ApprovalMismatch):
             first.consume(second.binding, now=120.0)
 
+    def test_write_issue_rejects_a_non_sha256_patch_binding(self):
+        with self.assertRaisesRegex(ValueError, "patch_hash"):
+            self.write_approval(patch_hash="not-a-patch-hash")
+
     def test_commit_approval_has_no_write_scope(self):
         record = issue_commit_approval(
             run_id="run-1",
@@ -292,13 +308,29 @@ class TestApprovals(unittest.TestCase):
             diff_hash="d" * 64,
             test_result_hash="t" * 64,
             commit_message="fix: small issue",
+            expected_tree_oid="e" * 40,
             ttl_seconds=60,
             now=100.0,
             nonce="human-commit-nonce",
         )
         self.assertEqual(record.binding.kind, ApprovalKind.COMMIT)
         self.assertEqual(record.binding.writable_paths, ())
+        self.assertEqual(record.binding.expected_tree_oid, "e" * 40)
         self.assertEqual(ApprovalRecord.from_dict(record.to_dict()), record)
+
+        with self.assertRaisesRegex(ValueError, "expected_tree_oid"):
+            issue_commit_approval(
+                run_id="run-1",
+                checkpoint_id="cp-9",
+                base_sha="a" * 40,
+                diff_hash="d" * 64,
+                test_result_hash="t" * 64,
+                commit_message="fix: small issue",
+                expected_tree_oid="not-a-tree",
+                ttl_seconds=60,
+                now=100.0,
+                nonce="human-commit-nonce",
+            )
 
     def test_unsafe_write_paths_are_never_bindable(self):
         for path in (
@@ -313,6 +345,8 @@ class TestApprovals(unittest.TestCase):
             "nul",
             "src/CON.txt",
             "//server/share/file.py",
+            "src/line\nbreak.py",
+            "src/tab\tname.py",
         ):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 self.write_approval(writable_paths=(path,))
@@ -326,6 +360,19 @@ class TestApprovals(unittest.TestCase):
         data["writable_paths"] = "src/mod.py"
         with self.assertRaisesRegex(ValueError, "list of strings"):
             type(self.write_approval().binding).from_dict(data)
+
+    def test_approval_timestamps_reject_bool_and_numeric_strings(self):
+        record = self.write_approval()
+        for value in (True, "100"):
+            with self.subTest(value=value):
+                data = record.to_dict()
+                data["issued_at"] = value
+                with self.assertRaisesRegex(ValueError, "issued_at"):
+                    ApprovalRecord.from_dict(data)
+                with self.assertRaisesRegex(ValueError, "now"):
+                    record.consume(record.binding, now=value)
+                with self.assertRaisesRegex(ValueError, "ttl_seconds"):
+                    self.write_approval(ttl_seconds=value)
 
     def test_directly_constructed_string_path_list_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "not one string"):

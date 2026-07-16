@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from enum import Enum
 import math
 from pathlib import PurePosixPath
+import re
 import secrets
 import time
 from typing import Any
@@ -32,9 +33,23 @@ class ApprovalMismatch(ApprovalError):
     pass
 
 
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+
+
 def _required(name: str, value: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
+
+
+def _timestamp(name: str, value: Any, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a real number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0 or (positive and number <= 0):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"{name} must be a finite {qualifier} number")
+    return number
 
 
 # Reserved Win32 device basenames: writing to e.g. "nul" or "con.txt" inside a
@@ -50,7 +65,12 @@ def _validate_path_part(raw: str, part: str) -> None:
     # ":" anywhere covers drive letters and NTFS alternate data streams
     # ("src/mod.py:stream"); trailing dots/spaces alias a different file on
     # Windows ("src/mod.py." opens "src/mod.py"), silently widening the scope.
-    if part in (".", "..") or ":" in part or part != part.rstrip(". "):
+    if (
+        part in (".", "..")
+        or ":" in part
+        or part != part.rstrip(". ")
+        or any(ord(char) < 32 for char in part)
+    ):
         raise ValueError(f"writable path must be a normalized repo-relative path: {raw!r}")
     if part.lower() == ".git":
         raise ValueError(f".git cannot appear in a writable path: {raw!r}")
@@ -90,16 +110,22 @@ class ApprovalBinding:
     diff_hash: str
     nonce: str
     plan_hash: str = ""
+    patch_hash: str = ""
     writable_paths: tuple[str, ...] = ()
     patch_attempt: int = 0
     test_result_hash: str = ""
     commit_message: str = ""
+    expected_tree_oid: str = ""
 
     def __post_init__(self) -> None:
         for name in ("run_id", "checkpoint_id", "base_sha", "diff_hash", "nonce"):
             _required(name, getattr(self, name))
         if self.kind is ApprovalKind.WRITE:
             _required("plan_hash", self.plan_hash)
+            if not isinstance(self.patch_hash, str) or not _SHA256.fullmatch(
+                self.patch_hash
+            ):
+                raise ValueError("patch_hash must be a lowercase SHA-256 digest")
             if (
                 isinstance(self.patch_attempt, bool)
                 or not isinstance(self.patch_attempt, int)
@@ -111,12 +137,16 @@ class ApprovalBinding:
             object.__setattr__(
                 self, "writable_paths", normalize_repo_paths(self.writable_paths)
             )
-            if self.test_result_hash or self.commit_message:
+            if self.test_result_hash or self.commit_message or self.expected_tree_oid:
                 raise ValueError("write approval cannot contain commit-only fields")
         elif self.kind is ApprovalKind.COMMIT:
             _required("test_result_hash", self.test_result_hash)
             _required("commit_message", self.commit_message)
-            if self.plan_hash or self.writable_paths or self.patch_attempt:
+            if not isinstance(self.expected_tree_oid, str) or not _OBJECT_ID.fullmatch(
+                self.expected_tree_oid
+            ):
+                raise ValueError("expected_tree_oid must be a lowercase Git object id")
+            if self.plan_hash or self.patch_hash or self.writable_paths or self.patch_attempt:
                 raise ValueError("commit approval cannot contain write-only fields")
         else:  # defensive when instantiated from untyped checkpoint data
             raise ValueError(f"unsupported approval kind: {self.kind!r}")
@@ -130,10 +160,12 @@ class ApprovalBinding:
             "diff_hash": self.diff_hash,
             "nonce": self.nonce,
             "plan_hash": self.plan_hash,
+            "patch_hash": self.patch_hash,
             "writable_paths": list(self.writable_paths),
             "patch_attempt": self.patch_attempt,
             "test_result_hash": self.test_result_hash,
             "commit_message": self.commit_message,
+            "expected_tree_oid": self.expected_tree_oid,
         }
 
     @classmethod
@@ -152,10 +184,12 @@ class ApprovalBinding:
                 diff_hash=data["diff_hash"],
                 nonce=data["nonce"],
                 plan_hash=data.get("plan_hash", ""),
+                patch_hash=data.get("patch_hash", ""),
                 writable_paths=tuple(writable_paths),
                 patch_attempt=data.get("patch_attempt", 0),
                 test_result_hash=data.get("test_result_hash", ""),
                 commit_message=data.get("commit_message", ""),
+                expected_tree_oid=data.get("expected_tree_oid", ""),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError(f"invalid approval binding: {exc}") from exc
@@ -170,19 +204,18 @@ class ApprovalRecord:
 
     def __post_init__(self) -> None:
         for name in ("issued_at", "expires_at"):
-            value = float(getattr(self, name))
-            if not math.isfinite(value) or value < 0:
-                raise ValueError(f"{name} must be a finite non-negative timestamp")
+            _timestamp(name, getattr(self, name))
         if self.expires_at <= self.issued_at:
             raise ValueError("approval expiry must be after issuance")
         if self.consumed_at is not None:
-            if not math.isfinite(float(self.consumed_at)) or self.consumed_at < self.issued_at:
+            consumed = _timestamp("consumed_at", self.consumed_at)
+            if consumed < self.issued_at:
                 raise ValueError("consumed_at must be a valid timestamp after issuance")
             if self.consumed_at >= self.expires_at:
                 raise ValueError("consumed_at must be before approval expiry")
 
     def consume(self, expected: ApprovalBinding, *, now: float | None = None) -> "ApprovalRecord":
-        at = time.time() if now is None else float(now)
+        at = time.time() if now is None else _timestamp("now", now)
         if self.consumed_at is not None:
             raise ApprovalConsumed("approval has already been consumed")
         if at >= self.expires_at:
@@ -204,10 +237,12 @@ class ApprovalRecord:
         try:
             return cls(
                 binding=ApprovalBinding.from_dict(data["binding"]),
-                issued_at=float(data["issued_at"]),
-                expires_at=float(data["expires_at"]),
+                issued_at=_timestamp("issued_at", data["issued_at"]),
+                expires_at=_timestamp("expires_at", data["expires_at"]),
                 consumed_at=(
-                    None if data.get("consumed_at") is None else float(data["consumed_at"])
+                    None
+                    if data.get("consumed_at") is None
+                    else _timestamp("consumed_at", data["consumed_at"])
                 ),
             )
         except (KeyError, TypeError, ValueError) as exc:
@@ -221,15 +256,15 @@ def issue_write_approval(
     base_sha: str,
     diff_hash: str,
     plan_hash: str,
+    patch_hash: str,
     writable_paths: tuple[str, ...],
     patch_attempt: int,
     ttl_seconds: float,
     now: float | None = None,
     nonce: str | None = None,
 ) -> ApprovalRecord:
-    issued = time.time() if now is None else float(now)
-    if not math.isfinite(float(ttl_seconds)) or ttl_seconds <= 0:
-        raise ValueError("approval ttl_seconds must be finite and positive")
+    issued = time.time() if now is None else _timestamp("now", now)
+    ttl = _timestamp("approval ttl_seconds", ttl_seconds, positive=True)
     binding = ApprovalBinding(
         kind=ApprovalKind.WRITE,
         run_id=run_id,
@@ -238,10 +273,11 @@ def issue_write_approval(
         diff_hash=diff_hash,
         nonce=nonce or secrets.token_urlsafe(24),
         plan_hash=plan_hash,
+        patch_hash=patch_hash,
         writable_paths=writable_paths,
         patch_attempt=patch_attempt,
     )
-    return ApprovalRecord(binding, issued, issued + float(ttl_seconds))
+    return ApprovalRecord(binding, issued, issued + ttl)
 
 
 def issue_commit_approval(
@@ -252,13 +288,13 @@ def issue_commit_approval(
     diff_hash: str,
     test_result_hash: str,
     commit_message: str,
+    expected_tree_oid: str,
     ttl_seconds: float,
     now: float | None = None,
     nonce: str | None = None,
 ) -> ApprovalRecord:
-    issued = time.time() if now is None else float(now)
-    if not math.isfinite(float(ttl_seconds)) or ttl_seconds <= 0:
-        raise ValueError("approval ttl_seconds must be finite and positive")
+    issued = time.time() if now is None else _timestamp("now", now)
+    ttl = _timestamp("approval ttl_seconds", ttl_seconds, positive=True)
     binding = ApprovalBinding(
         kind=ApprovalKind.COMMIT,
         run_id=run_id,
@@ -268,5 +304,6 @@ def issue_commit_approval(
         nonce=nonce or secrets.token_urlsafe(24),
         test_result_hash=test_result_hash,
         commit_message=commit_message,
+        expected_tree_oid=expected_tree_oid,
     )
-    return ApprovalRecord(binding, issued, issued + float(ttl_seconds))
+    return ApprovalRecord(binding, issued, issued + ttl)

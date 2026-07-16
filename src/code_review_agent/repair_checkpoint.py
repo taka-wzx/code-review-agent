@@ -19,20 +19,24 @@ from code_review_agent.repair_approval import (
     WINDOWS_RESERVED_DEVICE_NAMES,
     normalize_repo_paths,
 )
-from code_review_agent.repair_state import RepairState
+from code_review_agent.repair_state import (
+    IllegalTransitionError,
+    RepairState,
+    RepairStateMachine,
+)
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # No trailing dot: Windows strips it, so "run." and "run" would alias the same
 # state directory and let one run clobber another run's snapshot.
-_RUN_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?\Z")
+_RUN_ID = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9_-])?\Z")
 
 
 def _require_valid_run_id(run_id: Any) -> str:
     if not isinstance(run_id, str) or not _RUN_ID.fullmatch(run_id):
         raise ValueError(
-            "run_id must contain only letters, digits, dot, underscore, or dash, "
-            "start with a letter or digit, and not end with a dot"
+            "run_id must contain only lowercase ASCII letters, digits, dot, "
+            "underscore, or dash; start with a letter or digit; and not end with a dot"
         )
     if run_id.split(".")[0].upper() in WINDOWS_RESERVED_DEVICE_NAMES:
         raise ValueError("run_id must not be a Windows reserved device name")
@@ -48,6 +52,10 @@ class CheckpointCorrupt(CheckpointError):
 
 
 class CheckpointVersionError(CheckpointError):
+    pass
+
+
+class RunLockUnavailable(CheckpointError):
     pass
 
 
@@ -124,11 +132,28 @@ def _paths(data: dict[str, Any]) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _state_history(data: dict[str, Any]) -> tuple[RepairState, ...]:
+    value = data.get("state_history")
+    if not isinstance(value, list) or not value:
+        raise CheckpointCorrupt("checkpoint field 'state_history' must be a non-empty list")
+    try:
+        return tuple(RepairState(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise CheckpointCorrupt("checkpoint state_history contains an invalid state") from exc
+
+
 def _optional_mapping(data: dict[str, Any], name: str) -> dict[str, Any] | None:
     value = data.get(name)
     if value is not None and not isinstance(value, dict):
         raise CheckpointCorrupt(f"checkpoint field {name!r} must be an object or null")
     return deepcopy(value)
+
+
+def _nonnegative_number(data: dict[str, Any], name: str) -> float:
+    value = data.get(name, 0.0)
+    if not _finite_nonnegative(value):
+        raise CheckpointCorrupt(f"checkpoint field {name!r} must be finite and non-negative")
+    return float(value)
 
 
 @dataclass
@@ -139,6 +164,7 @@ class RepairCheckpoint:
     task_branch: str
     worktree: str
     state: RepairState = RepairState.DISCOVER
+    state_history: tuple[RepairState, ...] = (RepairState.DISCOVER,)
     sequence: int = 0
     issue_ref: str = ""
     original_snapshot: dict[str, Any] = field(default_factory=dict)
@@ -162,6 +188,13 @@ class RepairCheckpoint:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
         self.state = RepairState(self.state)
+        if not isinstance(self.state_history, (tuple, list)):
+            raise ValueError("state_history must be a sequence of repair states")
+        try:
+            machine = RepairStateMachine(self.state, list(self.state_history))
+        except (ValueError, IllegalTransitionError) as exc:
+            raise ValueError(f"invalid state_history: {exc}") from exc
+        self.state_history = tuple(machine.history)
         if not isinstance(self.writable_paths, (tuple, list)):
             raise ValueError("writable_paths must be a sequence of path strings")
         self.writable_paths = normalize_repo_paths(tuple(self.writable_paths))
@@ -178,6 +211,7 @@ class RepairCheckpoint:
             "task_branch": self.task_branch,
             "worktree": self.worktree,
             "state": self.state.value,
+            "state_history": [item.value for item in self.state_history],
             "sequence": self.sequence,
             "issue_ref": self.issue_ref,
             "original_snapshot": deepcopy(self.original_snapshot),
@@ -211,6 +245,7 @@ class RepairCheckpoint:
                 task_branch=_required_text(data, "task_branch"),
                 worktree=_required_text(data, "worktree"),
                 state=state,
+                state_history=_state_history(data),
                 sequence=data.get("sequence", 0),
                 issue_ref=_text(data, "issue_ref"),
                 original_snapshot=_mapping(data, "original_snapshot"),
@@ -225,7 +260,7 @@ class RepairCheckpoint:
                 approvals=_records(data, "approvals"),
                 last_transition=_mapping(data, "last_transition"),
                 in_progress_operation=_optional_mapping(data, "in_progress_operation"),
-                updated_at=float(data.get("updated_at", 0.0)),
+                updated_at=_nonnegative_number(data, "updated_at"),
             )
         except (TypeError, ValueError) as exc:
             raise CheckpointCorrupt(f"invalid checkpoint payload: {exc}") from exc
@@ -283,6 +318,13 @@ class CheckpointStore:
 
     def journal_path(self, run_id: str) -> Path:
         return self._run_dir(run_id) / "events.jsonl"
+
+    def lock_path(self, run_id: str) -> Path:
+        return self._run_dir(run_id) / "run.lock"
+
+    def acquire_run_lock(self, run_id: str) -> "RunFileLock":
+        self._validate_run_id(run_id)
+        return RunFileLock(self.lock_path(run_id))
 
     def save(self, checkpoint: RepairCheckpoint) -> str:
         with self._lock:
@@ -396,8 +438,63 @@ def secrets_compare(left: str, right: str) -> bool:
 
 
 def _finite_nonnegative(value: Any) -> bool:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
-    return math.isfinite(number) and number >= 0
+    return math.isfinite(value) and value >= 0
+
+
+class RunFileLock:
+    """Non-blocking OS lock released automatically after process termination."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._stream: Any = None
+        self._locked = False
+
+    def __enter__(self) -> "RunFileLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        stream = self.path.open("a+b")
+        if stream.seek(0, os.SEEK_END) == 0:
+            stream.write(b"\0")
+            stream.flush()
+            os.fsync(stream.fileno())
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(  # type: ignore[attr-defined]
+                    stream.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+                )
+        except OSError as exc:
+            stream.close()
+            raise RunLockUnavailable(f"repair run is already locked: {self.path}") from exc
+        self._stream = stream
+        self._locked = True
+        return self
+
+    def __exit__(self, _exc_type: Any, _exc: Any, _traceback: Any) -> None:
+        if self._stream is None:
+            return
+        try:
+            if self._locked:
+                self._stream.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(  # type: ignore[attr-defined]
+                        self._stream.fileno(), fcntl.LOCK_UN  # type: ignore[attr-defined]
+                    )
+        finally:
+            self._locked = False
+            self._stream.close()
+            self._stream = None

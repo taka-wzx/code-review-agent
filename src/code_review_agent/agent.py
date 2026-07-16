@@ -340,6 +340,9 @@ def _git_diff_text(args) -> str:
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "repair":
+        from code_review_agent.repair import repair_cli_main
+        return repair_cli_main(sys.argv[2:])
     parser = argparse.ArgumentParser(description="Minimal code-review agent")
     parser.add_argument("diff", nargs="?",
                         help="Path to a unified diff file (or use --commit/--uncommitted/--pr)")
