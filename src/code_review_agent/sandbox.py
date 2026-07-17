@@ -103,7 +103,7 @@ class BoundedProcessExecutor:
         creationflags = 0
         start_new_session = os.name != "nt"
         if os.name == "nt":
-            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+            creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"))
         process = subprocess.Popen(
             list(argv),
             cwd=str(cwd),
