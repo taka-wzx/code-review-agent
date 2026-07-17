@@ -63,6 +63,7 @@ from code_review_agent.sandbox import (
     ReadOnlyMount,
     SandboxError,
     WritableMount,
+    _path_has_symlink_or_reparse_component,
 )
 
 
@@ -442,26 +443,28 @@ def _validate_object_id(value: str) -> str:
 
 def _canonical_existing_directory(path: Path, label: str) -> Path:
     raw = Path(path)
-    absolute = Path(os.path.abspath(raw))
     try:
+        has_alias = _path_has_symlink_or_reparse_component(raw)
         resolved = raw.resolve(strict=True)
+        has_alias = has_alias or _path_has_symlink_or_reparse_component(raw)
     except OSError as exc:
         raise WorktreePolicyError(f"{label} cannot be resolved: {exc}") from exc
     if not resolved.is_dir():
         raise WorktreePolicyError(f"{label} must be a directory")
-    if os.path.normcase(str(absolute)) != os.path.normcase(str(resolved)):
+    if has_alias:
         raise WorktreePolicyError(f"{label} must not contain symlink or junction aliases")
     return resolved
 
 
 def _canonical_candidate(path: Path, label: str) -> Path:
     raw = Path(path)
-    absolute = Path(os.path.abspath(raw))
     try:
+        has_alias = _path_has_symlink_or_reparse_component(raw)
         resolved = raw.resolve(strict=False)
+        has_alias = has_alias or _path_has_symlink_or_reparse_component(raw)
     except OSError as exc:
         raise WorktreePolicyError(f"{label} cannot be resolved: {exc}") from exc
-    if os.path.normcase(str(absolute)) != os.path.normcase(str(resolved)):
+    if has_alias:
         raise WorktreePolicyError(f"{label} must not contain symlink or junction aliases")
     return resolved
 

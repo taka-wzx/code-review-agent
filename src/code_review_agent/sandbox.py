@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 from threading import Lock, Thread
 import time
@@ -519,16 +520,41 @@ def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
     return command
 
 
+def _path_has_symlink_or_reparse_component(path: Path) -> bool:
+    """Detect filesystem aliases without comparing equivalent path spellings.
+
+    ``Path.resolve()`` may expand a Windows 8.3 component (for example,
+    ``RUNNER~1``) even when no symlink or junction is present.  Comparing the
+    input text with the resolved text therefore rejects normal GitHub runner
+    temporary directories.  Inspecting every existing component preserves the
+    reparse-point boundary while allowing the canonical spelling to differ.
+    """
+
+    absolute = Path(os.path.abspath(path))
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    for component in (absolute, *absolute.parents):
+        try:
+            metadata = os.lstat(component)
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            return True
+        if int(getattr(metadata, "st_file_attributes", 0)) & reparse_flag:
+            return True
+    return False
+
+
 def _canonical_worktree(path: Path) -> Path:
     raw = Path(path)
-    absolute = Path(os.path.abspath(raw))
     try:
+        has_alias = _path_has_symlink_or_reparse_component(raw)
         resolved = raw.resolve(strict=True)
+        has_alias = has_alias or _path_has_symlink_or_reparse_component(raw)
     except OSError as exc:
         raise SandboxPolicyError(f"worktree cannot be resolved: {exc}") from exc
     if not resolved.is_dir():
         raise SandboxPolicyError("worktree must be an existing directory")
-    if os.path.normcase(str(absolute)) != os.path.normcase(str(resolved)):
+    if has_alias:
         raise SandboxPolicyError("worktree path must not contain symlink or junction aliases")
     if any(char in str(resolved) for char in (",", "\n", "\r", "\x00")):
         raise SandboxPolicyError("worktree path cannot be represented safely as a Docker mount")
@@ -537,12 +563,13 @@ def _canonical_worktree(path: Path) -> Path:
 
 def _canonical_mount_source(path: Path) -> Path:
     raw = Path(path)
-    absolute = Path(os.path.abspath(raw))
     try:
+        has_alias = _path_has_symlink_or_reparse_component(raw)
         resolved = raw.resolve(strict=True)
+        has_alias = has_alias or _path_has_symlink_or_reparse_component(raw)
     except OSError as exc:
         raise SandboxPolicyError(f"read-only mount cannot be resolved: {exc}") from exc
-    if os.path.normcase(str(absolute)) != os.path.normcase(str(resolved)):
+    if has_alias:
         raise SandboxPolicyError("read-only mount must not use symlink or junction aliases")
     if any(char in str(resolved) for char in (",", "\n", "\r", "\x00")):
         raise SandboxPolicyError("read-only mount source cannot be represented safely")
