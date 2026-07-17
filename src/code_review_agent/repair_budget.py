@@ -511,11 +511,13 @@ class _CohortFileLock:
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+                lock_api: Any = msvcrt
+                lock_api.locking(stream.fileno(), lock_api.LK_LOCK, 1)
             else:
                 import fcntl
 
-                fcntl.flock(stream.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+                lock_api = fcntl
+                lock_api.flock(stream.fileno(), lock_api.LOCK_EX)
         except OSError as exc:
             stream.close()
             raise CohortLedgerError(f"cannot lock aggregate cost ledger: {self.path}") from exc
@@ -530,13 +532,13 @@ class _CohortFileLock:
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
+                lock_api: Any = msvcrt
+                lock_api.locking(self._stream.fileno(), lock_api.LK_UNLCK, 1)
             else:
                 import fcntl
 
-                fcntl.flock(  # type: ignore[attr-defined]
-                    self._stream.fileno(), fcntl.LOCK_UN  # type: ignore[attr-defined]
-                )
+                lock_api = fcntl
+                lock_api.flock(self._stream.fileno(), lock_api.LOCK_UN)
         finally:
             self._stream.close()
             self._stream = None

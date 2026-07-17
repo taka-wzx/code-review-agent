@@ -463,13 +463,15 @@ class RunFileLock:
             if os.name == "nt":
                 import msvcrt
 
-                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                lock_api: Any = msvcrt
+                lock_api.locking(stream.fileno(), lock_api.LK_NBLCK, 1)
             else:
                 import fcntl
 
-                fcntl.flock(  # type: ignore[attr-defined]
+                lock_api = fcntl
+                lock_api.flock(
                     stream.fileno(),
-                    fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+                    lock_api.LOCK_EX | lock_api.LOCK_NB,
                 )
         except OSError as exc:
             stream.close()
@@ -487,13 +489,13 @@ class RunFileLock:
                 if os.name == "nt":
                     import msvcrt
 
-                    msvcrt.locking(self._stream.fileno(), msvcrt.LK_UNLCK, 1)
+                    lock_api: Any = msvcrt
+                    lock_api.locking(self._stream.fileno(), lock_api.LK_UNLCK, 1)
                 else:
                     import fcntl
 
-                    fcntl.flock(  # type: ignore[attr-defined]
-                        self._stream.fileno(), fcntl.LOCK_UN  # type: ignore[attr-defined]
-                    )
+                    lock_api = fcntl
+                    lock_api.flock(self._stream.fileno(), lock_api.LOCK_UN)
         finally:
             self._locked = False
             self._stream.close()
