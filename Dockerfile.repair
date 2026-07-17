@@ -1,0 +1,31 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/workspace/src \
+    HOME=/tmp/repair-home \
+    XDG_CONFIG_HOME=/tmp/repair-config
+
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
+    && apt-get install --yes --no-install-recommends git=1:2.39.5-0+deb12u2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 repair \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin repair \
+    && mkdir -p /tmp/repair-home /tmp/repair-config \
+    && chown -R 65532:65532 /tmp/repair-home /tmp/repair-config
+
+COPY requirements.lock /tmp/requirements.lock
+RUN python -m pip install --no-cache-dir --timeout 120 --retries 5 \
+        --requirement /tmp/requirements.lock \
+    && python -m pip install --no-cache-dir --timeout 120 --retries 5 \
+        pytest==8.4.1 \
+    && rm /tmp/requirements.lock
+
+USER 65532:65532
+WORKDIR /workspace
+
+# DockerSandboxRunner always overrides this with an exact allowlisted argv.
+ENTRYPOINT ["python"]
+CMD ["-m", "unittest"]
