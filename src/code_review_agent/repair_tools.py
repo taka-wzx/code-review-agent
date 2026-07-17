@@ -5,7 +5,6 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 import hashlib
 import json
-import os
 from pathlib import Path, PurePosixPath
 import re
 import secrets
@@ -29,6 +28,7 @@ from code_review_agent.sandbox import (
     SandboxResult,
     SandboxTimeout,
     WritableMount,
+    _path_has_symlink_or_reparse_component,
 )
 
 
@@ -1385,14 +1385,15 @@ def _sha256_text(value: str) -> str:
 
 def _canonical_directory(path: Path, label: str) -> Path:
     raw = Path(path)
-    absolute = Path(os.path.abspath(raw))
     try:
+        has_alias = _path_has_symlink_or_reparse_component(raw)
         resolved = raw.resolve(strict=True)
+        has_alias = has_alias or _path_has_symlink_or_reparse_component(raw)
     except OSError as exc:
         raise GitToolError(f"{label} cannot be resolved: {exc}") from exc
     if not resolved.is_dir():
         raise GitToolError(f"{label} must be a directory")
-    if os.path.normcase(str(absolute)) != os.path.normcase(str(resolved)):
+    if has_alias:
         raise GitToolError(f"{label} must not use symlink or junction aliases")
     return resolved
 

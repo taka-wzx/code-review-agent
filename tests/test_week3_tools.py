@@ -9,6 +9,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import code_review_agent.repair as repair_module
+import code_review_agent.repair_tools as repair_tools_module
+import code_review_agent.sandbox as sandbox_module
 from code_review_agent.repair import (
     DockerWorktreeBackend,
     OriginalCheckoutChanged,
@@ -100,6 +103,47 @@ def process_result(
         timed_out=timed_out,
         output_truncated=truncated,
     )
+
+
+class TestCanonicalHostPaths(unittest.TestCase):
+    def test_canonicalization_accepts_non_reparse_spelling_changes(self):
+        with tempfile.TemporaryDirectory() as raw_tmp, tempfile.TemporaryDirectory() as canonical_tmp:
+            raw = Path(raw_tmp)
+            canonical = Path(canonical_tmp)
+            with (
+                mock.patch.object(
+                    sandbox_module,
+                    "_path_has_symlink_or_reparse_component",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    repair_module,
+                    "_path_has_symlink_or_reparse_component",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    repair_tools_module,
+                    "_path_has_symlink_or_reparse_component",
+                    return_value=False,
+                ),
+                mock.patch.object(Path, "resolve", return_value=canonical),
+            ):
+                self.assertEqual(sandbox_module._canonical_worktree(raw), canonical)
+                self.assertEqual(sandbox_module._canonical_mount_source(raw), canonical)
+                self.assertEqual(
+                    repair_module._canonical_existing_directory(raw, "directory"), canonical
+                )
+                self.assertEqual(repair_module._canonical_candidate(raw, "candidate"), canonical)
+                self.assertEqual(
+                    repair_tools_module._canonical_directory(raw, "directory"), canonical
+                )
+
+    def test_reparse_attribute_is_detected_without_resolving_the_alias(self):
+        metadata = mock.Mock(st_mode=0, st_file_attributes=0x400)
+        with mock.patch.object(sandbox_module.os, "lstat", return_value=metadata):
+            self.assertTrue(
+                sandbox_module._path_has_symlink_or_reparse_component(Path("ordinary"))
+            )
 
 
 class TestDockerSandbox(unittest.TestCase):
