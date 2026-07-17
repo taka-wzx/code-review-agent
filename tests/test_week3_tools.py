@@ -483,6 +483,9 @@ class TestRepairWorktreeLifecycle(unittest.TestCase):
             rewritten_marker = (repair_root / "issue-run" / ".git").read_text(
                 encoding="utf-8"
             )
+            expected_metadata = (
+                original.resolve() / ".git" / "worktrees" / "issue-run"
+            ).as_posix()
 
         self.assertEqual(snapshot.branch, "master")
         self.assertEqual(snapshot.tracked, ("app.py",))
@@ -493,7 +496,7 @@ class TestRepairWorktreeLifecycle(unittest.TestCase):
         self.assertEqual(budget.usage.commands, 6)
         self.assertEqual(
             rewritten_marker,
-            f"gitdir: {(original / '.git' / 'worktrees' / 'issue-run').as_posix()}\n",
+            f"gitdir: {expected_metadata}\n",
         )
 
     def test_docker_worktree_marker_rewrite_rejects_metadata_path_escape(self):
@@ -600,7 +603,7 @@ class TestRepairWorktreeLifecycle(unittest.TestCase):
         with self.assertRaises(WorktreeProvisionError) as caught:
             manager.create(issue_slug="issue", run_id="run-1", base_sha=BASE_SHA)
         target = worktrees / "issue-run-1"
-        self.assertEqual(caught.exception.quarantine_path, target)
+        self.assertEqual(caught.exception.quarantine_path, target.resolve())
         self.assertTrue(target.is_dir())
 
     def test_original_mutation_and_dirty_or_wrong_task_are_detected(self):
