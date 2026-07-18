@@ -13,8 +13,11 @@
   （5 development / 5 tuning / 20 sealed reporting）、6 配置单因素消融、独立
   worktree/Docker 身份和 USD 80 总硬上限；已实现纯离线选择/run-plan 验证、pass@1、
   成本/时延/工具/测试失败/非法操作统计、并发/container-hour 审计和仓库分层配对
-  Bootstrap 95% CI。Claude 独立审查的 13 项发现已在 integration 逐项处置；真实任务
-  尚未下载或物化，Docker/外部模型/付费评测均未运行，等待本地 master 合入批准。
+  Bootstrap 95% CI。Claude 独立审查的 13 项发现已在 integration 逐项处置；成果已
+  合入并推送 `master`，远端 SHA 已核对，GitHub CI 已到成功终态。真实任务尚未下载或
+  物化，Docker/外部模型/付费评测均未运行。
+- 第 6 周：已从第 5 周合入后的最新 `master` 制定安全红队与生产可观测性详细合同；
+  当前仅完成计划，尚未修改运行时、下载外部资料、启动 Docker/外部模型或执行攻击。
 
 ## 第 1 周：工程基线与公开交付
 
@@ -104,7 +107,10 @@ Repair 评测：接入 SWE-bench Verified 的 20–50 个任务子集，利用�
 
 ## 第 6 周：安全与生产可观测性
 
-安全测试至少覆盖：
+目标不是只增加零散回归，而是冻结威胁模型、可观察副作用和成对正常对照，形成可复核的
+离线安全门禁。计划至少包含 48 个全新合成用例：36 个对抗用例和 12 个成对正常对照。
+
+安全测试覆盖：
 
 - README 或代码注释中的 Prompt Injection。
 - 工具输出诱导调用其他工具。
@@ -114,15 +120,27 @@ Repair 评测：接入 SWE-bench Verified 的 20–50 个任务子集，利用�
 - 恶意测试脚本。
 - 超大文件和无限循环。
 - Agent 尝试修改未授权文件。
+- 审批重放、Checkpoint 篡改、日志换行伪造和 exporter 失败。
 
-将 OWASP Agentic AI 中的行为劫持、工具误用等风险落实为可执行红队测试。
+以“是否发生禁止副作用”为判据，报告 attack success、拦截、检测、误拦、敏感信息泄漏、
+越权操作、清理/隔离和证据完整率。强制门禁为零禁止副作用、零 canary 泄漏、零已执行越权
+操作，且 12 个正常对照不被误拦。OWASP Agentic AI 的精确版本和风险映射必须在实现前冻结。
 
 可观测性：
 
-- 为每次 Agent Run、LLM 请求和工具调用分配 trace/span。
-- 记录模型、缓存 Token、成本、延迟、重试和错误类型。
-- 对 Prompt 和工具结果做可配置脱敏。
-- 采用 OpenTelemetry GenAI Agent、Tool Call、Token Usage 等语义字段替换完全自定义的 JSONL 口径。
+- 为每次 Agent Run、阶段、LLM 请求、工具调用、策略决定、审批、沙箱命令和终态分配
+  trace/span，并校验父子关系、并发时间线和生命周期。
+- 记录精确模型、输入/输出/缓存 Token、整数 micro-USD 成本、时延、重试、预算和稳定错误类型。
+- Prompt、工具参数/结果、stdout/stderr、异常和路径在序列化前统一脱敏；默认不记录原文。
+- 实现前冻结 OpenTelemetry GenAI 语义约定的权威版本、稳定性和字段映射；以版本化语义
+  envelope 取代完全自定义词汇，同时保留一个有截止期的旧 JSONL 兼容桥。
+- 本地安全审计不采样；远端 exporter 默认关闭。远端失败只能进入明确 degraded 状态，
+  不能放宽策略；Repair 缺失强制本地审计时必须在写操作前 fail closed。
+
+本周按 Phase 0--7 八个阶段推进：规划、合同冻结、离线可观测性核心、合成红队、可选
+Docker smoke、可选模型攻击评测、Claude/integration，以及 master/push/CI。Phase 1
+之后的实施、执行和交付门禁均需按合同获得相应批准；完整合同见
+`docs/plans/week6-security-observability.md`。
 
 ## 第 7 周：标准协议与服务化
 

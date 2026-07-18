@@ -2,7 +2,7 @@
 
 两阶段（**Finder + Verifier**）LLM 代码审查 Agent：**Finder 负责召回候选缺陷，Verifier 负责证据验证与过滤**，配套一套可复现的离线评测台架。走 OpenAI 兼容接口，provider 无关（目前支持 DeepSeek 与 GLM）。
 
-> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 4 合入后的最新 master CI 已运行通过；无线上用户、无生产部署。
+> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 5 合入后的最新 master CI 已运行通过；无线上用户、无生产部署。
 
 ## 项目定位
 
@@ -133,23 +133,23 @@ docker run --rm code-review-agent --help
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
 
-> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 4 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过。
+> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 5 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过。
 
 ## 测试与质量
 
-以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 5 Codex
-任务分支实测的结果，非复制而来：
+以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 5
+最终 integration 实测的结果，非复制而来：
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **470 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
+| 单测 + golden 测试 | **483 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
 | 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
 | mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
 | 评测资产一致性 | **本轮未运行**：Week 5 合同禁止读取现有 `eval/` / `eval/holdout/` |
 
-测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；Week 4 合入后的最新 `master` 已实际运行通过。
+测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；Week 5 合入后的最新 `master` 已实际运行通过。
 
 ## 评测
 
@@ -224,6 +224,23 @@ python -B swebench_repair_runner.py validate-plans `
 SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用外部/付费模型，也没有可报告
 的 pass@1、成本、时延或消融结果。**
 
+### 安全红队与生产可观测性计划（Week 6）
+
+Week 6 已在第 5 周合入后的 `master`
+基线上制定详细任务合同，计划把现有安全回归扩展为至少 36 个全新合成对抗用例和
+12 个成对正常对照，并以可观察副作用计算 attack success、拦截、检测、误拦、敏感信息
+泄漏、越权操作和证据完整率。
+
+可观测性计划为 Agent Run、阶段、LLM、工具、策略、审批、沙箱和终态建立 trace/span
+层级；Prompt、工具结果、异常和路径先脱敏再序列化；本地安全审计不采样，远端 exporter
+失败不得放宽策略。实现前还必须冻结 OpenTelemetry GenAI 语义约定的权威版本和字段映射，
+并为现有 JSONL trace 提供有截止期的兼容桥。
+
+完整威胁模型、48 用例配额、资源预算、阶段授权和验收门禁见
+[`docs/plans/week6-security-observability.md`](docs/plans/week6-security-observability.md)。
+**当前仅完成计划：尚未修改运行时、创建红队资产、下载外部资料、启动 Docker、调用外部
+模型或产生任何安全效果数字。**
+
 ### 历史开发基准
 
 - **公开集**：16 diffs / 30 埋点，源自一个真实项目（pingpong tracker）的 bug 蒸馏（dt 感知门、单位/量纲、死旗标、降采样过滤等），含 2 个无埋点陷阱用例（专测误报）与 1 个信息缺失用例（专测"编造 vs 诚实报告"）；ground truth 在 `eval/truth.json`，每个埋点附命中标准，`eval/check_consistency.py` 保证 diff↔fixture↔truth 三方一致
@@ -290,7 +307,7 @@ SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用�
 - **模型是服务端别名非快照**：跨代对比混入模型漂移变量；`LLM_MODEL` 可锁定快照 id，trace 记录 meta
 - **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise，precision 是有偏低估
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
-- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 4 合入后的最新 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
+- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 5 合入后的最新 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
 - **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
 - **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 
