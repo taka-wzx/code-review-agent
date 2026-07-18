@@ -16,7 +16,8 @@ Current execution status:
 - Phase 2 observability implementation and default offline validation:
   complete; Claude review, P2 remediation, and integration validation complete;
 - Phase 3 synthetic corpus materialization/execution: authorized 2026-07-18;
-  active on an isolated Codex branch;
+  Codex implementation and full offline validation complete on an isolated
+  branch; independent Claude review and integration remain pending;
 - Docker, external-model, and paid-evaluation phases: not authorized.
 
 Week 6 is successful only when:

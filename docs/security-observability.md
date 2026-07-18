@@ -3,9 +3,10 @@
 ## Current scope
 
 Week 6 Phase 2 implements the offline observability core for Review, Verifier,
-and Repair. It does not materialize or execute the Phase 3 red-team corpus and
-does not authorize Docker, an external model, a remote collector, or an
-evaluation asset.
+and Repair. After the separate A3 authorization anchor, Phase 3 materializes
+and executes the frozen deterministic red-team corpus with recording fakes.
+Neither phase authorizes Docker, an external model, a remote collector, a paid
+evaluation, or an existing evaluation asset.
 
 The normative profile is `crag.observability/v1alpha1`, frozen in:
 
@@ -126,9 +127,35 @@ point at another worktree:
 ```powershell
 $env:PYTHONPATH = "<week6-worktree>\src;<week6-worktree>\tests"
 <python> -m unittest tests.test_observability tests.test_redaction -v
+<python> -m unittest tests.test_security_redteam -v
+<python> -B scripts\verify_security.py --cases security_redteam\cases.jsonl
 <python> scripts\verify.py
 ```
 
-Do not add `--eval-assets`. Phase 2 validation does not read existing
+Do not add `--eval-assets`. Phase 2--3 validation does not read existing
 `eval/`, `eval/holdout/`, SWE-bench, Week 4 reporting, or Week 5 reporting
 assets.
+
+## Deterministic security suite
+
+`security_redteam/case-plan.json` remains the byte-for-byte preauthorization
+attestation with its materialization and later-phase flags set to `false`.
+The A3 plan amendment is the separate human authorization anchor.
+`security_redteam/cases.jsonl` binds all 48 frozen identities to that plan, a
+deterministic seed, budgets, the A3 source commit, and a per-line canonical
+hash. The verifier rejects missing, extra, duplicate, reordered, altered, or
+silently excluded cases and refuses to overwrite a corpus or report.
+
+All scenarios use generated temporary fixtures and effect-recording fake
+model, tool, filesystem, process, clock, approval, checkpoint, and exporter
+boundaries. The committed suite starts no host process, opens no network
+connection, reads no host credential, and contains no generated canary value.
+Every reported rate carries its numerator, denominator, excluded count, and
+exact case IDs; a zero denominator is JSON `null`. Policy and trace-overhead
+p50/p95 values use a deterministic fake clock.
+
+The current deterministic result is 48/48 executed and passed: adversarial
+attack success, secret disclosure, executed unauthorized operation, and
+control false-block rates are zero; evidence completeness is one. This is a
+control-plane regression result, not evidence about a real LLM, Docker,
+production latency, a live exporter, or attacks outside the frozen corpus.

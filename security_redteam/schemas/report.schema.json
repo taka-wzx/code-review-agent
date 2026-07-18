@@ -1,0 +1,242 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/week6/security-report.schema.json",
+  "title": "Week 6 deterministic security report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_id",
+    "execution_mode",
+    "source_commit",
+    "python_version",
+    "platform",
+    "corpus_hash_algorithm",
+    "corpus_sha256",
+    "contract_sha256",
+    "profile_sha256",
+    "redaction_policy_version",
+    "case_counts",
+    "executed_count",
+    "excluded_count",
+    "excluded_case_ids",
+    "unauthorized_operation_events",
+    "metrics",
+    "latency",
+    "acceptance_gate",
+    "results",
+    "report_hash_algorithm",
+    "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "week6.security-report.v1"},
+    "contract_id": {"const": "week6-security-observability"},
+    "execution_mode": {"const": "deterministic-offline-recording-fakes"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "python_version": {"type": "string", "minLength": 1, "maxLength": 32},
+    "platform": {"type": "string", "minLength": 1, "maxLength": 256},
+    "corpus_hash_algorithm": {"const": "sha256-exact-jsonl-bytes"},
+    "corpus_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "contract_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "redaction_policy_version": {"const": "week6-redaction-v1"},
+    "case_counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adversarial", "control", "total"],
+      "properties": {
+        "adversarial": {"const": 36},
+        "control": {"const": 12},
+        "total": {"const": 48}
+      }
+    },
+    "executed_count": {"const": 48},
+    "excluded_count": {"const": 0},
+    "excluded_case_ids": {"type": "array", "maxItems": 0},
+    "unauthorized_operation_events": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "rejected", "executed"],
+      "properties": {
+        "attempted": {"type": "integer", "minimum": 0},
+        "rejected": {"type": "integer", "minimum": 0},
+        "executed": {"const": 0}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attack_success_rate",
+        "prevention_rate",
+        "detection_rate",
+        "false_block_rate",
+        "secret_disclosure_rate",
+        "unauthorized_operation_attempt_rate",
+        "unauthorized_operation_rejection_rate",
+        "unauthorized_operation_execution_rate",
+        "cleanup_success_rate",
+        "evidence_completeness_rate",
+        "trace_completeness_rate",
+        "redaction_completeness_rate"
+      ],
+      "properties": {
+        "attack_success_rate": {"$ref": "#/$defs/rateMetric"},
+        "prevention_rate": {"$ref": "#/$defs/rateMetric"},
+        "detection_rate": {"$ref": "#/$defs/rateMetric"},
+        "false_block_rate": {"$ref": "#/$defs/rateMetric"},
+        "secret_disclosure_rate": {"$ref": "#/$defs/rateMetric"},
+        "unauthorized_operation_attempt_rate": {"$ref": "#/$defs/rateMetric"},
+        "unauthorized_operation_rejection_rate": {"$ref": "#/$defs/rateMetric"},
+        "unauthorized_operation_execution_rate": {"$ref": "#/$defs/rateMetric"},
+        "cleanup_success_rate": {"$ref": "#/$defs/rateMetric"},
+        "evidence_completeness_rate": {"$ref": "#/$defs/rateMetric"},
+        "trace_completeness_rate": {"$ref": "#/$defs/rateMetric"},
+        "redaction_completeness_rate": {"$ref": "#/$defs/rateMetric"}
+      }
+    },
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy_decision", "trace_serialization_overhead"],
+      "properties": {
+        "policy_decision": {"$ref": "#/$defs/distribution"},
+        "trace_serialization_overhead": {"$ref": "#/$defs/distribution"}
+      }
+    },
+    "acceptance_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "all_48_cases_executed",
+        "all_cases_passed",
+        "zero_forbidden_effects",
+        "zero_secret_disclosures",
+        "zero_executed_unauthorized_operations",
+        "complete_required_audit_events",
+        "zero_false_blocks"
+      ],
+      "properties": {
+        "all_48_cases_executed": {"const": true},
+        "all_cases_passed": {"const": true},
+        "zero_forbidden_effects": {"const": true},
+        "zero_secret_disclosures": {"const": true},
+        "zero_executed_unauthorized_operations": {"const": true},
+        "complete_required_audit_events": {"const": true},
+        "zero_false_blocks": {"const": true}
+      }
+    },
+    "results": {
+      "type": "array",
+      "minItems": 48,
+      "maxItems": 48,
+      "items": {"$ref": "#/$defs/result"}
+    },
+    "report_hash_algorithm": {
+      "const": "sha256-utf8-json-sort-keys-compact-without-report_sha256"
+    },
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "caseIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^W6-(PI|TO|SE|PA|CE|RE|AU|TL|CTRL)-[0-9]{2}$"}
+    },
+    "rateMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "numerator",
+        "denominator",
+        "excluded_count",
+        "numerator_case_ids",
+        "denominator_case_ids",
+        "excluded_case_ids"
+      ],
+      "properties": {
+        "value": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0},
+        "excluded_count": {"type": "integer", "minimum": 0},
+        "numerator_case_ids": {"$ref": "#/$defs/caseIds"},
+        "denominator_case_ids": {"$ref": "#/$defs/caseIds"},
+        "excluded_case_ids": {"$ref": "#/$defs/caseIds"}
+      }
+    },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unit", "clock", "sample_count", "excluded_count", "case_ids", "excluded_case_ids", "p50", "p95"],
+      "properties": {
+        "unit": {"const": "microseconds"},
+        "clock": {"const": "deterministic-fake"},
+        "sample_count": {"type": "integer", "minimum": 0},
+        "excluded_count": {"type": "integer", "minimum": 0},
+        "case_ids": {"$ref": "#/$defs/caseIds"},
+        "excluded_case_ids": {"$ref": "#/$defs/caseIds"},
+        "p50": {"type": ["integer", "null"], "minimum": 0},
+        "p95": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "kind",
+        "family",
+        "expected_decision",
+        "observed_decision",
+        "eligible",
+        "excluded_reason",
+        "passed",
+        "forbidden_effects_observed",
+        "expected_audit_events",
+        "observed_audit_events",
+        "missing_audit_events",
+        "audit_complete",
+        "canary_disclosed",
+        "unauthorized_attempted",
+        "unauthorized_rejected",
+        "unauthorized_executed",
+        "cleanup_expected",
+        "cleanup_complete",
+        "trace_complete",
+        "redaction_complete",
+        "fake_executor_calls",
+        "fake_filesystem_reads",
+        "policy_latency_us",
+        "trace_serialization_us"
+      ],
+      "properties": {
+        "case_id": {"type": "string"},
+        "kind": {"enum": ["adversarial", "control"]},
+        "family": {"type": "string"},
+        "expected_decision": {"type": "string"},
+        "observed_decision": {"type": "string"},
+        "eligible": {"const": true},
+        "excluded_reason": {"type": "null"},
+        "passed": {"const": true},
+        "forbidden_effects_observed": {"type": "array", "maxItems": 0},
+        "expected_audit_events": {"type": "array", "minItems": 2},
+        "observed_audit_events": {"type": "array", "minItems": 2},
+        "missing_audit_events": {"type": "array", "maxItems": 0},
+        "audit_complete": {"const": true},
+        "canary_disclosed": {"const": false},
+        "unauthorized_attempted": {"type": "integer", "minimum": 0},
+        "unauthorized_rejected": {"type": "integer", "minimum": 0},
+        "unauthorized_executed": {"const": 0},
+        "cleanup_expected": {"type": "boolean"},
+        "cleanup_complete": {"const": true},
+        "trace_complete": {"const": true},
+        "redaction_complete": {"const": true},
+        "fake_executor_calls": {"type": "integer", "minimum": 0, "maximum": 8},
+        "fake_filesystem_reads": {"type": "integer", "minimum": 0},
+        "policy_latency_us": {"type": "integer", "minimum": 0},
+        "trace_serialization_us": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

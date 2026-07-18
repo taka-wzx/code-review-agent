@@ -226,14 +226,21 @@ SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用�
 
 ### 安全红队与生产可观测性（Week 6）
 
-Week 6 已在第 5 周合入后的 `master` 基线上完成 Phase 1 合同冻结，并进入获批的
-Phase 2 可观测性实现。当前实现为 Agent Run、阶段、LLM、工具、策略、审批、沙箱、
+Week 6 已在第 5 周合入后的 `master` 基线上完成 Phase 1 合同冻结、Phase 2
+可观测性实现和获批的 Phase 3 确定性离线红队套件。当前实现为 Agent Run、阶段、LLM、工具、策略、审批、沙箱、
 checkpoint 和终态建立同根 trace/span 层级；Finder/Verifier 并发 lane 保持兄弟关系；
 Prompt、工具参数/结果、异常、stdout/stderr 和路径在序列化及 exporter 之前脱敏。
 本地 JSONL 不覆盖已有审计文件；Repair 在受保护操作前强制初始化独立本地 sink；
 可选 exporter 首次失败即熔断、留下本地 degraded 证据，且不能放宽任何策略。
-Phase 2 已通过 `scripts/verify.py` 默认离线门禁：509 个测试通过、3 个环境跳过、
+Phase 3 在 A3 授权提交后才物化冻结的 48 个身份（36 对抗、12 正常对照），并只使用
+effect-recording fake 模型、工具、文件系统、进程、时钟、审批、checkpoint 和 exporter。
+`scripts/verify_security.py` 拒绝缺失、重复、重排、篡改、静默排除或覆盖既有证据；报告中
+每个比例均绑定分子、分母、排除数和精确 case ID。
+
+默认离线门禁现为 527 个测试通过、3 个环境跳过、
 总覆盖率 86%、Ruff/mypy/双入口冒烟通过；未使用 `--eval-assets`。
+48/48 合成用例执行通过：对抗成功率、secret disclosure、已执行越权操作率和正常对照
+误拦率均为 0，证据完整率为 1。这里的时延来自确定性 fake clock，不是生产时延。
 
 OpenTelemetry core `1.43.0` 与 GenAI 约定冻结提交已绑定在
 `crag.observability/v1alpha1` profile 中；GenAI 字段仍如实标为 Development，
@@ -243,8 +250,9 @@ OpenTelemetry core `1.43.0` 与 GenAI 约定冻结提交已绑定在
 [`docs/plans/week6-security-observability.md`](docs/plans/week6-security-observability.md)；
 运行与脱敏说明见
 [`docs/security-observability.md`](docs/security-observability.md)。
-**Phase 3 仍未授权：当前没有物化或执行 48 个红队用例，没有下载数据、启动 Docker、
-调用外部模型或产生任何安全效果数字。Phase 2 的通过只证明离线仪器与回归行为。**
+**这些数字只证明冻结的确定性 recording-fake 控制面回归，不代表真实 LLM 攻击抵抗力、
+Docker 隔离或远程 collector/exporter。Phase 4--5 仍未授权；本阶段没有下载数据、启动
+Docker、调用外部模型、运行付费评测或读取既有 eval/holdout。**
 
 ### 历史开发基准
 
