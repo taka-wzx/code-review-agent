@@ -1,5 +1,6 @@
 {
-  "schema_version": "week6.phase1-profile.v1",
+  "schema_version": "week6.phase1-profile.v1.1",
+  "profile_revision": 2,
   "contract_id": "week6-security-observability",
   "profile_id": "crag.observability/v1alpha1",
   "frozen_at": "2026-07-18T08:31:44Z",
@@ -134,7 +135,7 @@
     "project_extension_fields": [
       {"name": "crag.schema.version", "type": "string", "requirement": "required"},
       {"name": "crag.run.id", "type": "string", "requirement": "required"},
-      {"name": "crag.source.commit", "type": "sha256", "requirement": "required"},
+      {"name": "crag.source.commit", "type": "git-object-id-or-unknown", "requirement": "required-unknown-only-when-degraded"},
       {"name": "crag.redaction.policy_version", "type": "string", "requirement": "required"},
       {"name": "crag.redaction.count", "type": "integer", "requirement": "required"},
       {"name": "crag.stage.name", "type": "enum", "requirement": "conditional"},
@@ -242,7 +243,19 @@
       "real-network-exfiltration"
     ]
   },
-  "phase2_implementation_authorized": false,
+  "amendments": [
+    {
+      "amendment_id": "week6-phase2-authorization-a1",
+      "authorized_at": "2026-07-18T08:54:43Z",
+      "authorization": "phase2-observability-implementation",
+      "runtime_results_observed_before_amendment": false,
+      "changes": [
+        "phase2_implementation_authorized=true",
+        "crag.source.commit corrected from sha256 to git-object-id-or-unknown"
+      ]
+    }
+  ],
+  "phase2_implementation_authorized": true,
   "docker_authorized": false,
   "external_model_authorized": false,
   "paid_evaluation_authorized": false

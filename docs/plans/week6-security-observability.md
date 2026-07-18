@@ -58,7 +58,7 @@ user's 2026-07-18 approval:
 | --- | --- | --- |
 | 0 | plan, threat model, budgets, ownership proposal, README/agenda truthfulness | complete at `74a53dfaf84582a2c2d63bcb94e8aee8e559e4db` |
 | 1 | freeze exact telemetry profile, schemas, case plan, and implementation ownership | complete in this contract commit |
-| 2 | implement offline observability core, redaction, validators, and compatibility bridge | requires user approval |
+| 2 | implement offline observability core, redaction, validators, and compatibility bridge | authorized 2026-07-18; active |
 | 3 | implement deterministic synthetic red-team suite and integrations | requires user approval |
 | 4 | bounded local Docker security smoke | separate Docker approval |
 | 5 | optional external-model prompt-injection evaluation | separate model, network, and cost approval |

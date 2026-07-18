@@ -9,7 +9,7 @@ This is the normative Phase 1 annex to
   `74a53dfaf84582a2c2d63bcb94e8aee8e559e4db`
 - Phase 1 freeze time: `2026-07-18T08:31:44Z`
 - Contract profile: `crag.observability/v1alpha1`
-- Runtime implementation: not authorized
+- Runtime implementation: Phase 2 authorized at `2026-07-18T08:54:43Z`
 - Synthetic case materialization or execution: not authorized
 - Docker: not authorized
 - External models or agents: not authorized
@@ -392,9 +392,9 @@ the Phase 1 Git commit.
 
 | Path | SHA-256 |
 | --- | --- |
-| `security_redteam/phase1-profile.json` | `5ece56db02b69a276216aeead208203e5143e3585393fc807ba4c5a5aeb2bc79` |
+| `security_redteam/phase1-profile.json` | `17adcaf49c721c1cfa43d3f5a240a1789da9451f583f25d08f57c72fe61372cb` |
 | `security_redteam/case-plan.json` | `b5bc761dd0494ac5f11e427eb1ff015b7bb0cf8d1f79b5e2a78280900162f4b7` |
-| `security_redteam/schemas/phase1-profile.schema.json` | `f7db2a4e68151fe36160261b016d68fef85ea8bbdcf32c4f576aa6af5919fb28` |
+| `security_redteam/schemas/phase1-profile.schema.json` | `c1e0c9ca0a3d85765848a36ffce097ad9323fcb429cb242223abf1db7eea32a6` |
 | `security_redteam/schemas/case-plan.schema.json` | `a294dc48dfa1325d7556a1f39638ddf1eeda3636be5b9fc63c4d773fc56f097a` |
 
 Hashes are calculated over the canonical UTF-8/LF bytes after validation and
@@ -419,3 +419,21 @@ Phase 1 is complete only if:
   evaluation asset is accessed.
 
 Phase 1 completion does not authorize Phase 2.
+
+## Amendment A1: Phase 2 authorization and source-commit type
+
+Before any runtime result was observed, the user's instruction to proceed
+authorized Phase 2 at `2026-07-18T08:54:43Z`. This amendment:
+
+- changes `phase2_implementation_authorized` to `true`;
+- advances the profile schema to `week6.phase1-profile.v1.1`, revision 2;
+- corrects `crag.source.commit` from the erroneous `sha256` type to
+  `git-object-id-or-unknown`;
+- permits `unknown` only when telemetry is explicitly degraded because an
+  installed package is not associated with a discoverable Git checkout;
+- leaves all 48 case identities, per-case hashes, Phase 3 materialization,
+  Docker, external-model, paid-evaluation, and evaluation-asset prohibitions
+  unchanged.
+
+The revised profile and profile-schema hashes in this annex bind A1. No
+runtime implementation was started before this amendment.

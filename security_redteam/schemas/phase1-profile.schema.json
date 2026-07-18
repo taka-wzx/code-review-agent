@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "schema_version",
+    "profile_revision",
     "contract_id",
     "profile_id",
     "frozen_at",
@@ -19,13 +20,15 @@
     "compatibility",
     "failure_semantics",
     "platform_matrix",
+    "amendments",
     "phase2_implementation_authorized",
     "docker_authorized",
     "external_model_authorized",
     "paid_evaluation_authorized"
   ],
   "properties": {
-    "schema_version": {"const": "week6.phase1-profile.v1"},
+    "schema_version": {"const": "week6.phase1-profile.v1.1"},
+    "profile_revision": {"const": 2},
     "contract_id": {"const": "week6-security-observability"},
     "profile_id": {"const": "crag.observability/v1alpha1"},
     "frozen_at": {"type": "string", "format": "date-time"},
@@ -155,7 +158,36 @@
         "unsupported_as_mandatory": {"$ref": "#/$defs/nonempty_strings"}
       }
     },
-    "phase2_implementation_authorized": {"const": false},
+    "amendments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "amendment_id",
+          "authorized_at",
+          "authorization",
+          "runtime_results_observed_before_amendment",
+          "changes"
+        ],
+        "properties": {
+          "amendment_id": {"const": "week6-phase2-authorization-a1"},
+          "authorized_at": {"type": "string", "format": "date-time"},
+          "authorization": {"const": "phase2-observability-implementation"},
+          "runtime_results_observed_before_amendment": {"const": false},
+          "changes": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "phase2_implementation_authorized": {"const": true},
     "docker_authorized": {"const": false},
     "external_model_authorized": {"const": false},
     "paid_evaluation_authorized": {"const": false}
