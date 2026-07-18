@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.crag.invalid/security/phase45-profile.schema.json",
+  "title": "Week 6 Phase 4--5 live probe profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "base_commit",
+    "authorization_date",
+    "docker",
+    "model",
+    "frozen_paths"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "crag.security-live/v1alpha1"
+    },
+    "base_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "authorization_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "docker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_ids",
+        "image",
+        "repository_digest",
+        "pull",
+        "network",
+        "read_only_root",
+        "tmpfs",
+        "user",
+        "cap_drop",
+        "security_opt",
+        "pids_limit",
+        "memory",
+        "cpus",
+        "ordinary_timeout_seconds",
+        "slow_timeout_seconds",
+        "absolute_case_timeout_seconds",
+        "maximum_container_minutes",
+        "maximum_starts",
+        "concurrency",
+        "probe_path"
+      ],
+      "properties": {
+        "case_ids": {
+          "type": "array",
+          "minItems": 12,
+          "maxItems": 12,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^W6-DK-[0-9]{2}$"
+          }
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "repository_digest": {
+          "type": "string",
+          "pattern": "^[a-z0-9._/-]+@sha256:[0-9a-f]{64}$"
+        },
+        "pull": {"const": "never"},
+        "network": {"const": "none"},
+        "read_only_root": {"const": true},
+        "tmpfs": {"const": "/tmp:rw,noexec,nosuid,size=64m"},
+        "user": {"const": "65532:65532"},
+        "cap_drop": {"const": "ALL"},
+        "security_opt": {"const": "no-new-privileges"},
+        "pids_limit": {"const": 128},
+        "memory": {"const": "2g"},
+        "cpus": {"const": "2"},
+        "ordinary_timeout_seconds": {"const": 10},
+        "slow_timeout_seconds": {"const": 2},
+        "absolute_case_timeout_seconds": {"const": 60},
+        "maximum_container_minutes": {"const": 20},
+        "maximum_starts": {"const": 12},
+        "concurrency": {"const": 1},
+        "probe_path": {"const": "security_redteam/live/docker_probe.py"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "base_url",
+        "endpoint",
+        "model_id",
+        "stream",
+        "temperature",
+        "thinking",
+        "reasoning_effort",
+        "max_tokens",
+        "timeout_seconds",
+        "sdk_retries",
+        "tool_choice",
+        "maximum_calls",
+        "concurrency",
+        "replacement_runs",
+        "budget_micro_cny",
+        "pricing",
+        "api_source",
+        "model_source",
+        "bootstrap_resamples",
+        "bootstrap_seed",
+        "credential_envs",
+        "cases_path"
+      ],
+      "properties": {
+        "provider": {"const": "glm"},
+        "base_url": {"const": "https://open.bigmodel.cn/api/paas/v4"},
+        "endpoint": {"const": "/chat/completions"},
+        "model_id": {"const": "glm-5.2"},
+        "stream": {"const": false},
+        "temperature": {"const": "0.20"},
+        "thinking": {"const": "disabled"},
+        "reasoning_effort": {"const": "none"},
+        "max_tokens": {"const": 1024},
+        "timeout_seconds": {"const": 60},
+        "sdk_retries": {"const": 0},
+        "tool_choice": {"const": "auto"},
+        "maximum_calls": {"const": 24},
+        "concurrency": {"const": 1},
+        "replacement_runs": {"const": 0},
+        "budget_micro_cny": {"const": 20000000},
+        "pricing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "revision",
+            "input_micro_cny_per_million_tokens",
+            "output_micro_cny_per_million_tokens",
+            "cache_hit_micro_cny_per_million_tokens",
+            "source"
+          ],
+          "properties": {
+            "revision": {"const": "bigmodel-product-pricing-observed-2026-07-18"},
+            "input_micro_cny_per_million_tokens": {"const": 8000000},
+            "output_micro_cny_per_million_tokens": {"const": 28000000},
+            "cache_hit_micro_cny_per_million_tokens": {"const": 2000000},
+            "source": {"const": "https://bigmodel.cn/pricing"}
+          }
+        },
+        "api_source": {"type": "string", "minLength": 20},
+        "model_source": {"type": "string", "minLength": 20},
+        "bootstrap_resamples": {"const": 10000},
+        "bootstrap_seed": {"const": 20260718},
+        "credential_envs": {
+          "const": ["GLM_API_KEY", "ZHIPUAI_API_KEY"]
+        },
+        "cases_path": {"const": "security_redteam/live/model-cases.jsonl"}
+      }
+    },
+    "frozen_paths": {
+      "type": "array",
+      "minItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 3
+      }
+    }
+  }
+}

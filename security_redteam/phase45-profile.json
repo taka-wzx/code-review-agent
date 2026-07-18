@@ -1,0 +1,83 @@
+{
+  "schema_version": "crag.security-live/v1alpha1",
+  "base_commit": "6b2adbb440670b135e42157ec4d8479426b47de2",
+  "authorization_date": "2026-07-18",
+  "docker": {
+    "case_ids": [
+      "W6-DK-01",
+      "W6-DK-02",
+      "W6-DK-03",
+      "W6-DK-04",
+      "W6-DK-05",
+      "W6-DK-06",
+      "W6-DK-07",
+      "W6-DK-08",
+      "W6-DK-09",
+      "W6-DK-10",
+      "W6-DK-11",
+      "W6-DK-12"
+    ],
+    "image": "sha256:d317bd92b1f1add9f6bc7b359063942358167129473536cd150f726b6434a89f",
+    "repository_digest": "code-review-agent-repair@sha256:d317bd92b1f1add9f6bc7b359063942358167129473536cd150f726b6434a89f",
+    "pull": "never",
+    "network": "none",
+    "read_only_root": true,
+    "tmpfs": "/tmp:rw,noexec,nosuid,size=64m",
+    "user": "65532:65532",
+    "cap_drop": "ALL",
+    "security_opt": "no-new-privileges",
+    "pids_limit": 128,
+    "memory": "2g",
+    "cpus": "2",
+    "ordinary_timeout_seconds": 10,
+    "slow_timeout_seconds": 2,
+    "absolute_case_timeout_seconds": 60,
+    "maximum_container_minutes": 20,
+    "maximum_starts": 12,
+    "concurrency": 1,
+    "probe_path": "security_redteam/live/docker_probe.py"
+  },
+  "model": {
+    "provider": "glm",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "endpoint": "/chat/completions",
+    "model_id": "glm-5.2",
+    "stream": false,
+    "temperature": "0.20",
+    "thinking": "disabled",
+    "reasoning_effort": "none",
+    "max_tokens": 1024,
+    "timeout_seconds": 60,
+    "sdk_retries": 0,
+    "tool_choice": "auto",
+    "maximum_calls": 24,
+    "concurrency": 1,
+    "replacement_runs": 0,
+    "budget_micro_cny": 20000000,
+    "pricing": {
+      "revision": "bigmodel-product-pricing-observed-2026-07-18",
+      "input_micro_cny_per_million_tokens": 8000000,
+      "output_micro_cny_per_million_tokens": 28000000,
+      "cache_hit_micro_cny_per_million_tokens": 2000000,
+      "source": "https://bigmodel.cn/pricing"
+    },
+    "api_source": "https://docs.bigmodel.cn/api-reference/%E6%A8%A1%E5%9E%8B-api/%E5%AF%B9%E8%AF%9D%E8%A1%A5%E5%85%A8",
+    "model_source": "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2",
+    "bootstrap_resamples": 10000,
+    "bootstrap_seed": 20260718,
+    "credential_envs": [
+      "GLM_API_KEY",
+      "ZHIPUAI_API_KEY"
+    ],
+    "cases_path": "security_redteam/live/model-cases.jsonl"
+  },
+  "frozen_paths": [
+    "docs/plans/week6-security-observability-phase45.md",
+    "security_redteam/phase45-profile.json",
+    "security_redteam/live/model-cases.jsonl",
+    "security_redteam/live/docker_probe.py",
+    "security_redteam/schemas/phase45-profile.schema.json",
+    "security_redteam/schemas/live-model-case.schema.json",
+    "scripts/verify_security_live.py"
+  ]
+}

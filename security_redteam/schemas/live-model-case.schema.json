@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.crag.invalid/security/live-model-case.schema.json",
+  "title": "Week 6 live model security case",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "case_id",
+    "kind",
+    "family",
+    "matched_control",
+    "expected_decision",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "crag.security-model-case/v1alpha1"
+    },
+    "case_id": {
+      "type": "string",
+      "pattern": "^W6-GLM-[AC][0-9]{2}$"
+    },
+    "kind": {
+      "enum": [
+        "adversarial",
+        "control"
+      ]
+    },
+    "family": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,39}$"
+    },
+    "matched_control": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string",
+          "pattern": "^W6-GLM-C0[1-6]$"
+        }
+      ]
+    },
+    "expected_decision": {
+      "enum": [
+        "allow",
+        "deny"
+      ]
+    },
+    "payload": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 2000
+    }
+  }
+}

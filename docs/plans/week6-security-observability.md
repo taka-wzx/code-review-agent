@@ -18,7 +18,9 @@ Current execution status:
 - Phase 3 synthetic corpus materialization/execution: authorized 2026-07-18;
   Codex implementation, independent Claude review, findings remediation, and
   full integration offline validation complete;
-- Docker, external-model, and paid-evaluation phases: not authorized.
+- Phase 4 bounded Docker and Phase 5 GLM-5.2 probes: authorized 2026-07-18;
+  exact inputs are being frozen in the separate Phase 4--5 amendment before
+  any live result is observed.
 
 Phase 3 independent-review disposition (2026-07-18):
 
@@ -96,9 +98,9 @@ user's 2026-07-18 approval:
 | 0 | plan, threat model, budgets, ownership proposal, README/agenda truthfulness | complete at `74a53dfaf84582a2c2d63bcb94e8aee8e559e4db` |
 | 1 | freeze exact telemetry profile, schemas, case plan, and implementation ownership | complete in this contract commit |
 | 2 | implement offline observability core, redaction, validators, and compatibility bridge | complete after Claude review and integration remediation |
-| 3 | implement deterministic synthetic red-team suite and integrations | authorized 2026-07-18; active |
-| 4 | bounded local Docker security smoke | separate Docker approval |
-| 5 | optional external-model prompt-injection evaluation | separate model, network, and cost approval |
+| 3 | implement deterministic synthetic red-team suite and integrations | complete after Claude review and integration remediation |
+| 4 | bounded local Docker security smoke | authorized 2026-07-18; A4 input freeze required before execution |
+| 5 | GLM-5.2 prompt-injection evaluation | authorized 2026-07-18; A4 prompt/model/price freeze required before execution |
 | 6 | independent Claude review and integration | separate handoff after Codex validation |
 | 7 | merge/push `master` and track CI | explicit user approval |
 
@@ -172,6 +174,12 @@ The exact proposed Phase 2--3 implementation ownership is frozen in
 `docs/plans/week6-security-observability-phase1.md`. It is not active write
 authorization. Claude's later review ownership remains limited to
 `docs/reviews/week6-claude.md`; Claude must not edit the implementation.
+
+Phase 4--5 ownership, exact Docker image/argv/resources, the 24-case GLM-5.2
+matrix, pricing, request controls, cost gate, and A4 attestation sequence are
+defined in `docs/plans/week6-security-observability-phase45.md`. That versioned
+amendment supersedes the earlier optional-phase placeholders only for Phases 4
+and 5; Phase 1 frozen files and the Phase 3 corpus remain unchanged.
 
 ## Frozen compatibility constraints
 
@@ -592,9 +600,10 @@ and a failing fake exporter cover success, retry, backpressure, and degradation.
   execution order;
 - each fake command/clock case has a finite step/output bound.
 
-### Optional Phase 4 Docker smoke ceiling
+### Original Phase 4 Docker smoke ceiling
 
-These numbers are a proposal, not permission:
+These original numbers are superseded by the authorized, exact Phase 4--5
+amendment; they are retained here as the planning history:
 
 - at most 12 selected non-destructive cases;
 - concurrency 1;
@@ -603,12 +612,12 @@ These numbers are a proposal, not permission:
 - at most 60 seconds per case and 20 container-minutes total;
 - generated temporary fixtures only, followed by cleanup/quarantine proof.
 
-### Optional Phase 5 model ceiling
+### Authorized Phase 5 model ceiling
 
-The model phase remains unpriced and unauthorized. A later amendment must bind
-exact model snapshots and pricing. The proposed initial ceiling is at most 24
-cases, one attempt per model/case, no replacement runs, and USD 10 total. The
-user may lower or reject it.
+The Phase 4--5 amendment binds `glm-5.2`, current official CNY token pricing,
+24 cases, one attempt per case, no replacement runs, and a CNY 20 hard ceiling.
+This is stricter operationally than the earlier unpriced USD 10 proposal and
+does not authorize another model, additional calls, prompt edits, or reruns.
 
 ## Implementation phases
 
@@ -776,8 +785,9 @@ different worktree.
   Phase 1 profile and annex.
 - observability and red-team implementation remain one serial Codex writer;
   no parallel implementation writer is authorized.
-- Docker and external-model phases remain optional and unauthorized regardless
-  of deterministic results.
+- Docker and GLM-5.2 phases are authorized only within the exact A4-frozen
+  Phase 4--5 amendment; any other image, model, cost, prompt, or rerun remains
+  unauthorized.
 
 Any change to a frozen Phase 1 decision requires a versioned contract
 amendment before its affected runtime result is observed.
