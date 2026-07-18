@@ -18,6 +18,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Week 6 live-result validation proves the committed A4 freeze is
+          # an ancestor of HEAD and therefore needs more than a shallow tip.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}

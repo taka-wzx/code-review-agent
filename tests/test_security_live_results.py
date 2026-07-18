@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -146,10 +147,9 @@ class SecurityLiveResultTests(unittest.TestCase):
             results.validate_phase5(changed, self.profile, self.cases, A4)
 
     def test_cli_reports_independently_derived_totals(self) -> None:
-        python = ROOT.parent.parent.parent / ".venv/Scripts/python.exe"
         completed = subprocess.run(
             [
-                str(python),
+                sys.executable,
                 str(SCRIPT),
                 "--profile",
                 str(self.profile_path),

@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -237,7 +238,7 @@ class SecurityLiveContractTests(unittest.TestCase):
     def test_validate_cli_is_offline(self) -> None:
         result = subprocess.run(
             [
-                str(ROOT.parent.parent.parent / ".venv/Scripts/python.exe"),
+                sys.executable,
                 str(SCRIPT),
                 "validate",
                 "--profile",
