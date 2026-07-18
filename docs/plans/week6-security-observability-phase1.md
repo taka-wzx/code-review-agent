@@ -392,9 +392,9 @@ the Phase 1 Git commit.
 
 | Path | SHA-256 |
 | --- | --- |
-| `security_redteam/phase1-profile.json` | `17adcaf49c721c1cfa43d3f5a240a1789da9451f583f25d08f57c72fe61372cb` |
+| `security_redteam/phase1-profile.json` | `8f0fd43a24d300b7128f610e818cfe6031942d73cbf0e0509f4325b58f5133e8` |
 | `security_redteam/case-plan.json` | `b5bc761dd0494ac5f11e427eb1ff015b7bb0cf8d1f79b5e2a78280900162f4b7` |
-| `security_redteam/schemas/phase1-profile.schema.json` | `c1e0c9ca0a3d85765848a36ffce097ad9323fcb429cb242223abf1db7eea32a6` |
+| `security_redteam/schemas/phase1-profile.schema.json` | `da5d7229886800a4ba77cf2f675ac8196b29e4d5571c9895e012c8b2c997ce83` |
 | `security_redteam/schemas/case-plan.schema.json` | `a294dc48dfa1325d7556a1f39638ddf1eeda3636be5b9fc63c4d773fc56f097a` |
 
 Hashes are calculated over the canonical UTF-8/LF bytes after validation and
@@ -437,3 +437,32 @@ authorized Phase 2 at `2026-07-18T08:54:43Z`. This amendment:
 
 The revised profile and profile-schema hashes in this annex bind A1. No
 runtime implementation was started before this amendment.
+
+## Amendment A2: Phase 2 field completeness
+
+At `2026-07-18T09:26:25Z`, while implementing the already-authorized Phase 2,
+the machine profile was found to omit fields required by the normative prose:
+configured temperature and token ceilings; aggregate Repair token/cost
+evidence; stage, tool, sandbox, policy, checkpoint, and terminal metadata; and
+auditable redaction reduction counters.
+
+This amendment advances the profile to
+`week6.phase1-profile.v1.2`, revision 3, and lists those bounded metadata
+fields explicitly. Before A2, only synthetic in-memory or temporary-file unit
+traces had been observed. There had been no network request, model call,
+Docker start, dataset access, paid evaluation, or security-case
+materialization. That timing limitation is recorded as
+`runtime_results_observed_before_amendment:true`; A2 is not represented as a
+pre-runtime freeze.
+
+A2 does not change:
+
+- any OWASP or OpenTelemetry source revision;
+- any case identity, title, expected outcome, control binding, or per-case
+  hash;
+- any content-field prohibition, limit, failure semantic, or compatibility
+  window;
+- Phase 3, Docker, external-model, paid-evaluation, or evaluation-asset
+  authorization.
+
+The hash table above binds the A2 profile and schema.

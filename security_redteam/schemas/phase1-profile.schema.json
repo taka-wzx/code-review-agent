@@ -27,8 +27,8 @@
     "paid_evaluation_authorized"
   ],
   "properties": {
-    "schema_version": {"const": "week6.phase1-profile.v1.1"},
-    "profile_revision": {"const": 2},
+    "schema_version": {"const": "week6.phase1-profile.v1.2"},
+    "profile_revision": {"const": 3},
     "contract_id": {"const": "week6-security-observability"},
     "profile_id": {"const": "crag.observability/v1alpha1"},
     "frozen_at": {"type": "string", "format": "date-time"},
@@ -160,32 +160,63 @@
     },
     "amendments": {
       "type": "array",
-      "minItems": 1,
-      "maxItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "amendment_id",
-          "authorized_at",
-          "authorization",
-          "runtime_results_observed_before_amendment",
-          "changes"
-        ],
-        "properties": {
-          "amendment_id": {"const": "week6-phase2-authorization-a1"},
-          "authorized_at": {"type": "string", "format": "date-time"},
-          "authorization": {"const": "phase2-observability-implementation"},
-          "runtime_results_observed_before_amendment": {"const": false},
-          "changes": {
-            "type": "array",
-            "minItems": 2,
-            "maxItems": 2,
-            "uniqueItems": true,
-            "items": {"type": "string", "minLength": 1}
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "amendment_id",
+            "authorized_at",
+            "authorization",
+            "runtime_results_observed_before_amendment",
+            "changes"
+          ],
+          "properties": {
+            "amendment_id": {"const": "week6-phase2-authorization-a1"},
+            "authorized_at": {"type": "string", "format": "date-time"},
+            "authorization": {"const": "phase2-observability-implementation"},
+            "runtime_results_observed_before_amendment": {"const": false},
+            "changes": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "amendment_id",
+            "authorized_at",
+            "authorization",
+            "runtime_results_observed_before_amendment",
+            "observed_result_scope",
+            "changes"
+          ],
+          "properties": {
+            "amendment_id": {"const": "week6-phase2-field-completeness-a2"},
+            "authorized_at": {"type": "string", "format": "date-time"},
+            "authorization": {"const": "phase2-profile-field-completeness"},
+            "runtime_results_observed_before_amendment": {"const": true},
+            "observed_result_scope": {
+              "const": "synthetic-unit-traces-only-no-network-model-docker-or-evaluation"
+            },
+            "changes": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
           }
         }
-      }
+      ],
+      "items": false
     },
     "phase2_implementation_authorized": {"const": true},
     "docker_authorized": {"const": false},
