@@ -1,0 +1,394 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/code-review-agent/swebench-repair/runs.schema.json",
+  "title": "One Week 5 SWE-bench Repair JSONL run row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "run_plan_id",
+    "instance_id",
+    "repository",
+    "configuration_id",
+    "purpose",
+    "started_at",
+    "completed_at",
+    "recorded_at",
+    "status",
+    "terminal_reason",
+    "resolved",
+    "patch_sha256",
+    "cost_microusd",
+    "tokens_total",
+    "latency_milliseconds",
+    "tool_calls",
+    "test_commands_total",
+    "test_commands_failed",
+    "unauthorized_operations",
+    "operations_total",
+    "model",
+    "isolation",
+    "evaluator",
+    "hashes"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "run_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "run_plan_id": {
+      "$ref": "#/$defs/sha256"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "repository": {
+      "$ref": "#/$defs/repository"
+    },
+    "configuration_id": {
+      "enum": [
+        "primary",
+        "single_finder",
+        "no_context",
+        "no_verifier",
+        "no_reflection",
+        "model_b"
+      ]
+    },
+    "purpose": {
+      "enum": [
+        "final_report",
+        "ablation_report"
+      ]
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "recorded_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "status": {
+      "enum": [
+        "approval_rejected",
+        "budget_exhausted",
+        "cleanup_quarantined",
+        "completed",
+        "hard_failure",
+        "model_failure",
+        "policy_violation",
+        "sandbox_failure",
+        "test_failure",
+        "timeout"
+      ]
+    },
+    "terminal_reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resolved": {
+      "type": "boolean"
+    },
+    "patch_sha256": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "cost_microusd": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tokens_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "latency_milliseconds": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tool_calls": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "test_commands_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "test_commands_failed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "unauthorized_operations": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "operations_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "pricing_revision"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pricing_revision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "isolation": {
+      "$ref": "#/$defs/isolation"
+    },
+    "evaluator": {
+      "$ref": "#/$defs/evaluator"
+    },
+    "hashes": {
+      "$ref": "#/$defs/hashes"
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$"
+    },
+    "image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "isolation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "worktree_id",
+        "worktree_created",
+        "task_branch",
+        "container_name",
+        "container_started",
+        "judge_container_name",
+        "judge_container_started",
+        "state_id",
+        "image_digest",
+        "network_mode",
+        "read_only_root",
+        "run_as_non_root",
+        "cap_drop_all",
+        "no_new_privileges",
+        "pids",
+        "cpus",
+        "memory_mib",
+        "writable_mib",
+        "writable_mounts",
+        "original_checkout_unchanged",
+        "cleanup_status"
+      ],
+      "properties": {
+        "worktree_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "worktree_created": {
+          "type": "boolean"
+        },
+        "task_branch": {
+          "type": "string",
+          "pattern": "^repair/[a-z0-9-]+$"
+        },
+        "container_name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "container_started": {
+          "type": "boolean"
+        },
+        "judge_container_name": {
+          "$ref": "#/$defs/identifier"
+        },
+        "judge_container_started": {
+          "type": "boolean"
+        },
+        "state_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "image_digest": {
+          "$ref": "#/$defs/image_digest"
+        },
+        "network_mode": {
+          "const": "none"
+        },
+        "read_only_root": {
+          "const": true
+        },
+        "run_as_non_root": {
+          "const": true
+        },
+        "cap_drop_all": {
+          "const": true
+        },
+        "no_new_privileges": {
+          "const": true
+        },
+        "pids": {
+          "const": 256
+        },
+        "cpus": {
+          "const": 2
+        },
+        "memory_mib": {
+          "const": 4096
+        },
+        "writable_mib": {
+          "const": 20480
+        },
+        "writable_mounts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "original_checkout_unchanged": {
+          "const": true
+        },
+        "cleanup_status": {
+          "enum": [
+            "not_created",
+            "removed",
+            "quarantined"
+          ]
+        }
+      }
+    },
+    "evaluator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempted",
+        "fail_to_pass_total",
+        "fail_to_pass_passed",
+        "pass_to_pass_total",
+        "pass_to_pass_passed",
+        "exit_code",
+        "log_sha256",
+        "official_resolved"
+      ],
+      "properties": {
+        "attempted": {
+          "type": "boolean"
+        },
+        "fail_to_pass_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fail_to_pass_passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pass_to_pass_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pass_to_pass_passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "exit_code": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "log_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "official_resolved": {
+          "type": "boolean"
+        }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_plan_sha256",
+        "trace_sha256",
+        "checkpoint_sha256",
+        "evaluator_input_sha256",
+        "evaluator_output_sha256"
+      ],
+      "properties": {
+        "run_plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "trace_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evaluator_input_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evaluator_output_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -7,8 +7,13 @@
 - 第 3 周：实现、Claude 终审与本地验收已完成；10 个真实 Issue、本地人工审批、Docker 沙箱、失败隔离和两次受控中断恢复均已验证。
 - 第 4 周：可信 Review 评测合同、4 仓/40 PR 预注册（密封 reporting 为 3 仓/30 PR）、
   双人独立标注/第三方仲裁协议、仓库级防泄漏和离线统计框架已完成 Codex 实现、Claude
-  独立审查和 integration 整合；13 项审查发现均已处置并通过离线门禁。真实 PR 尚未下载，
-  外部模型和付费评测尚未运行，等待用户确认是否合入 `master`。
+  独立审查和 integration 整合；13 项审查发现均已处置，已合入并推送 `master`，GitHub
+  CI 通过。真实 PR 尚未下载，外部模型和付费评测尚未运行。
+- 第 5 周：已从第 4 周合入后的 `master` 冻结 SWE-bench Verified 30 任务候选合同
+  （5 development / 5 tuning / 20 sealed reporting）、6 配置单因素消融、独立
+  worktree/Docker 身份和 USD 80 总硬上限；已实现纯离线选择/run-plan 验证、pass@1、
+  成本/时延/工具/测试失败/非法操作统计和仓库分层配对 Bootstrap 95% CI。真实任务尚未
+  下载或物化，Docker/外部模型/付费评测均未运行，等待 Claude 独立审查与 integration。
 
 ## 第 1 周：工程基线与公开交付
 

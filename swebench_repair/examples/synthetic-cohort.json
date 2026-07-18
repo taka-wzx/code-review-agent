@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "cohort_id": "synthetic-week5-shape-example",
+  "materialized": false,
+  "source_commit": "afb6e1fa85701d7b6af5b16198c9dd992740a03d",
+  "dataset": {
+    "name": "princeton-nlp/SWE-bench_Verified",
+    "revision": null,
+    "manifest_sha256": null,
+    "harness_revision": null
+  },
+  "selection": {
+    "method": "sha256_repo_then_task_v1",
+    "seed_derivation": "sha256(swebench-repair-cohort-v1\\0 + ascii(source_commit))",
+    "seed": "39a89ee8c3368d08f2444ce84c5c86294bef36b2164397f514b50b01be963ce0",
+    "selection_log_sha256": null,
+    "outcome_blind": true
+  },
+  "targets": {
+    "minimum_total": 20,
+    "maximum_total": 50,
+    "selected_total": 30,
+    "roles": {
+      "development": 5,
+      "tuning": 5,
+      "reporting": 20
+    },
+    "minimum_reporting_repositories": 4,
+    "repository_disjoint_roles": true
+  },
+  "forbidden_repositories": [
+    "encode/httpx",
+    "pallets/click",
+    "pallets/flask",
+    "psf/requests"
+  ],
+  "eligibility": {
+    "verified_only": true,
+    "require_fail_to_pass": true,
+    "require_pass_to_pass": true,
+    "require_red_base_green_gold": true,
+    "require_offline_reproducibility": true,
+    "network_mode": "none",
+    "allow_gpu": false,
+    "allow_privileged": false,
+    "allow_host_docker_socket": false,
+    "maximum_seconds": 3600,
+    "maximum_cpus": 2,
+    "maximum_memory_mib": 4096,
+    "maximum_pids": 256,
+    "maximum_writable_mib": 20480
+  },
+  "tasks": []
+}

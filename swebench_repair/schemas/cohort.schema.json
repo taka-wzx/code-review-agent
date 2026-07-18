@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/code-review-agent/swebench-repair/cohort.schema.json",
+  "title": "Week 5 SWE-bench Repair cohort",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cohort_id",
+    "materialized",
+    "source_commit",
+    "dataset",
+    "selection",
+    "targets",
+    "forbidden_repositories",
+    "eligibility",
+    "tasks"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "cohort_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "materialized": {
+      "type": "boolean"
+    },
+    "source_commit": {
+      "$ref": "#/$defs/sha1"
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "revision",
+        "manifest_sha256",
+        "harness_revision"
+      ],
+      "properties": {
+        "name": {
+          "const": "princeton-nlp/SWE-bench_Verified"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manifest_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha1"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "seed_derivation",
+        "seed",
+        "selection_log_sha256",
+        "outcome_blind"
+      ],
+      "properties": {
+        "method": {
+          "const": "sha256_repo_then_task_v1"
+        },
+        "seed_derivation": {
+          "type": "string"
+        },
+        "seed": {
+          "$ref": "#/$defs/sha256"
+        },
+        "selection_log_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome_blind": {
+          "const": true
+        }
+      }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "minimum_total",
+        "maximum_total",
+        "selected_total",
+        "roles",
+        "minimum_reporting_repositories",
+        "repository_disjoint_roles"
+      ],
+      "properties": {
+        "minimum_total": {
+          "const": 20
+        },
+        "maximum_total": {
+          "const": 50
+        },
+        "selected_total": {
+          "const": 30
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "development",
+            "tuning",
+            "reporting"
+          ],
+          "properties": {
+            "development": {
+              "const": 5
+            },
+            "tuning": {
+              "const": 5
+            },
+            "reporting": {
+              "const": 20
+            }
+          }
+        },
+        "minimum_reporting_repositories": {
+          "const": 4
+        },
+        "repository_disjoint_roles": {
+          "const": true
+        }
+      }
+    },
+    "forbidden_repositories": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/repository"
+      }
+    },
+    "eligibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verified_only",
+        "require_fail_to_pass",
+        "require_pass_to_pass",
+        "require_red_base_green_gold",
+        "require_offline_reproducibility",
+        "network_mode",
+        "allow_gpu",
+        "allow_privileged",
+        "allow_host_docker_socket",
+        "maximum_seconds",
+        "maximum_cpus",
+        "maximum_memory_mib",
+        "maximum_pids",
+        "maximum_writable_mib"
+      ],
+      "properties": {
+        "verified_only": {
+          "const": true
+        },
+        "require_fail_to_pass": {
+          "const": true
+        },
+        "require_pass_to_pass": {
+          "const": true
+        },
+        "require_red_base_green_gold": {
+          "const": true
+        },
+        "require_offline_reproducibility": {
+          "const": true
+        },
+        "network_mode": {
+          "const": "none"
+        },
+        "allow_gpu": {
+          "const": false
+        },
+        "allow_privileged": {
+          "const": false
+        },
+        "allow_host_docker_socket": {
+          "const": false
+        },
+        "maximum_seconds": {
+          "const": 3600
+        },
+        "maximum_cpus": {
+          "const": 2
+        },
+        "maximum_memory_mib": {
+          "const": 4096
+        },
+        "maximum_pids": {
+          "const": 256
+        },
+        "maximum_writable_mib": {
+          "const": 20480
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+    },
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "instance_id",
+        "repository",
+        "role",
+        "base_sha",
+        "base_tree_sha256",
+        "source_snapshot_sha256",
+        "harness_task_sha256",
+        "image_digest",
+        "fail_to_pass_count",
+        "pass_to_pass_count",
+        "size_band",
+        "repository_rank_sha256",
+        "task_rank_sha256"
+      ],
+      "properties": {
+        "instance_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "repository": {
+          "$ref": "#/$defs/repository"
+        },
+        "role": {
+          "enum": [
+            "development",
+            "tuning",
+            "reporting"
+          ]
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "base_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "harness_task_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "image_digest": {
+          "$ref": "#/$defs/image_digest"
+        },
+        "fail_to_pass_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pass_to_pass_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "size_band": {
+          "enum": [
+            "small",
+            "medium",
+            "large"
+          ]
+        },
+        "repository_rank_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "task_rank_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

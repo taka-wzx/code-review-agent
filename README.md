@@ -2,7 +2,7 @@
 
 两阶段（**Finder + Verifier**）LLM 代码审查 Agent：**Finder 负责召回候选缺陷，Verifier 负责证据验证与过滤**，配套一套可复现的离线评测台架。走 OpenAI 兼容接口，provider 无关（目前支持 DeepSeek 与 GLM）。
 
-> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 1 交付的 master CI 已运行通过；无线上用户、无生产部署。
+> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 4 合入后的最新 master CI 已运行通过；无线上用户、无生产部署。
 
 ## 项目定位
 
@@ -133,23 +133,23 @@ docker run --rm code-review-agent --help
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
 
-> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 1 交付合入 `master` 后 CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过；Week 2 改动目前只在本地任务分支，**尚未经 GitHub CI 验证**。
+> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 4 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过。
 
 ## 测试与质量
 
-以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 4 Codex
+以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 5 Codex
 任务分支实测的结果，非复制而来：
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **403 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，29.28s） |
+| 单测 + golden 测试 | **470 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
 | 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
 | mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
-| 评测资产一致性 | **本轮未运行**：Week 4 合同禁止读取现有 `eval/` / `eval/holdout/` |
+| 评测资产一致性 | **本轮未运行**：Week 5 合同禁止读取现有 `eval/` / `eval/holdout/` |
 
-测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟——Week 1 交付已在私有仓库 `master` 上实际运行通过；**Week 2 改动尚未在 GitHub CI 上运行**，上表为本地离线验证结果。
+测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；Week 4 合入后的最新 `master` 已实际运行通过。
 
 ## 评测
 
@@ -187,6 +187,40 @@ python trusted_review_eval.py validate-cohort `
 完整协议、标注口径和最终报告命令见
 [`docs/trusted-review-evaluation.md`](docs/trusted-review-evaluation.md)。**当前只完成了评测
 仪器与采集预注册；尚未下载真实 PR、调用外部评测模型或产生任何 30-PR 效果数字。**
+
+### 可信 SWE-bench Repair 评测框架（Week 5）
+
+Week 5 从第 4 周已合入的 `master` 基线开始，为 Repair Agent 新增独立的 SWE-bench
+Verified 离线评测合同与统计仪器：
+
+- 预注册 30 个候选槽位：5 development、5 tuning、20 sealed reporting；仓库是切分
+  单位，三种角色严格仓库隔离，且排除 Week 3/4 已使用或计划使用的仓库；
+- 数据尚未下载时不编造 instance ID；获准 acquisition 后从固定 Verified revision
+  生成 exact-byte selection log，按基线派生 seed 复算 repository/task rank，固定选择
+  4 个 reporting 仓各 5 任务、1 个 tuning 仓 5 任务和 1 个 development 仓 5 任务；
+- 主配置加 5 个单因素消融：单 Finder、关闭上下文、关闭 Verifier、关闭 Repair
+  Reflection、模型 B；完整 reporting 矩阵固定为 20×6=120 个 task/config attempts；
+- `swebench_repair_runner.py` 只做本地严格验证和确定性 run-plan 生成，为每次 attempt
+  派生唯一 branch/worktree/container/judge/state 身份，不启动 Git、Docker 或模型；
+- `swebench_repair_eval.py` 在 120 条证据齐全后计算 primary pass@1、配对消融差值、
+  每任务成本与 token、p50/p95 时延、平均工具调用、测试失败率、非法操作率、终态统计和仓库内
+  task 分层 Bootstrap 95% CI；
+- 网络非 none、root 容器、额外可写挂载、复用 worktree/container/trace、原 checkout
+  改变、官方 `FAIL_TO_PASS`/`PASS_TO_PASS` 证据矛盾、漏跑或替换失败 run 都会在指标前
+  fail closed。
+
+当前未物化计划可完全离线验证：
+
+```powershell
+python -B swebench_repair_runner.py validate-plans `
+  --cohort swebench_repair\cohort-plan.json `
+  --config swebench_repair\config-plan.json
+```
+
+完整 acquisition、冻结、隔离、run JSONL 和报告协议见
+[`docs/swebench-repair-evaluation.md`](docs/swebench-repair-evaluation.md)。**当前真实
+SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用外部/付费模型，也没有可报告
+的 pass@1、成本、时延或消融结果。**
 
 ### 历史开发基准
 
@@ -232,12 +266,19 @@ python trusted_review_eval.py validate-cohort `
 - **Week 4 可信 Review 评测**：预注册 4 仓/40 PR（密封 reporting 为 3 仓/30 PR），实现
   双标/仲裁一致率、仓库切分、PR 分层 Bootstrap CI、质量/成本/时延/工具/降级统计和防污染
   校验；真实数据采集与付费运行仍待单独授权
+- **Week 5 可信 Repair 评测**：预注册 SWE-bench Verified 30 任务的开发/调参/报告仓库级
+  隔离、20×6 reporting 消融矩阵和 USD 80 总硬上限；实现唯一 Docker/worktree 身份
+  run-plan、pass@1/资源/失败/越权统计及仓库分层配对 Bootstrap CI；真实数据、Docker 与
+  付费运行仍待单独授权
 
 ## 已知限制
 
 - **真实代码库泛化仍需验证**：评测集源自单一项目的人工植入缺陷；分布外证据目前只有 W16 的 3-commit 真实 PR 抽查（规模小、人工判读）
 - **Week 4 可信集尚未 materialize**：3 仓/30 PR reporting 只是已冻结的采集与统计计划，
   当前没有真实 PR snapshot、人工 gold 或 Agent 运行数字，不能用框架完成代替泛化结果
+- **Week 5 SWE-bench 集尚未 materialize**：30 个候选槽位和 120-run 消融矩阵只是冻结的
+  选择/资源/统计合同；当前没有真实 instance、任务镜像、Agent patch 或官方 evaluator
+  结果，不能声称 pass@1 或 Repair 泛化能力
 - **评测规模较小**：16+6 diffs、30+7 埋点、n=3 重复跑无显著性检验；mean [min–max] 是 3 点极差，bug 级 bootstrap CI（W14 v2 recall [0.811, 0.978]）才接近决策级区间
 - **judge 与被测 agent 同模型**：self-preference 偏置已被 GLM 交叉重判实测收窄（100% 一致），但两模型共享盲区无法排除；人工校准只有 W2 的 9 埋点（n=9 无统计意义）
 - **holdout 并非严格 held-out**：自 W8 起被跑过 15+ 次并据结果迭代，实际是第二开发集；用途是回归门不是泛化证明
@@ -246,7 +287,7 @@ python trusted_review_eval.py validate-cohort `
 - **模型是服务端别名非快照**：跨代对比混入模型漂移变量；`LLM_MODEL` 可锁定快照 id，trace 记录 meta
 - **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise，precision 是有偏低估
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
-- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 1 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布，但 **Week 2 改动尚未经 GitHub CI 验证**——本 README 不含公开 URL 或 CI badge
+- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 4 合入后的最新 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
 - **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
 - **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "run_plan_id": "1111111111111111111111111111111111111111111111111111111111111111",
+  "cohort_id": "synthetic-week5-shape-example",
+  "config_plan_id": "swebench-repair-configs-week5-v1",
+  "source_commit": "afb6e1fa85701d7b6af5b16198c9dd992740a03d",
+  "agent_source_commit": "2222222222222222222222222222222222222222",
+  "gold_freeze_commit": "3333333333333333333333333333333333333333",
+  "freeze_attestation_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "created_at": "2026-07-18T12:00:00Z",
+  "cohort_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+  "config_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+  "selection_log_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+  "dataset_manifest_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+  "harness_revision": "9999999999999999999999999999999999999999",
+  "rows": [
+    {
+      "schema_version": 1,
+      "run_plan_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "instance_id": "synthetic_task_001",
+      "repository": "example/repo-a",
+      "configuration_id": "primary",
+      "configuration_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "purpose": "final_report",
+      "run_id": "w5-primary-synthetic001",
+      "task_branch": "repair/synthetic-task-001",
+      "worktree_id": "wt-synthetic001",
+      "worktree_path_token_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "container_name": "crag-w5-synthetic001",
+      "judge_container_name": "swebench-judge-synthetic001",
+      "state_id": "state-synthetic001",
+      "base_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "base_tree_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "source_snapshot_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "harness_task_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "image_digest": "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "fail_to_pass_count": 1,
+      "pass_to_pass_count": 1,
+      "budget": {
+        "total_seconds": 3600,
+        "total_tokens": 120000,
+        "total_cost_microusd": 500000,
+        "tool_calls": 150,
+        "repair_attempts": 2,
+        "test_command_invocations": 10,
+        "command_seconds": 600,
+        "command_output_bytes": 1048576
+      },
+      "isolation": {
+        "cpus": 2,
+        "memory_mib": 4096,
+        "pids": 256,
+        "writable_mib": 20480,
+        "network_mode": "none",
+        "read_only_root": true,
+        "run_as_non_root": true,
+        "cap_drop_all": true,
+        "no_new_privileges": true,
+        "maximum_parallel_runs": 2
+      }
+    }
+  ]
+}
