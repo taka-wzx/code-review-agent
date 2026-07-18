@@ -7,12 +7,13 @@ and cap each request by the remaining budget.  The provider request may still
 finish slightly after the deadline (for example while SDK retries unwind).
 """
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 import math
 import time
 from typing import Any, Callable
 
-from code_review_agent.tracelog import tev
+from code_review_agent.tracelog import tev, tspan
 
 
 DEFAULT_REVIEW_TIMEOUT_SECONDS = 300.0
@@ -67,14 +68,38 @@ def run_parallel_pair(first: Callable[[], Any], second: Callable[[], Any], *,
                       stage: str, trace=None) -> tuple[CallOutcome, CallOutcome]:
     """Run two independent review lanes concurrently and join both outcomes."""
     started = time.monotonic()
-    tev(trace, "parallel_stage_started", stage=stage, lanes=2)
-    with ThreadPoolExecutor(max_workers=2,
-                            thread_name_prefix=f"crag-{stage}") as pool:
-        futures = (pool.submit(_capture, first), pool.submit(_capture, second))
-        outcomes = (futures[0].result(), futures[1].result())
-    elapsed_ms = round((time.monotonic() - started) * 1000, 3)
-    tev(trace, "parallel_stage_finished", stage=stage, lanes=2,
-        elapsed_ms=elapsed_ms,
-        errors=[type(outcome.error).__name__ if outcome.error else None
-                for outcome in outcomes])
+    with tspan(
+        trace,
+        f"crag.stage {stage}",
+        operation="agent.stage",
+        attributes={"crag.stage.name": stage, "crag.stage.lanes": 2},
+    ) as stage_span:
+        tev(trace, "parallel_stage_started", stage=stage, lanes=2)
+        # Context variables do not flow into ThreadPoolExecutor workers
+        # automatically.  Copy each lane separately so both become sibling
+        # descendants of this stage span.
+        first_context = copy_context()
+        second_context = copy_context()
+        with ThreadPoolExecutor(
+            max_workers=2,
+            thread_name_prefix=f"crag-{stage}",
+        ) as pool:
+            futures = (
+                pool.submit(first_context.run, _capture, first),
+                pool.submit(second_context.run, _capture, second),
+            )
+            outcomes = (futures[0].result(), futures[1].result())
+        elapsed_ms = round((time.monotonic() - started) * 1000, 3)
+        error_types = [
+            type(outcome.error).__name__ if outcome.error else None
+            for outcome in outcomes
+        ]
+        stage_span.set_attributes(
+            {
+                "crag.stage.elapsed_ms": elapsed_ms,
+                "crag.stage.error_count": sum(error is not None for error in error_types),
+            }
+        )
+        tev(trace, "parallel_stage_finished", stage=stage, lanes=2,
+            elapsed_ms=elapsed_ms, errors=error_types)
     return outcomes

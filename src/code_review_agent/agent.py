@@ -29,7 +29,7 @@ from code_review_agent.orchestration import (
     run_parallel_pair,
 )
 from code_review_agent.tools import READ_FILE_TOOL, RUN_LINTER_TOOL, SEARCH_REPO_TOOL, ToolSession
-from code_review_agent.tracelog import Trace, force_utf8, tev
+from code_review_agent.tracelog import Trace, force_utf8, tev, tspan
 from code_review_agent.verifier import _verify_findings
 
 force_utf8()
@@ -198,8 +198,22 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
                use_context: bool = True, use_verify: bool = True,
                trace: Trace | None = None) -> dict:
     deadline = Deadline.after(REVIEW_TIMEOUT_SECONDS)
-    user = build_review_input(diff_text, repo_root, use_context,
-                               log=lambda m: print(f"[context] {m}", file=sys.stderr))
+    with tspan(
+        trace,
+        "crag.stage context",
+        operation="agent.stage",
+        attributes={
+            "crag.stage.name": "context",
+            "crag.context.enabled": use_context,
+            "crag.input.diff_bytes": len(diff_text.encode("utf-8")),
+        },
+    ):
+        user = build_review_input(
+            diff_text,
+            repo_root,
+            use_context,
+            log=lambda m: print(f"[context] {m}", file=sys.stderr),
+        )
 
     # The anchor and sampling conversations are independent and share only
     # their immutable input/client.  Join both before applying the historical
@@ -218,8 +232,10 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         raise anchor_outcome.error
     result = anchor_outcome.value
     if result.reason == "bad_submits":
-        raise RuntimeError(f"submit_review still invalid after "
-                           f"{MAX_SUBMIT_ATTEMPTS} attempts: {result.problems}")
+        raise RuntimeError(
+            "submit_review still invalid after "
+            f"{MAX_SUBMIT_ATTEMPTS} attempts"
+        )
     if result.reason == "deadline":
         raise RuntimeError("review deadline exhausted before the anchor finder "
                            "submitted a valid review")
@@ -324,19 +340,37 @@ def _git_diff_text(args) -> str:
             sys.exit(f"--commit must be a revision, not an option: {args.commit!r}")
         cmd = ["git", "show", args.commit, "--format=", "--no-color", "--unified=3"]
         if args.commit != "HEAD":
-            print(f"[warn] reviewing {args.commit} but read_file sees the current "
-                  "working tree -- check out that commit for consistent context",
-                  file=sys.stderr)
+            print(
+                "[warn] reviewing a non-HEAD commit but read_file sees the current "
+                "working tree -- check out that commit for consistent context",
+                file=sys.stderr,
+            )
     try:
         proc = subprocess.run(cmd, cwd=args.repo, capture_output=True,
                               text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError:
         sys.exit(f"{cmd[0]!r} not found on PATH")
     if proc.returncode != 0:
-        sys.exit(f"{' '.join(cmd)} failed:\n{proc.stderr.strip()}")
+        sys.exit(f"{cmd[0]} failed: {_safe_command_error(proc.stderr)}")
     if not proc.stdout.strip():
-        sys.exit(f"{' '.join(cmd)} produced an empty diff -- nothing to review")
+        sys.exit(f"{cmd[0]} produced an empty diff -- nothing to review")
     return proc.stdout
+
+
+def _safe_command_error(stderr: object) -> str:
+    """Map external stderr to a bounded category without echoing raw output."""
+
+    normalized = str(stderr).casefold()
+    for marker, category in (
+        ("bad revision", "bad revision"),
+        ("permission denied", "permission denied"),
+        ("authentication", "authentication failed"),
+        ("rate limit", "rate limited"),
+        ("not found", "not found"),
+    ):
+        if marker in normalized:
+            return category
+    return "external command error"
 
 
 def main():
@@ -397,22 +431,36 @@ def main():
     # need the id (and date) on the trace itself.
     tev(trace, "meta", provider=os.environ.get("LLM_PROVIDER", "deepseek"),
         model=model)
+    trace_error: tuple[str, str] | None = None
     try:
         review = run_review(client, diff_text, Path(args.repo), model,
                             use_context=not args.no_context,
                             use_verify=not args.no_verify,
                             trace=trace)
-    except openai.AuthenticationError:
+    except openai.AuthenticationError as exc:
+        trace_error = (type(exc).__name__, "auth")
         sys.exit("Invalid or missing API key -- check your .env / environment variable")
-    except openai.RateLimitError:
+    except openai.RateLimitError as exc:
+        trace_error = (type(exc).__name__, "rate_limit")
         sys.exit("Rate limited even after retries -- wait and rerun")
     except openai.APIStatusError as e:
-        sys.exit(f"API error {e.status_code}: {e.message}")
-    except openai.APIConnectionError:
+        trace_error = (type(e).__name__, "provider")
+        sys.exit(f"API error {e.status_code}")
+    except openai.APIConnectionError as exc:
+        trace_error = (type(exc).__name__, "connection")
         sys.exit("Network error -- check connection/proxy")
+    except BaseException as exc:
+        trace_error = (type(exc).__name__, "internal")
+        raise
     finally:
         if trace:
-            trace.close()
+            if trace_error is None:
+                trace.close()
+            else:
+                trace.close(
+                    error_type=trace_error[0],
+                    error_category=trace_error[1],
+                )
 
     if args.format == "md":
         from code_review_agent.render import render_markdown
@@ -445,7 +493,7 @@ def main():
                                   capture_output=True, text=True,
                                   encoding="utf-8", errors="replace")
             if proc.returncode != 0:
-                sys.exit(f"gh api post failed:\n{proc.stderr.strip()}")
+                sys.exit(f"gh api post failed: {_safe_command_error(proc.stderr)}")
             print(f"[post] review posted to PR #{args.pr} "
                   f"({len(payload['comments'])} inline comment(s))",
                   file=sys.stderr)

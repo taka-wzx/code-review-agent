@@ -16,6 +16,7 @@ import sys
 import time
 from typing import Any, Callable, Generic, Protocol, Sequence, TextIO, TypeVar
 
+from code_review_agent.observability import error_category_for_exception
 from code_review_agent.repair_approval import (
     ApprovalBinding,
     ApprovalError,
@@ -65,6 +66,7 @@ from code_review_agent.sandbox import (
     WritableMount,
     _path_has_symlink_or_reparse_component,
 )
+from code_review_agent.tracelog import Trace, tev, tspan
 
 
 _ISSUE_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?\Z")
@@ -638,6 +640,11 @@ class ModelCallResult(Generic[T]):
     value: T
     actual_tokens: int
     actual_cost_usd: float
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
+    reasoning_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -653,6 +660,31 @@ class ModelCallResult(Generic[T]):
             or self.actual_cost_usd < 0
         ):
             raise ValueError("actual model cost must be non-negative")
+        usage_parts = (
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_read_tokens,
+            self.cache_creation_tokens,
+            self.reasoning_tokens,
+        )
+        if any(
+            value is not None
+            and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            )
+            for value in usage_parts
+        ):
+            raise ValueError("model token components must be non-negative integers")
+        if (self.input_tokens is None) != (self.output_tokens is None):
+            raise ValueError("input and output token components must be supplied together")
+        if (
+            self.input_tokens is not None
+            and self.output_tokens is not None
+            and self.input_tokens + self.output_tokens != self.actual_tokens
+        ):
+            raise ValueError("input and output token components must match actual_tokens")
 
 
 class MeteredModelProtocolError(WorktreePolicyError):
@@ -661,6 +693,11 @@ class MeteredModelProtocolError(WorktreePolicyError):
     def __init__(self, message: str, result: ModelCallResult[Any]):
         self.actual_tokens = result.actual_tokens
         self.actual_cost_usd = result.actual_cost_usd
+        self.input_tokens = result.input_tokens
+        self.output_tokens = result.output_tokens
+        self.cache_read_tokens = result.cache_read_tokens
+        self.cache_creation_tokens = result.cache_creation_tokens
+        self.reasoning_tokens = result.reasoning_tokens
         super().__init__(message)
 
 
@@ -706,6 +743,7 @@ class OpenAIRepairModel:
         input_cost_per_million: float,
         output_cost_per_million: float,
         disable_thinking: bool = False,
+        provider: str | None = None,
     ):
         if not isinstance(issue_context, str) or not issue_context.strip():
             raise ValueError("repair issue context must be non-empty")
@@ -725,14 +763,20 @@ class OpenAIRepairModel:
         output_price = _positive_finite_number(output_cost_per_million, "output price")
         if not isinstance(disable_thinking, bool):
             raise ValueError("disable_thinking must be a boolean")
+        if provider is not None and (
+            not isinstance(provider, str) or not provider.strip()
+        ):
+            raise ValueError("provider must be a non-empty string when supplied")
         self.client = client
         self.model = model
+        self.provider = provider.casefold() if provider is not None else None
         self.issue_context = issue_context
         self.max_total_tokens = max_total_tokens
         self.max_output_tokens = max_output_tokens
         self.input_price = Decimal(str(input_price))
         self.output_price = Decimal(str(output_price))
         self.disable_thinking = disable_thinking
+        self.temperature = 0.0
 
     def limits_for(self, operation: str) -> ModelCallLimits:
         if operation not in {"plan", "patch", "reflect"}:
@@ -771,7 +815,16 @@ class OpenAIRepairModel:
             plan = RepairPlan.from_dict(_json_object(result.value))
         except (ValueError, WorktreePolicyError) as exc:
             raise MeteredModelProtocolError(str(exc), result) from exc
-        return ModelCallResult(plan, result.actual_tokens, result.actual_cost_usd)
+        return ModelCallResult(
+            plan,
+            result.actual_tokens,
+            result.actual_cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_creation_tokens=result.cache_creation_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+        )
 
     def make_patch(
         self,
@@ -806,7 +859,16 @@ class OpenAIRepairModel:
             patch = _normalize_model_patch(patch)
         except (ValueError, WorktreePolicyError) as exc:
             raise MeteredModelProtocolError(str(exc), result) from exc
-        return ModelCallResult(patch, result.actual_tokens, result.actual_cost_usd)
+        return ModelCallResult(
+            patch,
+            result.actual_tokens,
+            result.actual_cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_creation_tokens=result.cache_creation_tokens,
+            reasoning_tokens=result.reasoning_tokens,
+        )
 
     def reflect(
         self,
@@ -841,7 +903,14 @@ class OpenAIRepairModel:
         except (ValueError, WorktreePolicyError) as exc:
             raise MeteredModelProtocolError(str(exc), result) from exc
         return ModelCallResult(
-            reflection, result.actual_tokens, result.actual_cost_usd
+            reflection,
+            result.actual_tokens,
+            result.actual_cost_usd,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_creation_tokens=result.cache_creation_tokens,
+            reasoning_tokens=result.reasoning_tokens,
         )
 
     def _chat(self, operation: str, payload: dict[str, Any]) -> ModelCallResult[str]:
@@ -861,6 +930,7 @@ class OpenAIRepairModel:
                 {"role": "user", "content": user_content},
             ],
             "max_tokens": self.max_output_tokens,
+            "temperature": self.temperature,
             "response_format": {"type": "json_object"},
         }
         if self.disable_thinking:
@@ -877,11 +947,24 @@ class OpenAIRepairModel:
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in (input_tokens, output_tokens)):
             raise WorktreePolicyError("repair model returned invalid token usage")
         total = input_tokens + output_tokens
+        cache_read_tokens = getattr(usage, "prompt_cache_hit_tokens", None)
+        cache_creation_tokens = getattr(usage, "prompt_cache_miss_tokens", None)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
         cost = _ceil_microusd(
             Decimal(input_tokens) * self.input_price
             + Decimal(output_tokens) * self.output_price
         )
-        return ModelCallResult(content, total, cost)
+        return ModelCallResult(
+            content,
+            total,
+            cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_creation_tokens=cache_creation_tokens,
+            reasoning_tokens=reasoning_tokens,
+        )
 
 
 @dataclass(frozen=True)
@@ -1290,12 +1373,14 @@ class RepairOrchestrator:
         cohort_ledger: CohortCostLedger | None = None,
         preflight: Callable[[], None] | None = None,
         clock: Callable[[], float] = time.time,
+        trace: Any = None,
     ):
         self.checkpoint = checkpoint
         self.store = store
         self.model = model
         self.approvals = approvals
         self.commit_control = commit_control
+        self.trace = trace
         self.clock = clock
         self.machine = RepairStateMachine(
             checkpoint.state, list(checkpoint.state_history)
@@ -1321,6 +1406,21 @@ class RepairOrchestrator:
         self._preflight = preflight
 
     def run(self) -> RepairRunResult:
+        with tspan(
+            self.trace,
+            "crag.stage repair",
+            operation="agent.stage",
+            attributes={"crag.stage.name": "repair"},
+        ) as repair_span:
+            result = self._run_state_machine()
+            repair_span.set_attributes(
+                {
+                    "crag.terminal.state": result.state.value,
+                }
+            )
+            return result
+
+    def _run_state_machine(self) -> RepairRunResult:
         with self.store.acquire_run_lock(self.checkpoint.run_id):
             durable = self.store.load(self.checkpoint.run_id)
             if durable.to_dict() != self.checkpoint.to_dict():
@@ -1376,6 +1476,7 @@ class RepairOrchestrator:
             persist_approval=self._persist_approval,
             persist_manifest=self._persist_manifest,
             persist_budget=self._persist_budget,
+            trace=self.trace,
         )
 
     def _recover(self) -> RepairRunResult | None:
@@ -1800,7 +1901,30 @@ class RepairOrchestrator:
             plan=plan,
             patch_attempt=attempt,
         )
-        approval = self.approvals.request_write(request)
+        with tspan(
+            self.trace,
+            "crag.policy write_approval",
+            operation="policy.decision",
+            attributes={
+                "crag.policy.operation": "write_approval",
+                "crag.approval.kind": ApprovalKind.WRITE.value,
+            },
+        ) as approval_span:
+            approval = self.approvals.request_write(request)
+            approval_span.set_attribute(
+                "crag.policy.decision",
+                "approved" if approval is not None else "rejected",
+            )
+            approval_span.set_attribute(
+                "crag.approval.decision",
+                "approved" if approval is not None else "rejected",
+            )
+            tev(
+                self.trace,
+                "approval",
+                operation="write_approval",
+                decision="approved" if approval is not None else "rejected",
+            )
         if approval is None:
             self._mark_llm_consumed("patch")
             self._transition(RepairState.CANCELLED)
@@ -2250,7 +2374,30 @@ class RepairOrchestrator:
             expected_tree_oid=expected_tree_oid,
             diff_text=diff_text,
         )
-        approval = self.approvals.request_commit(request)
+        with tspan(
+            self.trace,
+            "crag.policy commit_approval",
+            operation="policy.decision",
+            attributes={
+                "crag.policy.operation": "commit_approval",
+                "crag.approval.kind": ApprovalKind.COMMIT.value,
+            },
+        ) as approval_span:
+            approval = self.approvals.request_commit(request)
+            approval_span.set_attribute(
+                "crag.policy.decision",
+                "approved" if approval is not None else "rejected",
+            )
+            approval_span.set_attribute(
+                "crag.approval.decision",
+                "approved" if approval is not None else "rejected",
+            )
+            tev(
+                self.trace,
+                "approval",
+                operation="commit_approval",
+                decision="approved" if approval is not None else "rejected",
+            )
         if approval is None:
             self._transition(RepairState.CANCELLED)
             return RepairRunResult(RepairState.CANCELLED, "commit_approval_rejected")
@@ -2539,6 +2686,14 @@ class RepairOrchestrator:
         self.checkpoint.last_transition = {"from": source.value, "to": target.value}
         self.checkpoint.in_progress_operation = preserve
         self._save("transition_completed")
+        tev(
+            self.trace,
+            "policy",
+            operation="state_transition",
+            decision="allowed",
+            source_state=source.value,
+            target_state=target.value,
+        )
 
     def _record_snapshot(self, snapshot: RepairRepositorySnapshot) -> None:
         self.checkpoint.diff_hash = snapshot.sha256
@@ -2559,6 +2714,34 @@ class RepairOrchestrator:
         self,
         operation: str,
         invoke: Callable[[], ModelCallResult[T]],
+    ) -> T:
+        model_name = getattr(self.model, "model", "unknown")
+        with tspan(
+            self.trace,
+            f"chat repair-{operation}",
+            operation="llm.request",
+            kind="CLIENT",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": getattr(self.model, "provider", None),
+                "gen_ai.request.model": model_name,
+                "gen_ai.request.max_tokens": getattr(
+                    self.model, "max_output_tokens", None
+                ),
+                "gen_ai.request.temperature": getattr(
+                    self.model, "temperature", None
+                ),
+                "crag.agent.component": "repair",
+                "crag.repair.operation": operation,
+            },
+        ) as model_span:
+            return self._call_model_metered(operation, invoke, model_span)
+
+    def _call_model_metered(
+        self,
+        operation: str,
+        invoke: Callable[[], ModelCallResult[T]],
+        model_span: Any,
     ) -> T:
         limits = self.model.limits_for(operation)
         reservation = self.budget.reserve_llm(limits.max_tokens, limits.max_cost_usd)
@@ -2610,6 +2793,22 @@ class RepairOrchestrator:
         try:
             result = invoke()
         except MeteredModelProtocolError as exc:
+            model_span.set_attributes(
+                {
+                    "crag.usage.total_tokens": (
+                        exc.actual_tokens if exc.input_tokens is None else None
+                    ),
+                    "gen_ai.usage.input_tokens": exc.input_tokens,
+                    "gen_ai.usage.output_tokens": exc.output_tokens,
+                    "gen_ai.usage.cache_read.input_tokens": exc.cache_read_tokens,
+                    "gen_ai.usage.cache_creation.input_tokens": (
+                        exc.cache_creation_tokens
+                    ),
+                    "gen_ai.usage.reasoning_tokens": exc.reasoning_tokens,
+                    "crag.cost.micro_usd": round(exc.actual_cost_usd * 1_000_000),
+                    "crag.cost.settlement": "reconciled",
+                }
+            )
             failures = reconcile_usage(exc.actual_tokens, exc.actual_cost_usd)
             record.update(
                 {
@@ -2636,6 +2835,22 @@ class RepairOrchestrator:
             self._save(f"llm_{operation}_unmetered")
             raise WorktreePolicyError("repair model returned an unmetered result")
         failures = reconcile_usage(result.actual_tokens, result.actual_cost_usd)
+        model_span.set_attributes(
+            {
+                "crag.usage.total_tokens": (
+                    result.actual_tokens if result.input_tokens is None else None
+                ),
+                "gen_ai.usage.input_tokens": result.input_tokens,
+                "gen_ai.usage.output_tokens": result.output_tokens,
+                "gen_ai.usage.cache_read.input_tokens": result.cache_read_tokens,
+                "gen_ai.usage.cache_creation.input_tokens": (
+                    result.cache_creation_tokens
+                ),
+                "gen_ai.usage.reasoning_tokens": result.reasoning_tokens,
+                "crag.cost.micro_usd": round(result.actual_cost_usd * 1_000_000),
+                "crag.cost.settlement": "reconciled",
+            }
+        )
         patch_result: dict[str, Any] | None = None
         patch_output_error = ""
         if operation == "patch":
@@ -2749,6 +2964,14 @@ class RepairOrchestrator:
             self.checkpoint.run_id,
             event,
             {"sequence": self.checkpoint.sequence, "state": self.machine.state.value},
+        )
+        tev(
+            self.trace,
+            "checkpoint",
+            operation="save",
+            **{"crag.checkpoint.event": event},
+            sequence=self.checkpoint.sequence,
+            state=self.machine.state.value,
         )
         return checksum
 
@@ -2935,7 +3158,7 @@ def repair_cli_main(argv: Sequence[str] | None = None) -> int:
         RepairToolError,
         SandboxError,
     ) as exc:
-        parser.exit(2, f"repair refused: {exc}\n")
+        parser.exit(2, f"repair refused: {type(exc).__name__}\n")
     print(json.dumps({"state": result.state.value, "reason": result.reason,
                       "commit_sha": result.commit_sha}))
     return 0
@@ -3015,6 +3238,7 @@ def _run_repair_contract(path: Path, *, resume: bool) -> RepairRunResult:
         original_checkout=Path(values["original_checkout"]),
         worktree_root=Path(values["worktree_root"]),
     )
+    expected_original: RepositorySnapshot | None = None
     if resume:
         state_root = _canonical_existing_directory(state_root, "state root")
         store = CheckpointStore(state_root)
@@ -3045,88 +3269,157 @@ def _run_repair_contract(path: Path, *, resume: bool) -> RepairRunResult:
             "runtime LLM model does not match the reviewed repair contract"
         )
     client = _repair_client_without_retries(client)
-    cohort_ledger = CohortCostLedger(
-        state_root / "_cohorts",
-        values["cohort_id"],
-        cohort_cost_limit_usd,
+    trace = Trace(
+        state_root
+        / values["run_id"]
+        / f"observability-{secrets.token_hex(8)}.jsonl",
+        run_id=values["run_id"],
+        root_attributes={
+            "gen_ai.provider.name": runtime_provider,
+            "gen_ai.request.model": model_name,
+            "crag.repair.repository_id": values["repository_id"],
+            "crag.repair.cohort_id": values["cohort_id"],
+            "crag.repair.resume": resume,
+        },
     )
-    cohort_ledger.snapshot()
-    if not resume:
-        worktree_root.mkdir(parents=True, exist_ok=True)
-    backend = DockerWorktreeBackend(
-        worktree_root=worktree_root,
-        image=values["docker_image"],
-        budget=budget,
-    )
-    if not resume:
-        task = RepairWorktreeManager(
-            original_checkout=original_checkout,
-            worktree_root=worktree_root,
-            backend=backend,
-        ).create(issue_slug=values["issue_slug"], run_id=values["run_id"],
-                 base_sha=values["base_sha"])
-        worktree = task.path
-        state_root, original_checkout, worktree_root = _validate_state_root_isolation(
-            state_root=state_root,
-            original_checkout=original_checkout,
-            worktree_root=worktree_root,
-            task_worktree=worktree,
+    backend: DockerWorktreeBackend | None = None
+    try:
+        cohort_ledger = CohortCostLedger(
+            state_root / "_cohorts",
+            values["cohort_id"],
+            cohort_cost_limit_usd,
         )
-        store = CheckpointStore(state_root)
-        expected_original = task.original_snapshot
-        checkpoint = RepairCheckpoint(
-            run_id=task.run_id, repository_id=values["repository_id"],
-            base_sha=task.base_sha, task_branch=task.branch, worktree=str(task.path),
-            issue_ref=values["issue_ref"],
-            original_snapshot={"branch": task.original_snapshot.branch,
-                               "head": task.original_snapshot.head,
-                               "staged": list(task.original_snapshot.staged),
-                               "tracked": list(task.original_snapshot.tracked),
-                               "untracked": list(task.original_snapshot.untracked),
-                               "contract_hash": contract_hash},
-            writable_paths=tuple(writable), budget=budget.to_dict(), updated_at=time.time(),
+        cohort_ledger.snapshot()
+        if not resume:
+            worktree_root.mkdir(parents=True, exist_ok=True)
+        backend = DockerWorktreeBackend(
+            worktree_root=worktree_root,
+            image=values["docker_image"],
+            budget=budget,
         )
-        store.save(checkpoint)
-    sandbox = build_repair_sandbox(
-        worktree=worktree, image=values["docker_image"], base_sha=checkpoint.base_sha,
-        writable_paths=tuple(writable),
-        test_commands=tuple(tuple(command) for command in commands),
-    )
-    model = OpenAIRepairModel(
-        client=client, model=model_name, issue_context=values["issue_context"],
-        max_total_tokens=max_total_tokens,
-        max_output_tokens=max_output_tokens,
-        input_cost_per_million=input_cost_per_million,
-        output_cost_per_million=output_cost_per_million,
-        disable_thinking=True,
-    )
+        if not resume:
+            task = RepairWorktreeManager(
+                original_checkout=original_checkout,
+                worktree_root=worktree_root,
+                backend=backend,
+            ).create(
+                issue_slug=values["issue_slug"],
+                run_id=values["run_id"],
+                base_sha=values["base_sha"],
+            )
+            worktree = task.path
+            state_root, original_checkout, worktree_root = _validate_state_root_isolation(
+                state_root=state_root,
+                original_checkout=original_checkout,
+                worktree_root=worktree_root,
+                task_worktree=worktree,
+            )
+            store = CheckpointStore(state_root)
+            expected_original = task.original_snapshot
+            checkpoint = RepairCheckpoint(
+                run_id=task.run_id,
+                repository_id=values["repository_id"],
+                base_sha=task.base_sha,
+                task_branch=task.branch,
+                worktree=str(task.path),
+                issue_ref=values["issue_ref"],
+                original_snapshot={
+                    "branch": task.original_snapshot.branch,
+                    "head": task.original_snapshot.head,
+                    "staged": list(task.original_snapshot.staged),
+                    "tracked": list(task.original_snapshot.tracked),
+                    "untracked": list(task.original_snapshot.untracked),
+                    "contract_hash": contract_hash,
+                },
+                writable_paths=tuple(writable),
+                budget=budget.to_dict(),
+                updated_at=time.time(),
+            )
+            store.save(checkpoint)
+        sandbox = build_repair_sandbox(
+            worktree=worktree,
+            image=values["docker_image"],
+            base_sha=checkpoint.base_sha,
+            writable_paths=tuple(writable),
+            test_commands=tuple(tuple(command) for command in commands),
+        )
+        model = OpenAIRepairModel(
+            client=client,
+            model=model_name,
+            issue_context=values["issue_context"],
+            max_total_tokens=max_total_tokens,
+            max_output_tokens=max_output_tokens,
+            input_cost_per_million=input_cost_per_million,
+            output_cost_per_million=output_cost_per_million,
+            disable_thinking=True,
+            provider=runtime_provider,
+        )
 
-    def commit_factory(allowed: tuple[tuple[str, ...], ...]) -> ToolSandbox:
-        return build_commit_sandbox(worktree=worktree, image=values["docker_image"],
-                                    allowed_commands=allowed)
+        def commit_factory(allowed: tuple[tuple[str, ...], ...]) -> ToolSandbox:
+            return build_commit_sandbox(
+                worktree=worktree,
+                image=values["docker_image"],
+                allowed_commands=allowed,
+            )
 
-    orchestrator = RepairOrchestrator(
-        checkpoint=checkpoint, store=store, sandbox=sandbox, model=model,
-        approvals=TTYApprovalProvider(),
-        commit_control=SandboxedGitCommitControl(sandbox_factory=commit_factory, budget=budget),
-        expected_limits=limits,
-        budget_manager=budget,
-        cohort_ledger=cohort_ledger,
-        preflight=(
-            lambda: _assert_original_checkout_unchanged(
+        orchestrator = RepairOrchestrator(
+            checkpoint=checkpoint,
+            store=store,
+            sandbox=sandbox,
+            model=model,
+            approvals=TTYApprovalProvider(),
+            commit_control=SandboxedGitCommitControl(
+                sandbox_factory=commit_factory,
+                budget=budget,
+            ),
+            expected_limits=limits,
+            budget_manager=budget,
+            cohort_ledger=cohort_ledger,
+            preflight=(
+                lambda: _assert_original_checkout_unchanged(
+                    backend, original_checkout, expected_original
+                )
+                if resume and expected_original is not None
+                else None
+            ),
+            trace=trace,
+        )
+        result = orchestrator.run()
+    except BaseException as exc:
+        trace.close(
+            error_type=type(exc).__name__,
+            error_category=error_category_for_exception(exc),
+        )
+        if backend is not None and expected_original is not None:
+            _assert_original_checkout_unchanged(
                 backend, original_checkout, expected_original
             )
-            if resume
-            else None
-        ),
-    )
-    try:
-        result = orchestrator.run()
-    except Exception:
-        _assert_original_checkout_unchanged(
-            backend, original_checkout, expected_original
-        )
         raise
+    tev(
+        trace,
+        "policy",
+        operation="terminal_state",
+        decision="completed",
+        state=result.state.value,
+        reason=result.reason,
+    )
+    if result.state in {RepairState.FAILED, RepairState.CANCELLED}:
+        if result.state is RepairState.CANCELLED:
+            result_category = "approval_rejected"
+        elif "budget" in result.reason:
+            result_category = "budget_exhausted"
+        elif "tool" in result.reason or "quarantin" in result.reason:
+            result_category = "sandbox_violation"
+        else:
+            result_category = "internal"
+        trace.close(
+            error_type=f"Repair{result.state.value.title()}",
+            error_category=result_category,
+        )
+    else:
+        trace.close()
+    if backend is None or expected_original is None:
+        raise WorktreePolicyError("repair setup did not bind original repository evidence")
     _assert_original_checkout_unchanged(backend, original_checkout, expected_original)
     return result
 

@@ -16,10 +16,18 @@ not part of the contract.
 """
 import sys
 from dataclasses import dataclass, field
+import re
 from typing import Any, Callable
 
 from code_review_agent.llm import REQUEST_TIMEOUT
-from code_review_agent.tracelog import tev
+from code_review_agent.tracelog import tev, tspan
+
+_SPAN_TOKEN = re.compile(r"[^A-Za-z0-9._:/-]+")
+
+
+def _span_token(value: object, fallback: str) -> str:
+    token = _SPAN_TOKEN.sub("_", str(value)).strip("._")
+    return (token or fallback)[:96]
 
 
 @dataclass
@@ -81,26 +89,59 @@ def run_submit_loop(client, model: str, messages: list, *,
         request_options = {}
         if request_timeout is not None:
             request_options["timeout"] = request_timeout
-        response = client.chat.completions.create(
-            model=model, max_tokens=max_tokens, temperature=temperature,
-            tools=[submit_tool] if final else explore_tools + [submit_tool],
-            tool_choice="auto", messages=messages,
-            **request_options,
-        )
-        msg = response.choices[0].message
-        tool_calls = msg.tool_calls or []
-        u = response.usage
-        # Provider cache accounting (DeepSeek splits prompt_tokens into
-        # cache hit/miss). Keys are included only when the SDK object has
-        # them, so traces from other providers are unchanged.
-        cache = {k: v for k, v in (
-            ("cache_hit", getattr(u, "prompt_cache_hit_tokens", None)),
-            ("cache_miss", getattr(u, "prompt_cache_miss_tokens", None)),
-        ) if v is not None}
-        tev(trace, "llm_response", component=component, step=step,
-            tool_calls=[tc.function.name for tc in tool_calls],
-            tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens,
-            **cache)
+        with tspan(
+            trace,
+            f"chat {_span_token(model, 'unknown')}",
+            operation="llm.request",
+            kind="CLIENT",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": model,
+                "gen_ai.request.max_tokens": max_tokens,
+                "gen_ai.request.temperature": temperature,
+                "crag.agent.component": component,
+                "crag.agent.step": step,
+                "crag.request.final_step": final,
+            },
+        ) as request_span:
+            response = client.chat.completions.create(
+                model=model, max_tokens=max_tokens, temperature=temperature,
+                tools=[submit_tool] if final else explore_tools + [submit_tool],
+                tool_choice="auto", messages=messages,
+                **request_options,
+            )
+            msg = response.choices[0].message
+            tool_calls = msg.tool_calls or []
+            u = response.usage
+            # Provider cache accounting (DeepSeek splits prompt_tokens into
+            # cache hit/miss). Keys are included only when the SDK object has
+            # them, so traces from other providers are unchanged.
+            cache = {k: v for k, v in (
+                ("cache_hit", getattr(u, "prompt_cache_hit_tokens", None)),
+                ("cache_miss", getattr(u, "prompt_cache_miss_tokens", None)),
+            ) if v is not None}
+            completion_details = getattr(u, "completion_tokens_details", None)
+            reasoning_tokens = getattr(completion_details, "reasoning_tokens", None)
+            finish_reasons = [
+                choice.finish_reason
+                for choice in response.choices
+                if isinstance(getattr(choice, "finish_reason", None), str)
+            ]
+            request_span.set_attributes({
+                "gen_ai.response.id": getattr(response, "id", None),
+                "gen_ai.response.model": getattr(response, "model", None),
+                "gen_ai.response.finish_reasons": finish_reasons or None,
+                "gen_ai.usage.input_tokens": u.prompt_tokens,
+                "gen_ai.usage.output_tokens": u.completion_tokens,
+                "gen_ai.usage.cache_read.input_tokens": cache.get("cache_hit"),
+                "gen_ai.usage.cache_creation.input_tokens": cache.get("cache_miss"),
+                "gen_ai.usage.reasoning_tokens": reasoning_tokens,
+                "crag.llm.tool_call_count": len(tool_calls),
+            })
+            tev(trace, "llm_response", component=component, step=step,
+                tool_calls=[tc.function.name for tc in tool_calls],
+                tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens,
+                **cache)
 
         # A submit call only ends the run if its payload validates;
         # otherwise the problems are fed back as the tool result and the
@@ -115,8 +156,11 @@ def run_submit_loop(client, model: str, messages: list, *,
                                   reason="ok")
             bad_submits += 1
             last_problems = problems
-            print(f"[{step_label} {step}] {submit_name} rejected: {problems}",
-                  file=sys.stderr)
+            print(
+                f"[{step_label} {step}] {submit_name} rejected with "
+                f"{len(problems)} validation problem(s)",
+                file=sys.stderr,
+            )
             tev(trace, "submit_rejected", component=component,
                 problems=problems)
             if bad_submits >= max_submit_attempts:
@@ -139,8 +183,8 @@ def run_submit_loop(client, model: str, messages: list, *,
                 continue
             if on_text_answer == "raise":
                 raise RuntimeError(
-                    f"model stopped without calling {submit_name}; got:\n"
-                    f"{msg.content!r}")
+                    f"model stopped without calling {submit_name}"
+                )
             # "count": a text answer is a failed attempt, then a nudge.
             bad_submits += 1
             last_problems = [text_answer_problem]
@@ -170,10 +214,33 @@ def run_submit_loop(client, model: str, messages: list, *,
             if tc is submit:
                 content = reject_msg(problems)
             else:
-                print(f"[{step_label} {step}] {tc.function.name} "
-                      f"{tc.function.arguments[:120]}", file=sys.stderr)
-                content = session.execute(tc.function.name,
-                                          tc.function.arguments)
+                print(
+                    f"[{step_label} {step}] {tc.function.name} "
+                    f"arguments_bytes={len(tc.function.arguments.encode('utf-8'))}",
+                    file=sys.stderr,
+                )
+                with tspan(
+                    trace,
+                    f"execute_tool {_span_token(tc.function.name, 'unknown')}",
+                    operation="tool.execute",
+                    attributes={
+                        "gen_ai.operation.name": "execute_tool",
+                        "gen_ai.tool.name": tc.function.name,
+                        "gen_ai.tool.call.id": tc.id,
+                        "gen_ai.tool.type": "function",
+                        "crag.tool.arguments_bytes": len(
+                            tc.function.arguments.encode("utf-8")
+                        ),
+                    },
+                ) as tool_span:
+                    content = session.execute(
+                        tc.function.name,
+                        tc.function.arguments,
+                    )
+                    tool_span.set_attribute(
+                        "crag.tool.result_bytes",
+                        len(content.encode("utf-8", errors="replace")),
+                    )
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": content})
 

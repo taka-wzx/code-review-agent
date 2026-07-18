@@ -10,7 +10,7 @@ import re
 import secrets
 import shlex
 from threading import RLock
-from typing import Callable, Protocol, Sequence, TypeVar
+from typing import Any, Callable, Protocol, Sequence, TypeVar
 from uuid import uuid4
 
 from code_review_agent.repair_approval import (
@@ -30,6 +30,7 @@ from code_review_agent.sandbox import (
     WritableMount,
     _path_has_symlink_or_reparse_component,
 )
+from code_review_agent.tracelog import tspan
 
 
 GIT_PREFIX = (
@@ -75,6 +76,12 @@ REVERSE_COMMAND = GIT_PREFIX + (
     "--whitespace=error-all",
     "-",
 )
+_TELEMETRY_TOKEN = re.compile(r"[^A-Za-z0-9._:/-]+")
+
+
+def _telemetry_token(value: object, fallback: str = "unknown") -> str:
+    token = _TELEMETRY_TOKEN.sub("_", str(value)).strip("._")
+    return (token or fallback)[:96]
 
 
 class RepairToolError(RuntimeError):
@@ -356,6 +363,7 @@ class RepairTools:
         persist_approval: ApprovalPersister,
         persist_manifest: ManifestPersister,
         persist_budget: BudgetPersister,
+        trace: Any = None,
     ):
         if not isinstance(run_id, str) or not run_id:
             raise ValueError("run_id must be non-empty")
@@ -377,6 +385,7 @@ class RepairTools:
         self._persist_approval = persist_approval
         self._persist_manifest = persist_manifest
         self._persist_budget = persist_budget
+        self._trace = trace
         self._mutation_lock = RLock()
 
     def git_status(self) -> GitStatusResult:
@@ -963,30 +972,85 @@ class RepairTools:
         timeout_seconds: float | None = None,
         stdin_bytes: bytes | None = None,
     ) -> SandboxResult:
-        self.budget.consume_command()
-        self._persist_budget("command_consumed")
-        try:
-            result = self.sandbox.run(
-                argv,
-                timeout_seconds=timeout_seconds,
-                stdin_bytes=stdin_bytes,
+        command_name = _telemetry_token(
+            Path(str(argv[0])).name if argv else "unknown"
+        )
+        with tspan(
+            self._trace,
+            f"crag.sandbox {command_name}",
+            operation="sandbox.command",
+            attributes={
+                "crag.sandbox.command": command_name,
+                "crag.sandbox.argv_count": len(argv),
+                "crag.sandbox.timeout_seconds": timeout_seconds,
+                "crag.sandbox.stdin_bytes": (
+                    len(stdin_bytes) if stdin_bytes is not None else 0
+                ),
+            },
+        ) as command_span:
+            self.budget.consume_command()
+            self._persist_budget("command_consumed")
+            try:
+                result = self.sandbox.run(
+                    argv,
+                    timeout_seconds=timeout_seconds,
+                    stdin_bytes=stdin_bytes,
+                )
+            except SandboxTimeout as exc:
+                command_span.set_attributes(
+                    {
+                        "crag.sandbox.timed_out": True,
+                        "crag.sandbox.timeout_seconds": timeout_seconds,
+                        "crag.sandbox.stdout_bytes": len(
+                            exc.stdout.encode("utf-8", errors="replace")
+                        ),
+                        "crag.sandbox.stderr_bytes": len(
+                            exc.stderr.encode("utf-8", errors="replace")
+                        ),
+                    }
+                )
+                self._persist_budget("command_interrupted")
+                raise
+            except BaseException:
+                self._persist_budget("command_interrupted")
+                raise
+            command_span.set_attributes(
+                {
+                    "crag.sandbox.exit_code": result.exit_code,
+                    "crag.sandbox.duration_seconds": result.duration_seconds,
+                    "crag.sandbox.timed_out": False,
+                    "crag.sandbox.truncated": result.output_truncated,
+                    "crag.sandbox.stdout_bytes": len(
+                        result.stdout.encode("utf-8", errors="replace")
+                    ),
+                    "crag.sandbox.stderr_bytes": len(
+                        result.stderr.encode("utf-8", errors="replace")
+                    ),
+                }
             )
-        except BaseException:
-            self._persist_budget("command_interrupted")
-            raise
-        self._persist_budget("command_completed")
-        return result
+            self._persist_budget("command_completed")
+            return result
 
     def _invoke_tool(self, name: str, invoke: Callable[[], T]) -> T:
-        self.budget.consume_tool_call()
-        self._persist_budget(f"tool_{name}_consumed")
-        try:
-            result = invoke()
-        except BaseException:
-            self._persist_budget(f"tool_{name}_interrupted")
-            raise
-        self._persist_budget(f"tool_{name}_completed")
-        return result
+        with tspan(
+            self._trace,
+            f"execute_tool {name}",
+            operation="tool.execute",
+            attributes={
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": name,
+                "gen_ai.tool.type": "function",
+            },
+        ):
+            self.budget.consume_tool_call()
+            self._persist_budget(f"tool_{name}_consumed")
+            try:
+                result = invoke()
+            except BaseException:
+                self._persist_budget(f"tool_{name}_interrupted")
+                raise
+            self._persist_budget(f"tool_{name}_completed")
+            return result
 
 
 @dataclass(frozen=True)

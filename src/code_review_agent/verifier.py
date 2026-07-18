@@ -325,7 +325,7 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
         # semantics as a protocol failure: one dead pass must not crash the
         # review and lose the finder's output (verify_findings degrades /
         # fails open).
-        print(f"[{component}] pass FAILED ({type(e).__name__}: {e})",
+        print(f"[{component}] pass FAILED ({type(e).__name__})",
               file=sys.stderr)
         tev(trace, "verifier_pass_failed", pass_id=pass_id,
             problems=[f"api_error:{type(e).__name__}"])
@@ -340,7 +340,7 @@ def _verify_pass(client, model: str, review_input: str, findings: list,
         result.problems = ["review_deadline_exhausted"]
 
     print(f"[{component}] pass FAILED ({result.reason} at step "
-          f"{result.steps}); last problems: {result.problems}",
+          f"{result.steps}); validation_problems={len(result.problems)}",
           file=sys.stderr)
     tev(trace, "verifier_pass_failed", pass_id=pass_id,
         problems=result.problems)

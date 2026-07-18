@@ -10,6 +10,7 @@ from unittest import mock
 
 import code_review_agent.repair as repair_module
 
+from code_review_agent.observability import aggregate_trace, load_span_records
 from code_review_agent.repair import (
     CommitInspection,
     CommitApprovalRequest,
@@ -60,6 +61,7 @@ from code_review_agent.repair_tools import (
     parse_patch,
 )
 from code_review_agent.sandbox import SandboxResult
+from code_review_agent.tracelog import Trace
 
 
 BASE_SHA = "a" * 40
@@ -417,6 +419,8 @@ class CommitSandbox:
 
 class FakeModel:
     def __init__(self):
+        self.model = "fake-repair-model"
+        self.provider = "fake"
         self.plan_calls = []
         self.patch_attempts = []
         self.reflections = []
@@ -605,6 +609,7 @@ class OrchestratorCase(unittest.TestCase):
         expected_limits=None,
         cohort_ledger=None,
         preflight=None,
+        trace=None,
     ):
         worktree = Path(root) / "task"
         worktree.mkdir(exist_ok=True)
@@ -626,6 +631,7 @@ class OrchestratorCase(unittest.TestCase):
             cohort_ledger=cohort_ledger,
             preflight=preflight,
             clock=lambda: 100.0,
+            trace=trace,
         )
         return orchestrator, store, sandbox, model, approvals, commit_control
 
@@ -1337,7 +1343,9 @@ class TestRepairOrchestrator(OrchestratorCase):
                 original_snapshot=RepositorySnapshot("master", BASE_SHA),
             )
             result = RepairRunResult(RepairState.CANCELLED, "write_approval_rejected")
+            setup_order = []
             with (
+                mock.patch.object(repair_module, "Trace") as trace_type,
                 mock.patch.object(repair_module, "DockerWorktreeBackend") as backend,
                 mock.patch.object(repair_module, "RepairWorktreeManager") as manager,
                 mock.patch.object(repair_module, "build_repair_sandbox", return_value=StatefulSandbox()),
@@ -1351,7 +1359,19 @@ class TestRepairOrchestrator(OrchestratorCase):
                 ),
                 mock.patch.dict(repair_module.os.environ, {"LLM_PROVIDER": "deepseek"}),
             ):
-                manager.return_value.create.return_value = task
+                trace_instance = mock.MagicMock()
+                trace_type.side_effect = (
+                    lambda *args, **kwargs: (
+                        setup_order.append("trace"),
+                        trace_instance,
+                    )[1]
+                )
+                manager.return_value.create.side_effect = (
+                    lambda *args, **kwargs: (
+                        setup_order.append("worktree"),
+                        task,
+                    )[1]
+                )
                 backend.return_value.snapshot.return_value = task.original_snapshot
                 orchestrator.return_value.run.return_value = result
                 observed = repair_module._run_repair_contract(contract_path, resume=False)
@@ -1365,6 +1385,8 @@ class TestRepairOrchestrator(OrchestratorCase):
         self.assertEqual(expected_limits.total_cost_usd, 1.0)
         self.assertEqual(expected_limits.tool_calls, 80)
         self.assertEqual(expected_limits.repair_attempts, 2)
+        self.assertEqual(setup_order, ["trace", "worktree"])
+        self.assertIs(orchestrator.call_args.kwargs["trace"], trace_instance)
         backend.return_value.snapshot.assert_called_once_with(original.resolve())
         with self.assertRaises(SystemExit):
             repair_module.repair_cli_main(["start", "--yes", str(contract_path)])
@@ -1842,6 +1864,8 @@ class TestRepairOrchestrator(OrchestratorCase):
             ),
         )
         self.assertEqual(plan_result.actual_tokens, 25)
+        self.assertEqual(plan_result.input_tokens, 20)
+        self.assertEqual(plan_result.output_tokens, 5)
         self.assertEqual(patch_result.value, patch_for(1))
         self.assertEqual(reflection_result.value.decision, ReflectionDecision.SUCCESS)
         self.assertAlmostEqual(plan_result.actual_cost_usd, 0.00003)
@@ -1855,6 +1879,7 @@ class TestRepairOrchestrator(OrchestratorCase):
                 for request in requests
             )
         )
+        self.assertTrue(all(request["temperature"] == 0.0 for request in requests))
 
     def test_openai_repair_adapter_normalizes_structured_reflection_reason(self):
         response = SimpleNamespace(
@@ -2361,6 +2386,41 @@ class TestRepairOrchestrator(OrchestratorCase):
         self.assertEqual(orchestrator.budget.usage.tokens, 30)
         self.assertAlmostEqual(orchestrator.budget.usage.cost_usd, 0.003)
         self.assertEqual(orchestrator.budget.to_dict()["reservations"], [])
+
+    def test_happy_path_emits_cross_checkable_canonical_trace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = Path(tmp) / "repair-trace.jsonl"
+            trace = Trace(
+                trace_path,
+                run_id="run-1",
+                source_commit="1" * 40,
+            )
+            orchestrator, _store, _sandbox, _model, _approvals, _commit = (
+                self.make_orchestrator(tmp, trace=trace)
+            )
+            result = orchestrator.run()
+            trace.close()
+            records = load_span_records(trace_path)
+            aggregate = aggregate_trace(records)
+            serialized = trace_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result.state, RepairState.SUBMIT)
+        self.assertEqual(aggregate["llm_calls"], 3)
+        self.assertGreater(aggregate["tool_calls"], 0)
+        self.assertGreater(aggregate["sandbox_commands"], 0)
+        self.assertGreaterEqual(aggregate["policy_decisions"], 2)
+        self.assertGreater(aggregate["checkpoint_operations"], 0)
+        self.assertEqual(aggregate["total_tokens"], 30)
+        self.assertEqual(aggregate["cost_microusd"], 3000)
+        self.assertTrue(
+            all(
+                record["attributes"]["gen_ai.provider.name"] == "fake"
+                for record in records
+                if record["operation"] == "llm.request"
+            )
+        )
+        self.assertNotIn("old-1", serialized)
+        self.assertNotIn("new-1", serialized)
 
     def test_rejected_patch_preflight_is_bounded_before_write_approval(self):
         with tempfile.TemporaryDirectory() as tmp:

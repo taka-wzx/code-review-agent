@@ -23,7 +23,7 @@
 - **重复调用短路与失败恢复**：同参数重复工具调用直接短路；连续 3 次搜索 miss 注入"缺失本身可报告"提示；工具失败返回可行动的 `Error:` 文本而非崩溃；坏 submit 载荷回填问题重试（上限 2 次）；`MAX_STEPS=10` 步数护栏
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
 - **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
-- **JSONL trace**（`tracelog.py`）：llm 调用 / 工具调用 / submit 拒绝 / 裁决全事件流落盘，含 provider/model 元数据与 token 计量，支撑成本报表与回放归因；写入端线程安全（行级锁），并新增 `parallel_stage_started` / `parallel_stage_finished` / `deadline_exhausted` 事件记录阶段时序与截止
+- **Canonical trace/span**（`observability.py`、`redaction.py`、`tracelog.py`，Week 6 Phase 2）：每次 Agent Run、阶段、LLM、工具、策略、审批、沙箱、checkpoint 和终态使用同一 `crag.observability/v1alpha1` trace；记录 provider/model、可用 token、整数 micro-USD、时延、工具与 fail-open/degraded 计数；原始 Prompt、diff、工具参数/结果、stdout/stderr、异常消息和主机绝对路径在序列化前统一剔除或脱敏；旧 flat JSONL 读取兼容保留到 0.2.x
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）
 - **敏感文件防护**：`read_file` 黑名单拦截 `.env*` / `*.pem` / `*.key` / `id_rsa*` / `credentials*` 等；搜索与遍历跳过 vcs/venv/缓存目录；git/gh 子进程 list 形式无 shell 注入，`-` 开头参数注入有校验
@@ -93,7 +93,7 @@ $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY（或 ZHIP
 # Markdown（按严重度排序，dropped 收进 <details> 审计块），--out 落盘
 .\.venv\Scripts\crag.exe --commit HEAD --repo path\to\repo --format md --out review.md
 
-# JSONL trace：llm/tool/submit/verdict 全事件流，供成本报表与回放归因
+# Canonical JSONL trace：路径必须是新文件，已有审计文件不会被覆盖
 .\.venv\Scripts\crag.exe sample.diff --trace trace.jsonl
 
 # PR 行内评论 dry-run：打印将要执行的 gh api 命令与完整载荷，不实际发送
@@ -142,10 +142,10 @@ docker run --rm code-review-agent --help
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **483 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
-| 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
+| 单测 + golden 测试 | **509 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
+| 分支覆盖率 | **总计 86%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
-| mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
+| mypy | 23 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
 | 评测资产一致性 | **本轮未运行**：Week 5 合同禁止读取现有 `eval/` / `eval/holdout/` |
 
@@ -224,22 +224,27 @@ python -B swebench_repair_runner.py validate-plans `
 SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用外部/付费模型，也没有可报告
 的 pass@1、成本、时延或消融结果。**
 
-### 安全红队与生产可观测性计划（Week 6）
+### 安全红队与生产可观测性（Week 6）
 
-Week 6 已在第 5 周合入后的 `master`
-基线上制定详细任务合同，计划把现有安全回归扩展为至少 36 个全新合成对抗用例和
-12 个成对正常对照，并以可观察副作用计算 attack success、拦截、检测、误拦、敏感信息
-泄漏、越权操作和证据完整率。
+Week 6 已在第 5 周合入后的 `master` 基线上完成 Phase 1 合同冻结，并进入获批的
+Phase 2 可观测性实现。当前实现为 Agent Run、阶段、LLM、工具、策略、审批、沙箱、
+checkpoint 和终态建立同根 trace/span 层级；Finder/Verifier 并发 lane 保持兄弟关系；
+Prompt、工具参数/结果、异常、stdout/stderr 和路径在序列化及 exporter 之前脱敏。
+本地 JSONL 不覆盖已有审计文件；Repair 在受保护操作前强制初始化独立本地 sink；
+可选 exporter 首次失败即熔断、留下本地 degraded 证据，且不能放宽任何策略。
+Phase 2 已通过 `scripts/verify.py` 默认离线门禁：509 个测试通过、3 个环境跳过、
+总覆盖率 86%、Ruff/mypy/双入口冒烟通过；未使用 `--eval-assets`。
 
-可观测性计划为 Agent Run、阶段、LLM、工具、策略、审批、沙箱和终态建立 trace/span
-层级；Prompt、工具结果、异常和路径先脱敏再序列化；本地安全审计不采样，远端 exporter
-失败不得放宽策略。实现前还必须冻结 OpenTelemetry GenAI 语义约定的权威版本和字段映射，
-并为现有 JSONL trace 提供有截止期的兼容桥。
+OpenTelemetry core `1.43.0` 与 GenAI 约定冻结提交已绑定在
+`crag.observability/v1alpha1` profile 中；GenAI 字段仍如实标为 Development，
+没有新增 SDK 或网络 exporter 依赖。旧 flat JSONL 读取投影保留到 0.2.x。
 
 完整威胁模型、48 用例配额、资源预算、阶段授权和验收门禁见
-[`docs/plans/week6-security-observability.md`](docs/plans/week6-security-observability.md)。
-**当前仅完成计划：尚未修改运行时、创建红队资产、下载外部资料、启动 Docker、调用外部
-模型或产生任何安全效果数字。**
+[`docs/plans/week6-security-observability.md`](docs/plans/week6-security-observability.md)；
+运行与脱敏说明见
+[`docs/security-observability.md`](docs/security-observability.md)。
+**Phase 3 仍未授权：当前没有物化或执行 48 个红队用例，没有下载数据、启动 Docker、
+调用外部模型或产生任何安全效果数字。Phase 2 的通过只证明离线仪器与回归行为。**
 
 ### 历史开发基准
 

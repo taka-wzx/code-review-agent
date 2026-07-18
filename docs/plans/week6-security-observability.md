@@ -8,6 +8,16 @@ project-specific trace vocabulary with a versioned trace/span contract that can
 be projected onto an explicitly frozen OpenTelemetry GenAI semantic-convention
 profile.
 
+Current execution status:
+
+- Phase 0 planning: complete;
+- Phase 1 contract/profile freeze: complete, including transparent A1/A2
+  amendments;
+- Phase 2 observability implementation and default offline validation:
+  complete; manual Claude review and integration are the next gates;
+- Phase 3 synthetic corpus materialization/execution: not authorized;
+- Docker, external-model, and paid-evaluation phases: not authorized.
+
 Week 6 is successful only when:
 
 - adversarial behavior is judged from observable effects, not from what the
