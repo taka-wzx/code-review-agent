@@ -16,8 +16,10 @@
   Bootstrap 95% CI。Claude 独立审查的 13 项发现已在 integration 逐项处置；成果已
   合入并推送 `master`，远端 SHA 已核对，GitHub CI 已到成功终态。真实任务尚未下载或
   物化，Docker/外部模型/付费评测均未运行。
-- 第 6 周：已从第 5 周合入后的最新 `master` 制定安全红队与生产可观测性详细合同；
-  当前仅完成计划，尚未修改运行时、下载外部资料、启动 Docker/外部模型或执行攻击。
+- 第 6 周：Phase 1--3 合同、可观测性、离线红队、Claude 审查和 integration 整合已完成；
+  Phase 4 的 12 个受限 Docker 探针全部通过且无残留容器，Phase 5 的 24 次 GLM-5.2
+  合成攻击/对照探针完成，攻击成功和误拦均为 0，估算成本约 ¥0.13842。Phase 6 独立
+  Claude 终审与 Phase 7 master/push/CI 尚待执行。
 
 ## 第 1 周：工程基线与公开交付
 
@@ -107,7 +109,7 @@ Repair 评测：接入 SWE-bench Verified 的 20–50 个任务子集，利用�
 
 ## 第 6 周：安全与生产可观测性
 
-**当前状态（Phase 3 integration 已验证）**：Phase 1 已冻结 OWASP 2026 风险映射与
+**当前状态（Phase 4--5 live probes 已验证）**：Phase 1 已冻结 OWASP 2026 风险映射与
 OpenTelemetry core 1.43.0 / GenAI 固定提交；获批的 Phase 2 已实现
 `crag.observability/v1alpha1` canonical trace/span、序列化前脱敏、旧 JSONL
 兼容投影，以及 Review / Verifier / Repair 的 LLM、工具、策略、审批、沙箱、
@@ -118,9 +120,15 @@ checkpoint 和终态埋点。实现与运行说明见
 对抗成功、secret disclosure、已执行越权操作和正常对照误拦均为 0。Claude 指出的
 “审计事件事后盖章”已改为实际观测事件经 canonical trace 回读验证；报告强制区分
 23 个 product-code 用例（15 对抗、8 对照）和 25 个 fixed-fixture 用例（21 对抗、4 对照）。
-这些不是实模或生产指标。Phase 4--5 仍未授权；没有 Docker、外部模型、付费评测、
-数据下载或既有 eval/holdout 读取。Phase 3 已完成 Claude 独立审查、findings 处置和
-integration 离线验证，尚未获批合入 master。
+Phase 3 已完成 Claude 独立审查、findings 处置和 integration 离线验证，并以提交
+`6b2adbb440670b135e42157ec4d8479426b47de2` 合入本地 master。A4 输入冻结提交
+`9f4b33b76a4f6bb8587f284871a7f22b5bbe34b4` 之后，Phase 4 使用本地锁定镜像执行
+12 个串行 Docker 探针，12/12 通过、残留容器 0；Phase 5 对 GLM-5.2 执行 18 个对抗和
+6 个正常对照，24 次均返回唯一 `submit_security_decision`，无 protected tool call、错误或
+malformed，攻击成功率与误拦率均为 0（Bootstrap 95% CI `[0,0]`），输入 13,916、输出
+1,187 token，估算成本 138,420 micro-CNY。供应商未返回 system fingerprint；这些仍是
+单模型、单次、合成 prompt 的小样本探针，不是生产安全或跨模型泛化指标。全程未下载数据、
+未执行模型工具调用、未读取既有 eval/holdout。Phase 6--7 尚待审查、整合和交付。
 
 目标不是只增加零散回归，而是冻结威胁模型、可观察副作用和成对正常对照，形成可复核的
 离线安全门禁。计划至少包含 48 个全新合成用例：36 个对抗用例和 12 个成对正常对照。

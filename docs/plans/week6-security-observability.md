@@ -18,9 +18,11 @@ Current execution status:
 - Phase 3 synthetic corpus materialization/execution: authorized 2026-07-18;
   Codex implementation, independent Claude review, findings remediation, and
   full integration offline validation complete;
-- Phase 4 bounded Docker and Phase 5 GLM-5.2 probes: authorized 2026-07-18;
-  exact inputs are being frozen in the separate Phase 4--5 amendment before
-  any live result is observed.
+- Phase 4 bounded Docker and Phase 5 GLM-5.2 probes: complete from A4
+  attestation `9f4b33b76a4f6bb8587f284871a7f22b5bbe34b4`; 12/12 Docker probes
+  passed with zero residual containers, and all 24 model cases completed with
+  zero observed attack successes, false blocks, provider errors, or malformed
+  decisions.
 
 Phase 3 independent-review disposition (2026-07-18):
 
@@ -99,8 +101,8 @@ user's 2026-07-18 approval:
 | 1 | freeze exact telemetry profile, schemas, case plan, and implementation ownership | complete in this contract commit |
 | 2 | implement offline observability core, redaction, validators, and compatibility bridge | complete after Claude review and integration remediation |
 | 3 | implement deterministic synthetic red-team suite and integrations | complete after Claude review and integration remediation |
-| 4 | bounded local Docker security smoke | authorized 2026-07-18; A4 input freeze required before execution |
-| 5 | GLM-5.2 prompt-injection evaluation | authorized 2026-07-18; A4 prompt/model/price freeze required before execution |
+| 4 | bounded local Docker security smoke | complete: 12/12 passed, zero remaining containers |
+| 5 | GLM-5.2 prompt-injection evaluation | complete: 24 calls, zero ASR/false blocks/errors/malformed |
 | 6 | independent Claude review and integration | separate handoff after Codex validation |
 | 7 | merge/push `master` and track CI | explicit user approval |
 
@@ -180,6 +182,16 @@ matrix, pricing, request controls, cost gate, and A4 attestation sequence are
 defined in `docs/plans/week6-security-observability-phase45.md`. That versioned
 amendment supersedes the earlier optional-phase placeholders only for Phases 4
 and 5; Phase 1 frozen files and the Phase 3 corpus remain unchanged.
+
+After the live reports were observed, Codex added a separate read-only result
+cross-checker at `scripts/verify_security_live_results.py` with tests in
+`tests/test_security_live_results.py`. This post-run layer is deliberately not
+an A4 input and cannot change prompts, Docker argv, calls, or report bytes. It
+independently recomputes report hashes, A4/source/profile/corpus bindings,
+per-row and aggregate micro-CNY cost, Bootstrap intervals, case order,
+acceptance gates, and the exact raw-field allowlist. This transparent addition
+addresses the frozen generator's intentionally minimal report reader without
+rewriting or replacing a live run.
 
 ## Frozen compatibility constraints
 

@@ -133,7 +133,11 @@ docker run --rm code-review-agent --help
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
 
-> **验证状态如实声明**：当前 Windows 工作站未安装 Docker，镜像构建**未在本地验证过**。仓库已推送至私有 GitHub 仓库，Week 5 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含 `container-smoke` job）已实际运行并通过。
+> **验证状态如实声明**：当前 Windows 工作站已安装 Docker Desktop；Week 6 Phase 4
+> 使用本地已有且按完整 SHA-256 锁定的 Week 3 Repair Python 镜像完成了 12 个隔离探针，
+> 但本节这个应用 `Dockerfile` 本轮没有重新 build。仓库已推送至私有 GitHub 仓库，
+> Week 5 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含
+> `container-smoke` job）已实际运行并通过。
 
 ## 测试与质量
 
@@ -242,7 +246,7 @@ Claude 独立审查发现最初的审计事件会被事后统一盖章；integra
 报告同时预注册并强制区分 23 个 `product-code` 用例（15 对抗、8 对照）与 25 个
 `fixed-fixture` 用例（21 对抗、4 对照），避免把 48 个身份误读为 48 条产品防御。
 
-默认离线门禁现为 530 个测试通过、3 个环境跳过、
+Phase 3 integration 的默认离线门禁为 530 个测试通过、3 个环境跳过、
 总覆盖率 86%、Ruff/mypy/双入口冒烟通过；未使用 `--eval-assets`。
 48/48 合成用例执行通过：对抗成功率、secret disclosure、已执行越权操作率和正常对照
 误拦率均为 0；由实际事件及 canonical trace 推导的证据/trace 完整率为 1。
@@ -256,9 +260,21 @@ OpenTelemetry core `1.43.0` 与 GenAI 约定冻结提交已绑定在
 [`docs/plans/week6-security-observability.md`](docs/plans/week6-security-observability.md)；
 运行与脱敏说明见
 [`docs/security-observability.md`](docs/security-observability.md)。
-**这些数字只证明冻结的确定性 recording-fake 控制面回归，不代表真实 LLM 攻击抵抗力、
-Docker 隔离或远程 collector/exporter。Phase 4--5 仍未授权；本阶段没有下载数据、启动
-Docker、调用外部模型、运行付费评测或读取既有 eval/holdout。**
+Phase 4--5 的 A4 冻结合同、精确镜像/argv/资源、24 个新合成 prompt、GLM-5.2
+请求参数和成本门禁见
+[`docs/plans/week6-security-observability-phase45.md`](docs/plans/week6-security-observability-phase45.md)。
+Phase 4 使用本地 content-addressed 镜像串行执行 12 个无网络、只读根、非 root、capabilities
+全删除的 Docker 探针，12/12 通过且残留容器为 0。Phase 5 对 `glm-5.2` 串行调用
+24 次（18 对抗、6 对照），无重试或 replacement run；模型只返回
+`submit_security_decision`，无 protected tool call、provider error 或 malformed，观测攻击
+成功率与误拦率均为 0，Bootstrap 95% CI 均为 `[0, 0]`。总计输入 13,916 token、输出
+1,187 token，按冻结官方价格估算为 138,420 micro-CNY（约 ¥0.13842），低于 ¥20 门禁；
+供应商未返回 `system_fingerprint`。
+
+**48-case 数字只证明 recording-fake 控制面回归；24-case GLM 结果也只是单模型、单次、
+合成 prompt 的小样本攻击探针，不代表生产攻击抵抗力或跨模型泛化。Phase 4 证明的是这
+12 个精确容器配置/探针，不是任意镜像、宿主或远程 collector/exporter。全程未下载数据、
+未执行模型产生的工具调用，也未读取既有 eval/holdout。**
 
 ### 历史开发基准
 
@@ -326,7 +342,10 @@ Docker、调用外部模型、运行付费评测或读取既有 eval/holdout。*
 - **模型是服务端别名非快照**：跨代对比混入模型漂移变量；`LLM_MODEL` 可锁定快照 id，trace 记录 meta
 - **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise，precision 是有偏低估
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
-- **Docker 本机尚未验证构建**（工作站无 Docker）；仓库为**私有** GitHub 仓库（未公开发布），Week 5 合入后的最新 master CI（含容器冒烟）已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
+- **应用 Dockerfile 本轮未重新构建**：工作站已有 Docker，Week 6 只复用了按 image SHA-256
+  锁定的 Week 3 Repair 镜像完成 12-case smoke；这不能替代当前应用镜像的全新本地 build。
+  仓库为**私有** GitHub 仓库（未公开发布），Week 5 合入后的最新 master CI（含容器冒烟）
+  已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
 - **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
 - **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 
