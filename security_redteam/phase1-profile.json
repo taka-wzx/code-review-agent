@@ -1,0 +1,249 @@
+{
+  "schema_version": "week6.phase1-profile.v1",
+  "contract_id": "week6-security-observability",
+  "profile_id": "crag.observability/v1alpha1",
+  "frozen_at": "2026-07-18T08:31:44Z",
+  "phase0_commit": "74a53dfaf84582a2c2d63bcb94e8aee8e559e4db",
+  "official_sources": {
+    "owasp": {
+      "title": "OWASP Top 10 for Agentic Applications for 2026",
+      "version": "2026",
+      "publication_date": "2025-12",
+      "status": "normative-risk-taxonomy",
+      "landing_url": "https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/",
+      "document_url": "https://genai.owasp.org/download/52117/?tmstv=1765059207",
+      "accessed_at": "2026-07-18"
+    },
+    "opentelemetry_core": {
+      "title": "OpenTelemetry Semantic Conventions",
+      "version": "1.43.0",
+      "status": "mixed-by-field",
+      "url": "https://opentelemetry.io/docs/specs/semconv/",
+      "accessed_at": "2026-07-18"
+    },
+    "opentelemetry_genai": {
+      "title": "OpenTelemetry Semantic Conventions for Generative AI systems",
+      "revision": "63f8200eee093730ce845d26ce2aafb621b0807e",
+      "core_semconv_version": "1.43.0",
+      "status": "development",
+      "release_tag": null,
+      "schema_url": null,
+      "repository_url": "https://github.com/open-telemetry/semantic-conventions-genai",
+      "revision_url": "https://github.com/open-telemetry/semantic-conventions-genai/commit/63f8200eee093730ce845d26ce2aafb621b0807e",
+      "accessed_at": "2026-07-18"
+    }
+  },
+  "risk_taxonomy": [
+    {"id": "ASI01", "name": "Agent Goal Hijack"},
+    {"id": "ASI02", "name": "Tool Misuse and Exploitation"},
+    {"id": "ASI03", "name": "Identity and Privilege Abuse"},
+    {"id": "ASI04", "name": "Agentic Supply Chain Vulnerabilities"},
+    {"id": "ASI05", "name": "Unexpected Code Execution (RCE)"},
+    {"id": "ASI06", "name": "Memory & Context Poisoning"},
+    {"id": "ASI07", "name": "Insecure Inter-Agent Communication"},
+    {"id": "ASI08", "name": "Cascading Failures"},
+    {"id": "ASI09", "name": "Human-Agent Trust Exploitation"},
+    {"id": "ASI10", "name": "Rogue Agents"}
+  ],
+  "semantic_profile": {
+    "status": "project-alpha-over-upstream-development",
+    "sdk_dependency": "none",
+    "remote_export_default": "disabled",
+    "remote_experimental_genai_export_default": "disabled",
+    "local_storage_transport": "append-only-jsonl",
+    "span_mappings": [
+      {
+        "project_operation": "agent.run",
+        "span_name": "invoke_agent code-review-agent",
+        "span_kind": "INTERNAL",
+        "otel_operation": "invoke_agent"
+      },
+      {
+        "project_operation": "llm.request",
+        "span_name": "chat {gen_ai.request.model}",
+        "span_kind": "CLIENT",
+        "otel_operation": "chat"
+      },
+      {
+        "project_operation": "tool.execute",
+        "span_name": "execute_tool {gen_ai.tool.name}",
+        "span_kind": "INTERNAL",
+        "otel_operation": "execute_tool"
+      },
+      {
+        "project_operation": "agent.stage",
+        "span_name": "crag.stage {crag.stage.name}",
+        "span_kind": "INTERNAL",
+        "otel_operation": null
+      },
+      {
+        "project_operation": "policy.decision",
+        "span_name": "crag.policy {crag.policy.operation}",
+        "span_kind": "INTERNAL",
+        "otel_operation": null
+      },
+      {
+        "project_operation": "sandbox.command",
+        "span_name": "crag.sandbox {crag.sandbox.command}",
+        "span_kind": "INTERNAL",
+        "otel_operation": null
+      },
+      {
+        "project_operation": "checkpoint",
+        "span_name": "crag.checkpoint {crag.checkpoint.operation}",
+        "span_kind": "INTERNAL",
+        "otel_operation": null
+      },
+      {
+        "project_operation": "telemetry.export",
+        "span_name": "crag.telemetry.export",
+        "span_kind": "INTERNAL",
+        "otel_operation": null
+      }
+    ],
+    "otel_fields": [
+      {"name": "gen_ai.operation.name", "stability": "development", "local_requirement": "required-for-genai-spans"},
+      {"name": "gen_ai.provider.name", "stability": "development", "local_requirement": "required-for-remote-model-spans"},
+      {"name": "gen_ai.agent.id", "stability": "development", "local_requirement": "conditional"},
+      {"name": "gen_ai.agent.name", "stability": "development", "local_requirement": "required-for-agent-root"},
+      {"name": "gen_ai.agent.version", "stability": "development", "local_requirement": "required-for-agent-root"},
+      {"name": "gen_ai.request.model", "stability": "development", "local_requirement": "required-for-model-spans"},
+      {"name": "gen_ai.response.id", "stability": "development", "local_requirement": "conditional"},
+      {"name": "gen_ai.response.model", "stability": "development", "local_requirement": "conditional"},
+      {"name": "gen_ai.response.finish_reasons", "stability": "development", "local_requirement": "conditional"},
+      {"name": "gen_ai.usage.input_tokens", "stability": "development", "local_requirement": "unknown-if-absent"},
+      {"name": "gen_ai.usage.output_tokens", "stability": "development", "local_requirement": "unknown-if-absent"},
+      {"name": "gen_ai.usage.cache_read.input_tokens", "stability": "development", "local_requirement": "unknown-if-absent"},
+      {"name": "gen_ai.usage.cache_creation.input_tokens", "stability": "development", "local_requirement": "unknown-if-absent"},
+      {"name": "gen_ai.usage.reasoning_tokens", "stability": "development", "local_requirement": "unknown-if-absent"},
+      {"name": "gen_ai.tool.name", "stability": "development", "local_requirement": "required-for-tool-spans"},
+      {"name": "gen_ai.tool.call.id", "stability": "development", "local_requirement": "conditional"},
+      {"name": "gen_ai.tool.description", "stability": "development", "local_requirement": "omit"},
+      {"name": "gen_ai.tool.type", "stability": "development", "local_requirement": "conditional"},
+      {"name": "error.type", "stability": "stable", "local_requirement": "required-on-error"},
+      {"name": "server.address", "stability": "stable", "local_requirement": "omit-by-default"},
+      {"name": "server.port", "stability": "stable", "local_requirement": "omit-by-default"}
+    ],
+    "forbidden_content_fields": [
+      "gen_ai.input.messages",
+      "gen_ai.output.messages",
+      "gen_ai.system_instructions",
+      "gen_ai.tool.call.arguments",
+      "gen_ai.tool.call.result"
+    ],
+    "project_extension_fields": [
+      {"name": "crag.schema.version", "type": "string", "requirement": "required"},
+      {"name": "crag.run.id", "type": "string", "requirement": "required"},
+      {"name": "crag.source.commit", "type": "sha256", "requirement": "required"},
+      {"name": "crag.redaction.policy_version", "type": "string", "requirement": "required"},
+      {"name": "crag.redaction.count", "type": "integer", "requirement": "required"},
+      {"name": "crag.stage.name", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.cost.micro_usd", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.cost.pricing_revision", "type": "string", "requirement": "conditional"},
+      {"name": "crag.cost.settlement", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.retry.attempt", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.retry.reason", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.retry.backoff_ms", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.error.category", "type": "enum", "requirement": "conditional-on-error"},
+      {"name": "crag.policy.decision", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.policy.rule", "type": "string", "requirement": "conditional"},
+      {"name": "crag.telemetry.mode", "type": "enum", "requirement": "required"},
+      {"name": "crag.telemetry.degraded_reason", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.tool.arguments_bytes", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.tool.result_bytes", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.tool.result_sha256", "type": "sha256", "requirement": "conditional-approved-non-secret-only"},
+      {"name": "crag.sandbox.exit_code", "type": "integer", "requirement": "conditional"},
+      {"name": "crag.sandbox.timed_out", "type": "boolean", "requirement": "conditional"},
+      {"name": "crag.sandbox.truncated", "type": "boolean", "requirement": "conditional"},
+      {"name": "crag.approval.decision", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.checkpoint.operation", "type": "enum", "requirement": "conditional"},
+      {"name": "crag.terminal.state", "type": "string", "requirement": "conditional"}
+    ],
+    "provider_values": {
+      "deepseek": "deepseek",
+      "glm": "glm",
+      "custom_value_policy": "lowercase-project-provider-id"
+    },
+    "retry_semantics": "one logical model span covers all transport retries; retry events and crag.retry.* preserve each observed attempt",
+    "unknown_numeric_policy": "omit-and-mark-unknown-never-invent-zero"
+  },
+  "redaction": {
+    "policy_version": "week6-redaction-v1",
+    "mode": "content-omitted",
+    "raw_prompt": "forbidden",
+    "raw_source_or_diff": "forbidden",
+    "raw_tool_arguments": "forbidden",
+    "raw_tool_results": "forbidden",
+    "raw_stdout_stderr": "forbidden",
+    "raw_exception_message": "forbidden",
+    "absolute_host_path": "forbidden",
+    "plain_secret_hash": "forbidden",
+    "keyed_correlation": "disabled-unless-operator-provides-ephemeral-key",
+    "repository_content_cannot_configure_redaction": true
+  },
+  "limits": {
+    "record_bytes": 65536,
+    "attributes_per_span": 64,
+    "attribute_key_bytes": 128,
+    "attribute_string_characters": 1024,
+    "attribute_array_items": 32,
+    "nested_depth": 8,
+    "events_per_span": 128,
+    "links_per_span": 32,
+    "export_queue_records": 1024,
+    "local_file_bytes": 67108864,
+    "rotated_files": 5,
+    "export_retry_attempts": 2,
+    "export_retry_total_ms": 2000
+  },
+  "storage": {
+    "local_audit_required_for_repair_mutation": true,
+    "local_security_events_sampled": false,
+    "automatic_deletion_default": false,
+    "retention_default": "operator-owned-no-automatic-deletion",
+    "rotation_default": "disabled-until-explicit-path-and-policy",
+    "remote_export_default": "disabled",
+    "remote_protocol": null,
+    "remote_endpoint": null,
+    "repository_content_may_configure_export": false
+  },
+  "compatibility": {
+    "legacy_api": "Trace.event-and-tev-adapter",
+    "legacy_jsonl_read": "supported-through-0.2.x",
+    "legacy_jsonl_new_raw_payloads": "forbidden",
+    "earliest_removal_version": "0.3.0",
+    "dual_emit_default": false,
+    "canonical_write_default": true,
+    "migration_requires_separate_gate": true
+  },
+  "failure_semantics": {
+    "remote_export_failure": "local-telemetry-degraded-policy-unchanged",
+    "repair_local_audit_init_failure": "stop-before-mutation",
+    "repair_local_audit_write_failure": "stop-before-next-mutation-and-quarantine-if-needed",
+    "review_local_audit_failure": "read-only-result-may-return-only-as-telemetry-degraded",
+    "redaction_failure": "omit-field-and-record-redaction-error-or-stop-if-security-event-cannot-be-written",
+    "unknown_policy": "fail-closed",
+    "recursive_telemetry_failure": "single-bounded-local-fallback-record"
+  },
+  "platform_matrix": {
+    "mandatory": [
+      "windows-fake-filesystem-and-fake-process",
+      "linux-compatible-pure-python-fakes"
+    ],
+    "separately_approved_smoke": [
+      "windows-real-symlink-or-junction",
+      "linux-real-symlink",
+      "linux-docker-nonroot-network-none"
+    ],
+    "unsupported_as_mandatory": [
+      "host-credential-probe",
+      "host-shell-injection-payload",
+      "unbounded-loop",
+      "real-network-exfiltration"
+    ]
+  },
+  "phase2_implementation_authorized": false,
+  "docker_authorized": false,
+  "external_model_authorized": false,
+  "paid_evaluation_authorized": false
+}

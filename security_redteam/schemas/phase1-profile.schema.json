@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/week6/phase1-profile.schema.json",
+  "title": "Week 6 Phase 1 security and observability profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract_id",
+    "profile_id",
+    "frozen_at",
+    "phase0_commit",
+    "official_sources",
+    "risk_taxonomy",
+    "semantic_profile",
+    "redaction",
+    "limits",
+    "storage",
+    "compatibility",
+    "failure_semantics",
+    "platform_matrix",
+    "phase2_implementation_authorized",
+    "docker_authorized",
+    "external_model_authorized",
+    "paid_evaluation_authorized"
+  ],
+  "properties": {
+    "schema_version": {"const": "week6.phase1-profile.v1"},
+    "contract_id": {"const": "week6-security-observability"},
+    "profile_id": {"const": "crag.observability/v1alpha1"},
+    "frozen_at": {"type": "string", "format": "date-time"},
+    "phase0_commit": {"$ref": "#/$defs/sha"},
+    "official_sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["owasp", "opentelemetry_core", "opentelemetry_genai"],
+      "properties": {
+        "owasp": {"$ref": "#/$defs/source"},
+        "opentelemetry_core": {"$ref": "#/$defs/source"},
+        "opentelemetry_genai": {"$ref": "#/$defs/source"}
+      }
+    },
+    "risk_taxonomy": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": {"pattern": "^ASI(0[1-9]|10)$"},
+          "name": {"type": "string", "minLength": 1, "maxLength": 80}
+        }
+      }
+    },
+    "semantic_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "sdk_dependency",
+        "remote_export_default",
+        "remote_experimental_genai_export_default",
+        "local_storage_transport",
+        "span_mappings",
+        "otel_fields",
+        "forbidden_content_fields",
+        "project_extension_fields",
+        "provider_values",
+        "retry_semantics",
+        "unknown_numeric_policy"
+      ],
+      "properties": {
+        "status": {"const": "project-alpha-over-upstream-development"},
+        "sdk_dependency": {"const": "none"},
+        "remote_export_default": {"const": "disabled"},
+        "remote_experimental_genai_export_default": {"const": "disabled"},
+        "local_storage_transport": {"const": "append-only-jsonl"},
+        "span_mappings": {
+          "type": "array",
+          "minItems": 8,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/span_mapping"}
+        },
+        "otel_fields": {
+          "type": "array",
+          "minItems": 20,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/otel_field"}
+        },
+        "forbidden_content_fields": {
+          "type": "array",
+          "minItems": 5,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^gen_ai\\."}
+        },
+        "project_extension_fields": {
+          "type": "array",
+          "minItems": 20,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/project_field"}
+        },
+        "provider_values": {"type": "object"},
+        "retry_semantics": {"type": "string", "minLength": 1},
+        "unknown_numeric_policy": {"const": "omit-and-mark-unknown-never-invent-zero"}
+      }
+    },
+    "redaction": {"$ref": "#/$defs/string_map"},
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_bytes",
+        "attributes_per_span",
+        "attribute_key_bytes",
+        "attribute_string_characters",
+        "attribute_array_items",
+        "nested_depth",
+        "events_per_span",
+        "links_per_span",
+        "export_queue_records",
+        "local_file_bytes",
+        "rotated_files",
+        "export_retry_attempts",
+        "export_retry_total_ms"
+      ],
+      "properties": {
+        "record_bytes": {"type": "integer", "minimum": 1024, "maximum": 65536},
+        "attributes_per_span": {"type": "integer", "minimum": 1, "maximum": 64},
+        "attribute_key_bytes": {"type": "integer", "minimum": 1, "maximum": 128},
+        "attribute_string_characters": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "attribute_array_items": {"type": "integer", "minimum": 1, "maximum": 32},
+        "nested_depth": {"type": "integer", "minimum": 1, "maximum": 8},
+        "events_per_span": {"type": "integer", "minimum": 1, "maximum": 128},
+        "links_per_span": {"type": "integer", "minimum": 0, "maximum": 32},
+        "export_queue_records": {"type": "integer", "minimum": 1, "maximum": 1024},
+        "local_file_bytes": {"type": "integer", "minimum": 1048576, "maximum": 67108864},
+        "rotated_files": {"type": "integer", "minimum": 0, "maximum": 5},
+        "export_retry_attempts": {"type": "integer", "minimum": 0, "maximum": 2},
+        "export_retry_total_ms": {"type": "integer", "minimum": 0, "maximum": 2000}
+      }
+    },
+    "storage": {"$ref": "#/$defs/string_map"},
+    "compatibility": {"$ref": "#/$defs/string_map"},
+    "failure_semantics": {"$ref": "#/$defs/string_map"},
+    "platform_matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mandatory", "separately_approved_smoke", "unsupported_as_mandatory"],
+      "properties": {
+        "mandatory": {"$ref": "#/$defs/nonempty_strings"},
+        "separately_approved_smoke": {"$ref": "#/$defs/nonempty_strings"},
+        "unsupported_as_mandatory": {"$ref": "#/$defs/nonempty_strings"}
+      }
+    },
+    "phase2_implementation_authorized": {"const": false},
+    "docker_authorized": {"const": false},
+    "external_model_authorized": {"const": false},
+    "paid_evaluation_authorized": {"const": false}
+  },
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "source": {
+      "type": "object",
+      "minProperties": 5,
+      "additionalProperties": {
+        "type": ["string", "null"]
+      },
+      "required": ["title", "status", "accessed_at"]
+    },
+    "span_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["project_operation", "span_name", "span_kind", "otel_operation"],
+      "properties": {
+        "project_operation": {"type": "string", "minLength": 1},
+        "span_name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "span_kind": {"enum": ["INTERNAL", "CLIENT"]},
+        "otel_operation": {"type": ["string", "null"]}
+      }
+    },
+    "otel_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "stability", "local_requirement"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "stability": {"enum": ["development", "stable"]},
+        "local_requirement": {"type": "string", "minLength": 1}
+      }
+    },
+    "project_field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "requirement"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^crag\\."},
+        "type": {"type": "string", "minLength": 1},
+        "requirement": {"type": "string", "minLength": 1}
+      }
+    },
+    "nonempty_strings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "string_map": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": ["string", "boolean", "integer", "null"]
+      }
+    }
+  }
+}

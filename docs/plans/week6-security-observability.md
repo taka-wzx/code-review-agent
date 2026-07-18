@@ -51,12 +51,13 @@ the repository contract does not already authorize.
 
 ## Planning status and phase gates
 
-Only Phase 0 is active in this change:
+Phase 0 is complete. Phase 1 is completed by this contract commit under the
+user's 2026-07-18 approval:
 
 | Phase | Deliverable | Current authorization |
 | --- | --- | --- |
-| 0 | plan, threat model, budgets, ownership proposal, README/agenda truthfulness | authorized locally |
-| 1 | freeze exact telemetry profile, schemas, fixtures, and implementation ownership | requires user approval |
+| 0 | plan, threat model, budgets, ownership proposal, README/agenda truthfulness | complete at `74a53dfaf84582a2c2d63bcb94e8aee8e559e4db` |
+| 1 | freeze exact telemetry profile, schemas, case plan, and implementation ownership | complete in this contract commit |
 | 2 | implement offline observability core, redaction, validators, and compatibility bridge | requires user approval |
 | 3 | implement deterministic synthetic red-team suite and integrations | requires user approval |
 | 4 | bounded local Docker security smoke | separate Docker approval |
@@ -64,13 +65,15 @@ Only Phase 0 is active in this change:
 | 6 | independent Claude review and integration | separate handoff after Codex validation |
 | 7 | merge/push `master` and track CI | explicit user approval |
 
-Passing an earlier phase never authorizes a later phase. Phase 0 performs no
-network request, dependency installation, Docker execution, external-model
-call, paid evaluation, or access to existing evaluation assets.
+Passing an earlier phase never authorizes a later phase. Phase 1 permits
+read-only lookup of OWASP and OpenTelemetry official documentation only. It
+does not permit a data download, dependency installation, Docker execution,
+external-model call, paid evaluation, runtime implementation, or access to
+existing evaluation assets.
 
 ## Authorization boundary
 
-Authorized in Phase 0:
+Authorized through Phase 1:
 
 - read the current Review, Repair, sandbox, trace, test, and documentation
   contracts as local, read-only design input;
@@ -80,6 +83,11 @@ Authorized in Phase 0:
 - run local documentation/diff validation that does not inspect existing
   evaluation assets;
 - create an isolated local planning branch and worktree.
+- look up only the official OWASP and OpenTelemetry pages needed to freeze
+  exact primary-source revisions and semantic status;
+- create the Phase 1 normative annex and machine-readable input-only profile,
+  case plan, and their schemas;
+- validate and commit those Phase 1 contract inputs locally.
 
 Not authorized until a later explicit approval:
 
@@ -88,8 +96,8 @@ Not authorized until a later explicit approval:
 - reading, listing, searching, hashing, or validating `eval/`,
   `eval/holdout/`, materialized SWE-bench data, or sealed Week 4/5 reporting
   artifacts;
-- downloading an OWASP or OpenTelemetry document, dataset, attack corpus,
-  package, collector, image, or task repository;
+- downloading a dataset, attack corpus, package, collector, image, task
+  repository, or local copy of an external document;
 - using real credentials, copying a real secret into a fixture, or reading host
   credential locations;
 - executing command-injection payloads, fork bombs, infinite loops, malicious
@@ -100,35 +108,32 @@ Not authorized until a later explicit approval:
 - calling an external model/agent, running a paid evaluation, posting results,
   pushing a task branch, or mutating `master`.
 
-## Phase 0 file ownership
+## Phase 0--1 file ownership
 
-Codex may create or modify only:
+Phase 0 was limited to:
 
 - `docs/plans/week6-security-observability.md`
 - `AGENDA.md`
 - `README.md`
 
-All source, test, configuration, schema, workflow, lock, evaluation, trace,
-checkpoint, and review-report paths are read-only in Phase 0.
+Phase 1 replaces the earlier ownership proposal with this exact current
+Single Writer list:
 
-The following are proposed implementation paths, not current write
-authorization:
+- `docs/plans/week6-security-observability.md`
+- `docs/plans/week6-security-observability-phase1.md`
+- `security_redteam/phase1-profile.json`
+- `security_redteam/case-plan.json`
+- `security_redteam/schemas/phase1-profile.schema.json`
+- `security_redteam/schemas/case-plan.schema.json`
 
-- `src/code_review_agent/observability.py`
-- `src/code_review_agent/redaction.py`
-- `src/code_review_agent/tracelog.py`
-- narrowly necessary Review/Repair instrumentation call sites under
-  `src/code_review_agent/`
-- `security_redteam/` synthetic plans, schemas, cases, and examples
-- `scripts/verify_security.py`
-- `tests/test_observability.py`
-- `tests/test_redaction.py`
-- `tests/test_security_redteam.py`
-- narrowly necessary existing safety regression tests
-- operator and security documentation
+`AGENDA.md` and `README.md` are read-only in Phase 1 because their Phase 0
+statements remain truthful: no runtime or red-team implementation exists.
+All source, test, workflow, lock, packaging, CI, existing evaluation, trace,
+checkpoint, and review-report paths remain read-only.
 
-Before Phase 1, the user and Codex must replace this proposal with an exact
-Single Writer list. Claude's later review ownership is limited to
+The exact proposed Phase 2--3 implementation ownership is frozen in
+`docs/plans/week6-security-observability-phase1.md`. It is not active write
+authorization. Claude's later review ownership remains limited to
 `docs/reviews/week6-claude.md`; Claude must not edit the implementation.
 
 ## Frozen compatibility constraints
@@ -439,25 +444,23 @@ and forbidden canaries.
 
 ### Semantic profile freeze
 
-Before implementation, Phase 1 must record:
+The normative Phase 1 freeze is:
 
-- the authoritative OpenTelemetry semantic-convention source URL;
-- exact version or immutable revision;
-- stability status of every GenAI agent, inference, tool-call, and token-usage
-  field used;
-- the exact project-to-semantic mapping and local-extension namespace;
-- exporter protocol/version and compatibility policy.
+- `docs/plans/week6-security-observability-phase1.md`;
+- `security_redteam/phase1-profile.json`;
+- `security_redteam/case-plan.json`;
+- the two schemas under `security_redteam/schemas/`.
 
-The references must come from user-provided local copies or a separately
-approved primary-source lookup. Approval to edit the Phase 1 contract alone
-does not imply network/download authorization.
+Those inputs record the official sources, exact versions/revisions, field
+stability, project mapping, extension namespace, exporter policy, compatibility
+window, limits, platform matrix, risk mappings, and frozen case identities.
+Their canonical UTF-8/LF hashes are recorded in the Phase 1 annex after
+generation so Git checkout line-ending conversion cannot change the binding.
 
-Expected categories include operation, provider, requested/response model,
-response/conversation identity, input/output/cache token usage, agent identity,
-tool name/call identity, error type, and server duration. Exact attribute names
-are not normative until the profile is frozen. Experimental semantic fields
-must be isolated behind a versioned adapter so upstream renames do not rewrite
-stored evidence silently.
+OpenTelemetry GenAI semantic conventions are Development at the frozen
+revision. They are never described as Stable in Week 6. Experimental fields
+are isolated behind the versioned `crag.observability/v1alpha1` adapter so an
+upstream rename cannot silently rewrite stored evidence.
 
 ### Required measurements
 
@@ -722,18 +725,22 @@ different worktree.
 - No headline rate may exclude timeout, error, policy uncertainty, telemetry
   failure, or cleanup uncertainty without an explicit preregistered reason.
 
-## Remaining design decisions before Phase 1
+## Phase 1 decisions frozen
 
-- authoritative OWASP Agentic AI revision and exact risk mapping;
-- authoritative OpenTelemetry semantic-convention revision/status and whether
-  an SDK dependency is justified;
-- one-release versus two-release legacy JSONL compatibility window;
-- retention/rotation defaults and optional keyed-correlation key management;
-- exact Windows/Linux platform smoke split;
-- exact implementation ownership and whether observability instrumentation is
-  one serial phase or multiple non-overlapping writers;
-- whether optional Docker/model phases are needed at all after deterministic
-  acceptance.
+- OWASP authority: *OWASP Top 10 for Agentic Applications for 2026*, Version
+  2026, December 2025; exact risk mappings are in the Phase 1 case plan.
+- OpenTelemetry authority: core Semantic Conventions `v1.43.0` plus the GenAI
+  repository at commit `63f8200eee093730ce845d26ce2aafb621b0807e`;
+  GenAI mappings are Development and require no SDK dependency in Week 6.
+- legacy flat JSONL read compatibility continues through project `0.2.x`;
+  removal cannot occur before `0.3.0` and requires a separate migration gate.
+- local audit defaults, rotation, retention, correlation-key behavior, record
+  limits, platform split, and exact Phase 2--3 ownership are frozen in the
+  Phase 1 profile and annex.
+- observability and red-team implementation remain one serial Codex writer;
+  no parallel implementation writer is authorized.
+- Docker and external-model phases remain optional and unauthorized regardless
+  of deterministic results.
 
-These are explicit freeze decisions, not invitations for implementation-time
-guessing.
+Any change to a frozen Phase 1 decision requires a versioned contract
+amendment before its affected runtime result is observed.
