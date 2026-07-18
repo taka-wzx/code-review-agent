@@ -15,6 +15,8 @@
 | 独立 calibration 仓库、10 个真实 PR 的选择计划 | 已预注册，未下载 |
 | 双人独立标注与第三方仲裁协议 | 已定义 |
 | cohort / annotation / run schema | 已实现 |
+| seed provenance 与 selection log 机器复核 | 已实现 |
+| gold freeze Git 锚点与 run 绑定 | 已定义并由输入契约强制 |
 | precision / recall / F1 与分仓统计 | 已实现 |
 | PR 级、仓库内分层 Bootstrap 95% CI | 已实现 |
 | 成本、时延、工具调用、fail-open / degraded | 已实现 |
@@ -51,15 +53,47 @@ reporting 共享仓库。这样即使 calibration 阶段发生提示词、阈值
    dependency-only、generated-only、documentation-only、vendored、受安全禁运限制、
    无法固定 base/head/merge SHA、无法离线复现上下文。
 3. 将剩余 PR 规范化为 `owner/repo#number`。
-4. 计算
+4. 复核 `cohort_seed`。v1 固定使用
+   `SHA256(b"trusted-review-cohort-v1" + b"\x00" + ASCII(source_commit))`，其中
+   `source_commit` 是用户确认的任务基线
+   `9564cc817d5d0639b6c31cf4bde540594b38382d`，不得由采集者另选；
+   `validate-cohort` 会按 `cohort_seed_derivation` 复算。
+5. 计算
    `SHA256(cohort_seed + "\n" + canonical_pr_id)`。
-5. 按哈希升序取每仓前 10 个，而不是人工挑“看起来容易”或“肯定有 bug”的 PR。
-6. 固定 base/head/merge SHA、diff SHA-256、离线 snapshot SHA-256 和 selection log
+6. 按哈希升序取每仓前 10 个，而不是人工挑“看起来容易”或“肯定有 bug”的 PR。
+7. 固定 base/head/merge SHA、diff SHA-256、离线 snapshot SHA-256 和 selection log
    SHA-256。
-7. 在任何 Agent 输出产生前完成 gold 标注并写入 `gold_frozen_at`。
+8. 运行 `verify-selection`，确认日志字节哈希、逐 PR 排名、日志 selected 集合和
+   materialized cohort 完全一致。
+9. 在任何 Agent 输出产生前完成 gold 标注并写入 `gold_frozen_at`，再按下述 freeze
+   锚点流程提交证明。
 
-选择日志必须保留所有候选的纳入/排除结论及理由。最终 manifest 只引用内容哈希；原始仓库
-快照和未脱敏标注保存在受访问控制的数据根，不提交进普通开发路径。
+selection log 是 JSONL，每个候选必须恰有一行，且只允许这些字段：
+`schema_version`、`pr_id`、`repository`、`number`、`merged_at`、`eligible`、
+`exclusion_reason`、`selected`、`rank_sha256`。`eligible=false` 时理由必须是预注册
+排除原因之一；`eligible=true` 时理由必须为 `null`。`selected` 必须等于每仓 eligible
+候选按 `rank_sha256` 排序后的前 `target_prs`，并与 manifest PR 集合一致。
+
+工具可以验证日志内部完整性和确定性排名，但无法证明远端候选枚举没有漏项。因此采集阶段还
+必须保留远端查询参数、分页数量和采集者签名；它们属于后续授权数据阶段的人工审计边界。
+最终 manifest 只引用 selection log 内容哈希；原始仓库快照和未脱敏标注保存在受访问控制的
+数据根，不提交进普通开发路径。
+
+### Gold freeze 的外部时间锚点
+
+仅比较自报时间戳不能证明 gold 先于 run。真实 reporting 运行前必须：
+
+1. 完成 materialized cohort 和 gold annotation，计算 cohort 原始字节哈希、canonical
+   cohort 哈希以及 gold annotation 原始字节哈希；
+2. 在获准的数据控制分支提交一份只含这些哈希、协议版本和主 `config_id` 的 freeze
+   attestation，不提交受限原始数据；
+3. 确认该 commit 已存在且工作区干净后才启动任何 reporting run；
+4. 将该 commit 写入每条 run 的 `gold_freeze_commit`，将 canonical cohort 哈希写入
+   `frozen_cohort_sha256`；
+5. 独立审计者在打开结果前用 Git 历史确认 attestation commit 早于 run，并复算其中哈希。
+
+离线工具会拒绝 run/cohort 哈希不一致或 30 条 run 混用不同 freeze commit，但不会启动 Git
+子进程，也不能单独证明 commit 的外部时间顺序；最后一步必须作为审计证据保留。
 
 ## 标注流程
 
@@ -85,7 +119,8 @@ A 和 B 分别从零审查 PR，提出具体缺陷。每个候选应至少包含
 
 coordinator 对 A/B 候选做 identity 合并，形成 union，但不判定有效性。每条
 `gold_candidate` 的两份 annotation 通过 `discovered: true/false` 保留是否由该标注者独立
-发现。框架报告两个 discovery set 的 Jaccard 和 set-F1。
+发现。至少一名独立标注者必须为 `discovered=true`；两人均为 false 会 fail closed，防止
+coordinator 注入第三方候选。框架报告两个 discovery set 的 Jaccard 和 set-F1。
 
 ### 阶段 2：独立有效性判断
 
@@ -120,13 +155,15 @@ gold 冻结、配置冻结、Agent 运行完成后，A/B 再独立判断每条 f
 | `matched` | 命中一个冻结 gold | TP | 对该 gold 记一次命中 |
 | `novel_valid` | 是真实缺陷，但不在冻结 gold | TP，单列 | 不扩展冻结分母 |
 | `invalid` | 不成立或不可行动 | FP | 无 |
-| `duplicate` | 重复报告已命中的 gold | FP | 不重复计数 |
+| `duplicate` | 重复报告已命中的 gold，或同 run 已计分的 primary novel finding | FP | 不重复计数 |
 | `unscorable` | 输出损坏或证据不足 | FP | 无 |
 | `uncertain` | 独立标注阶段尚不能决定 | 必须仲裁 | 必须仲裁 |
 
 `novel_valid` 的设计避免封闭世界把新发现一律罚成 FP，同时又禁止看完 Agent 输出后扩大 gold
 并抬高 recall。一条 gold 每个 PR 最多被一个 `matched` finding 计分；后续重复项必须标成
-`duplicate`。
+`duplicate`。对于 novel 重复，`duplicate.gold_id` 引用同 run 的 primary
+`novel_valid finding_id`。即使标注误把完全相同 `fingerprint_sha256` 的多条 finding 都写成
+`novel_valid`，计分器也只给第一条 TP，其余自动进入 duplicate/FP 计数，不能抬高 precision。
 
 ## 数据文件
 
@@ -137,6 +174,7 @@ schema：`trusted_review/schemas/cohort.schema.json`
 关键字段：
 
 - `cohort_id` / `cohort_seed`
+- `cohort_seed_derivation`: 固定方法和用户确认的 source commit，供 seed 复算
 - `selection_window`
 - `repositories[]`: `slug`、`role`、`target_prs`
 - `prs[]`: PR identity、Git SHA、merge 时间、diff/snapshot hash、changed lines、change type、
@@ -151,6 +189,10 @@ schema：`trusted_review/schemas/cohort.schema.json`
 `annotation_id` 排序，再对 UTF-8 canonical JSON（key 排序、无多余空白、保留 Unicode）计算
 SHA-256。即使一个 PR 最终没有候选，也要绑定 canonical 空数组的哈希。报告时会重新计算并
 逐 PR 比较，防止 gold freeze 后增删或改写标注。
+
+三个 JSON Schema 是弱化的互操作参考；`trusted_review_eval.py` 的标准库 Python 校验器是
+规范性权威，并强制 Schema 难以表达的跨行、跨文件、角色、计数和时间线约束。只通过 Schema
+预检不等于可以进入报告。
 
 ### Annotation JSONL
 
@@ -167,6 +209,10 @@ ablation 使用独立、分别哈希的 annotation JSONL，避免 finding identi
 `source_annotation_*` 为空，仲裁记录必须同时引用两条独立 annotation ID 和它们各自的
 canonical SHA-256，避免仲裁结论与后来被改写的源标签脱钩。
 
+成功报告中的 `unresolved_subjects` 和 `malformed_subjects` 必为 0，并带
+`invalid_subject_policy: fail_closed_before_metrics`；这不是容忍后再计数，而是任何非零
+情形都会在统计前使整份报告失败。
+
 格式示例见 `trusted_review/examples/annotations.jsonl`。示例只展示行格式，不是完整 cohort，
 也不用于任何指标。
 
@@ -177,6 +223,7 @@ schema：`trusted_review/schemas/runs.schema.json`
 每行对应一个 PR 上的一次冻结配置运行，包含：
 
 - `run_id`、`pr_id`、`config_id`、`source_commit`
+- `gold_freeze_commit` 与 `frozen_cohort_sha256`
 - exact provider/model ID、pricing revision、runtime config SHA-256
 - 与 cohort 逐 PR 一致的 snapshot SHA-256
 - `purpose`
@@ -191,7 +238,8 @@ schema：`trusted_review/schemas/runs.schema.json`
 `failed` 必须不可评分且不能带 findings；其他状态必须可评分。
 
 同一 `config_id` 的 30 个 headline runs 必须共享同一 source commit、provider、model、
-pricing revision 和 runtime config hash；任一 PR 的 snapshot hash 不匹配也会整体失败。
+pricing revision、runtime config hash、freeze commit 和 frozen cohort hash；任一 PR 的
+snapshot hash 不匹配也会整体失败。
 
 ## 本地命令
 
@@ -210,11 +258,20 @@ python trusted_review_eval.py validate-cohort `
   --materialized
 ```
 
+机器复核 selection log：
+
+```powershell
+python trusted_review_eval.py verify-selection `
+  --cohort X:\sealed\cohort.json `
+  --selection-log X:\sealed\selection.jsonl
+```
+
 生成最终报告：
 
 ```powershell
 python trusted_review_eval.py report `
   --cohort X:\sealed\cohort.json `
+  --selection-log X:\sealed\selection.jsonl `
   --annotations X:\sealed\annotations.jsonl `
   --runs X:\sealed\runs.jsonl `
   --config-id frozen-v1 `
@@ -234,7 +291,7 @@ python trusted_review_eval.py report `
 每个 PR 先计算：
 
 ```text
-TP_findings = matched + novel_valid
+TP_findings = matched + unique novel_valid fingerprint
 FP_findings = invalid + duplicate + unscorable
 TP_gold     = 被 matched 的唯一冻结 gold 数
 FN_gold     = 冻结 gold 总数 - TP_gold
@@ -253,6 +310,8 @@ headline 是 reporting 30 PR 的 micro 指标。报告同时给出：
 
 某一分母为零时对应指标是 JSON `null`。hard failure 虽不可评分，仍将该 PR 的全部冻结 gold
 计入 FN，避免只对成功运行计算 recall；它没有 findings，因此不会伪造 precision 分母。
+repository macro 和 PR macro 分别携带每项指标的 `defined_repositories` /
+`defined_prs` 及总数，未定义分量不会被静默隐藏。
 
 ### Bootstrap 95% CI
 
@@ -262,7 +321,7 @@ headline 是 reporting 30 PR 的 micro 指标。报告同时给出：
 2. 在每个仓库内部对该仓 10 个 PR 有放回抽 10 个；
 3. 合并三个仓的样本；
 4. 重新计算完整 micro precision / recall / F1；
-5. 取 2.5% 和 97.5% 百分位。
+5. 用与时延/成本统计一致的线性插值百分位定义取 2.5% 和 97.5%。
 
 采样单位是 PR 而不是 finding，因此同一 PR 内相关的 findings 和 gold 不会被拆散；仓库内分层
 保持每个仓的固定权重。seed、replicate 数和 defined replicate 数全部进报告。
@@ -287,14 +346,16 @@ headline 是 reporting 30 PR 的 micro 指标。报告同时给出：
 
 - [ ] cohort repo 与现有 prompt、测试、例子、旧 eval、Week 3 issue pilot 没有重用；
 - [ ] calibration 和 reporting 仓库集合交集为空；
-- [ ] 选择日志是在任何 Agent 输出前冻结；
-- [ ] gold 是在任何 reporting run 前冻结；
+- [ ] `cohort_seed` 已从用户确认的 source commit 复算，未人工挑 seed；
+- [ ] 选择日志是在任何 Agent 输出前冻结，且 `verify-selection` 已通过；
+- [ ] gold 是在任何 reporting run 前冻结，freeze attestation 已先提交到 Git；
+- [ ] 每条 run 的 `gold_freeze_commit` 和 `frozen_cohort_sha256` 已通过独立审计；
 - [ ] `purpose` 不是 tuning / prompt selection / sentinel design / threshold search；
 - [ ] source commit、精确模型 ID、provider、价格版本和 runtime config 已冻结；
 - [ ] 所有 ablation 在打开 reporting 结果前预注册；
 - [ ] 每个 PR/config 只有一个 headline run；基础设施失败仍作为 failure，未用成功重跑覆盖；
 - [ ] reporting 结果未用于修改 prompt、sentinel、阈值、模型或上下文策略；
-- [ ] 报告记录 cohort、annotations、runs 三份输入的原始字节 SHA-256。
+- [ ] 报告记录 cohort、selection log、annotations、runs 四份输入的原始字节 SHA-256。
 
 ## 消融
 
@@ -321,3 +382,5 @@ v1 不支持用重跑覆盖 headline failure。若未来确实需要区分“基
 - 仓库内 PR bootstrap 表达 PR 抽样不确定性，不覆盖模型服务漂移、标注系统性盲区或仓库选择
   不确定性。
 - 当前没有真实数据和模型结果；任何效果数字必须等用户授权采集、标注和最终运行后再填写。
+- 离线验证器只能证明提交给它的文件内部自洽；远端候选枚举完整性、排除理由真实性和 freeze
+  commit 的时间顺序仍需要独立审计，不能由自报字段单独证明。

@@ -64,6 +64,7 @@
       ]
     },
     "gold_id": {
+      "description": "Frozen gold ID for matched/duplicate, or same-run primary novel finding ID for duplicate.",
       "oneOf": [
         {
           "$ref": "#/$defs/id"
@@ -115,7 +116,7 @@
     "created_at": {
       "type": "string",
       "format": "date-time",
-      "pattern": "Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
     }
   },
   "$defs": {

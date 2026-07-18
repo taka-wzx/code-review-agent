@@ -27,6 +27,7 @@ def digest(text: str, length: int = 64) -> str:
 
 
 def make_cohort(*, materialized: bool = True, gold: bool = True) -> dict:
+    seed_source_commit = tre.PREREGISTERED_SEED_SOURCE_COMMIT
     repositories = [
         {"slug": slug, "role": role, "target_prs": 10}
         for slug, role in REPOSITORIES
@@ -63,7 +64,11 @@ def make_cohort(*, materialized: bool = True, gold: bool = True) -> dict:
     return {
         "schema_version": 1,
         "cohort_id": "test-cohort",
-        "cohort_seed": digest("cohort-seed"),
+        "cohort_seed": tre.derive_cohort_seed(seed_source_commit),
+        "cohort_seed_derivation": {
+            "method": "sha256_source_commit_v1",
+            "source_commit": seed_source_commit,
+        },
         "selection_window": {
             "start": "2024-01-01T00:00:00Z",
             "end": "2026-01-01T00:00:00Z",
@@ -172,6 +177,8 @@ def run(
         "config_id": "frozen-v1",
         "purpose": purpose,
         "source_commit": digest("source", 40),
+        "gold_freeze_commit": digest("gold-freeze-commit", 40),
+        "frozen_cohort_sha256": digest("unbound-cohort"),
         "provider": "provider-a",
         "model_id": "model-a-v1",
         "pricing_revision": "pricing-2026-07",
@@ -240,7 +247,40 @@ def make_perfect_dataset() -> tuple[dict, list[dict], list[dict]]:
         )
         runs.append(run(pr_id, findings=[finding(finding_id)]))
     bind_gold_hashes(cohort, annotations)
+    frozen_cohort_sha256 = tre.canonical_sha256(cohort)
+    for run_row in runs:
+        run_row["frozen_cohort_sha256"] = frozen_cohort_sha256
     return cohort, annotations, runs
+
+
+def make_selection_log(cohort: dict) -> list[dict]:
+    return [
+        {
+            "schema_version": 1,
+            "pr_id": pr["pr_id"],
+            "repository": pr["repository"],
+            "number": pr["number"],
+            "merged_at": pr["merged_at"],
+            "eligible": True,
+            "exclusion_reason": None,
+            "selected": True,
+            "rank_sha256": tre.selection_rank_sha256(
+                cohort["cohort_seed"],
+                pr["pr_id"],
+            ),
+        }
+        for pr in cohort["prs"]
+    ]
+
+
+def jsonl_bytes(rows: list[dict]) -> bytes:
+    return (
+        "\n".join(
+            json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            for row in rows
+        )
+        + "\n"
+    ).encode("utf-8")
 
 
 class TestCohortValidation(unittest.TestCase):
@@ -248,6 +288,29 @@ class TestCohortValidation(unittest.TestCase):
         validated = tre.validate_cohort(make_cohort(materialized=False), require_materialized=False)
         self.assertEqual(len(validated["_reporting_repositories"]), 3)
         self.assertEqual(validated["_calibration_repositories"], ["calibration/project"])
+
+    def test_cohort_seed_is_recomputed_from_fixed_source_commit(self):
+        self.assertEqual(
+            tre.derive_cohort_seed(
+                "9564cc817d5d0639b6c31cf4bde540594b38382d"
+            ),
+            "eb832b864d2094ce30983c92edf7a7ec77a612ae218244a1a37c7692c340ee95",
+        )
+        cohort = make_cohort(materialized=False)
+        cohort["cohort_seed"] = digest("seed-shopping")
+        with self.assertRaisesRegex(tre.ValidationError, "deterministic source-commit"):
+            tre.validate_cohort(cohort, require_materialized=False)
+
+        cohort = make_cohort(materialized=False)
+        cohort["cohort_seed_derivation"]["source_commit"] = digest(
+            "alternate-source",
+            40,
+        )
+        cohort["cohort_seed"] = tre.derive_cohort_seed(
+            cohort["cohort_seed_derivation"]["source_commit"]
+        )
+        with self.assertRaisesRegex(tre.ValidationError, "preregistered Week 4 base"):
+            tre.validate_cohort(cohort, require_materialized=False)
 
     def test_materialized_requires_exact_repository_counts(self):
         cohort = make_cohort()
@@ -312,6 +375,73 @@ class TestCohortValidation(unittest.TestCase):
         with self.assertRaisesRegex(tre.ValidationError, "selected after gold_frozen_at"):
             tre.validate_cohort(cohort, require_materialized=True)
 
+        cohort = make_cohort()
+        cohort["prs"][10]["selected_at"] = "2024-02-01T00:00:00Z"
+        with self.assertRaisesRegex(tre.ValidationError, "precedes merged_at"):
+            tre.validate_cohort(cohort, require_materialized=True)
+
+        cohort = make_cohort(materialized=False)
+        cohort["selection_window"]["start"] = "20240101T000000Z"
+        with self.assertRaisesRegex(tre.ValidationError, "canonical UTC form"):
+            tre.validate_cohort(cohort, require_materialized=False)
+
+
+class TestSelectionLog(unittest.TestCase):
+    def _validated(self) -> tuple[dict, list[dict], str]:
+        raw_cohort = make_cohort()
+        rows = make_selection_log(raw_cohort)
+        artifact_sha256 = hashlib.sha256(jsonl_bytes(rows)).hexdigest()
+        raw_cohort["selection_log_sha256"] = artifact_sha256
+        cohort = tre.validate_cohort(raw_cohort, require_materialized=True)
+        return cohort, rows, artifact_sha256
+
+    def test_hashed_selection_log_recomputes_rank_and_manifest_set(self):
+        cohort, rows, artifact_sha256 = self._validated()
+        result = tre.validate_selection_log(
+            rows,
+            cohort,
+            artifact_sha256=artifact_sha256,
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["candidate_rows"], 40)
+        self.assertEqual(result["selected_prs"], 40)
+
+    def test_selection_log_rejects_hash_rank_and_selected_set_tampering(self):
+        cohort, rows, artifact_sha256 = self._validated()
+        with self.assertRaisesRegex(tre.ValidationError, "artifact hash"):
+            tre.validate_selection_log(
+                rows,
+                cohort,
+                artifact_sha256=digest("wrong-selection-log"),
+            )
+
+        tampered = copy.deepcopy(rows)
+        tampered[0]["rank_sha256"] = digest("wrong-rank")
+        with self.assertRaisesRegex(tre.ValidationError, "rank_sha256"):
+            tre.validate_selection_log(
+                tampered,
+                cohort,
+                artifact_sha256=artifact_sha256,
+            )
+
+        tampered = copy.deepcopy(rows)
+        tampered[0]["selected"] = False
+        with self.assertRaisesRegex(tre.ValidationError, "selected set mismatch"):
+            tre.validate_selection_log(
+                tampered,
+                cohort,
+                artifact_sha256=artifact_sha256,
+            )
+
+        tampered = copy.deepcopy(rows)
+        tampered[0]["merged_at"] = "2025-12-31T00:00:00Z"
+        with self.assertRaisesRegex(tre.ValidationError, "merge time"):
+            tre.validate_selection_log(
+                tampered,
+                cohort,
+                artifact_sha256=artifact_sha256,
+            )
+
 
 class TestAnnotationProtocol(unittest.TestCase):
     def setUp(self):
@@ -336,6 +466,10 @@ class TestAnnotationProtocol(unittest.TestCase):
         self.assertEqual(agreement["overall"]["discovery"]["annotator_b"], 15)
         self.assertEqual(agreement["overall"]["unresolved_subjects"], 0)
         self.assertEqual(agreement["overall"]["malformed_subjects"], 0)
+        self.assertEqual(
+            agreement["overall"]["invalid_subject_policy"],
+            "fail_closed_before_metrics",
+        )
 
     def test_missing_second_label_fails_closed(self):
         rows = [
@@ -344,6 +478,25 @@ class TestAnnotationProtocol(unittest.TestCase):
             if row["annotation_id"] != "gold-b:0"
         ]
         with self.assertRaisesRegex(tre.ValidationError, "exactly two independent"):
+            tre.resolve_annotations(rows, self.cohort, self.runs)
+
+    def test_gold_candidate_must_be_discovered_by_at_least_one_annotator(self):
+        rows = copy.deepcopy(self.annotations)
+        for row in rows:
+            if row["subject_id"] == "gold:0":
+                row["discovered"] = False
+        with self.assertRaisesRegex(tre.ValidationError, "not discovered by either"):
+            tre.resolve_annotations(rows, self.cohort, self.runs)
+
+    def test_annotation_cannot_reference_calibration_pr(self):
+        rows = copy.deepcopy(self.annotations)
+        calibration_pr = next(
+            pr_id
+            for pr_id, pr in self.cohort["_pr_by_id"].items()
+            if pr["role"] == "calibration"
+        )
+        rows[0]["pr_id"] = calibration_pr
+        with self.assertRaisesRegex(tre.ValidationError, "non-reporting or unknown PR"):
             tre.resolve_annotations(rows, self.cohort, self.runs)
 
     def test_disagreement_requires_third_party_and_preserves_raw_agreement(self):
@@ -598,8 +751,18 @@ class TestRunValidation(unittest.TestCase):
             tre.validate_runs(rows, self.cohort, config_id="frozen-v1")
 
         rows = copy.deepcopy(self.raw_runs)
+        rows[0]["frozen_cohort_sha256"] = digest("wrong-cohort")
+        with self.assertRaisesRegex(tre.ValidationError, "materialized cohort"):
+            tre.validate_runs(rows, self.cohort, config_id="frozen-v1")
+
+        rows = copy.deepcopy(self.raw_runs)
+        rows[0]["gold_freeze_commit"] = digest("different-freeze", 40)
+        with self.assertRaisesRegex(tre.ValidationError, "mixes freeze/source/model"):
+            tre.validate_runs(rows, self.cohort, config_id="frozen-v1")
+
+        rows = copy.deepcopy(self.raw_runs)
         rows[0]["model_id"] = "different-model"
-        with self.assertRaisesRegex(tre.ValidationError, "mixes source/model"):
+        with self.assertRaisesRegex(tre.ValidationError, "mixes freeze/source/model"):
             tre.validate_runs(rows, self.cohort, config_id="frozen-v1")
 
 
@@ -664,6 +827,77 @@ class TestReviewMetrics(unittest.TestCase):
         self.assertEqual(micro["unscorable"], 1)
         self.assertAlmostEqual(micro["precision"], 31 / 34, places=6)
         self.assertEqual(micro["recall"], 1.0)
+
+    def test_repeated_novel_fingerprint_is_credited_once(self):
+        raw_cohort, annotations, raw_runs = make_perfect_dataset()
+        first_pr = reporting_pr_ids(raw_cohort)[0]
+        first = finding("finding:novel-primary")
+        repeated = finding("finding:novel-repeat")
+        repeated["fingerprint_sha256"] = first["fingerprint_sha256"]
+        raw_runs[0]["findings"].extend([first, repeated])
+        for finding_id in ("finding:novel-primary", "finding:novel-repeat"):
+            for side in ("a", "b"):
+                annotations.append(
+                    annotation(
+                        annotation_id=f"{finding_id}:{side}",
+                        subject_kind="system_finding",
+                        subject_id=finding_id,
+                        pr_id=first_pr,
+                        annotator_id=f"annotator-{side}",
+                        label="novel_valid",
+                    )
+                )
+        cohort = tre.validate_cohort(raw_cohort, require_materialized=True)
+        runs = tre.validate_runs(raw_runs, cohort, config_id="frozen-v1")
+        resolved = tre.resolve_annotations(annotations, cohort, runs)
+        micro = tre.review_metrics(
+            tre.score_review_runs(runs, cohort, resolved)
+        )["micro"]
+        self.assertEqual(micro["tp_findings"], 31)
+        self.assertEqual(micro["fp_findings"], 1)
+        self.assertEqual(micro["novel_valid"], 1)
+        self.assertEqual(micro["duplicates"], 1)
+
+    def test_duplicate_can_reference_a_same_run_primary_novel_finding(self):
+        raw_cohort, annotations, raw_runs = make_perfect_dataset()
+        first_pr = reporting_pr_ids(raw_cohort)[0]
+        primary_id = "finding:novel-primary"
+        duplicate_id = "finding:novel-duplicate"
+        raw_runs[0]["findings"].extend(
+            [finding(primary_id), finding(duplicate_id)]
+        )
+        for side in ("a", "b"):
+            annotations.extend(
+                [
+                    annotation(
+                        annotation_id=f"{primary_id}:{side}",
+                        subject_kind="system_finding",
+                        subject_id=primary_id,
+                        pr_id=first_pr,
+                        annotator_id=f"annotator-{side}",
+                        label="novel_valid",
+                    ),
+                    annotation(
+                        annotation_id=f"{duplicate_id}:{side}",
+                        subject_kind="system_finding",
+                        subject_id=duplicate_id,
+                        pr_id=first_pr,
+                        annotator_id=f"annotator-{side}",
+                        label="duplicate",
+                        gold_id=primary_id,
+                    ),
+                ]
+            )
+        cohort = tre.validate_cohort(raw_cohort, require_materialized=True)
+        runs = tre.validate_runs(raw_runs, cohort, config_id="frozen-v1")
+        resolved = tre.resolve_annotations(annotations, cohort, runs)
+        micro = tre.review_metrics(
+            tre.score_review_runs(runs, cohort, resolved)
+        )["micro"]
+        self.assertEqual(micro["tp_findings"], 31)
+        self.assertEqual(micro["fp_findings"], 1)
+        self.assertEqual(micro["novel_valid"], 1)
+        self.assertEqual(micro["duplicates"], 1)
 
     def test_second_match_to_same_gold_must_be_labeled_duplicate(self):
         raw_cohort, annotations, raw_runs = make_perfect_dataset()
@@ -735,11 +969,20 @@ class TestReviewMetrics(unittest.TestCase):
         self.assertEqual(micro["precision"], 1.0)
         self.assertAlmostEqual(micro["recall"], 29 / 30, places=6)
 
+    def test_unannotated_finding_fails_closed(self):
+        cohort, _, raw_runs, _, resolved = self._validated()
+        raw_runs[0]["findings"].append(finding("finding:unannotated"))
+        runs = tre.validate_runs(raw_runs, cohort, config_id="frozen-v1")
+        with self.assertRaisesRegex(tre.ValidationError, "lacks final"):
+            tre.score_review_runs(runs, cohort, resolved)
+
     def test_zero_denominators_are_null(self):
         raw_cohort = make_cohort()
         bind_gold_hashes(raw_cohort, [])
         cohort = tre.validate_cohort(raw_cohort, require_materialized=True)
         raw_runs = [run(pr_id, findings=[]) for pr_id in reporting_pr_ids(raw_cohort)]
+        for row in raw_runs:
+            row["frozen_cohort_sha256"] = cohort["_canonical_sha256"]
         runs = tre.validate_runs(raw_runs, cohort, config_id="frozen-v1")
         resolved = tre.resolve_annotations([], cohort, runs)
         micro = tre.review_metrics(
@@ -748,6 +991,25 @@ class TestReviewMetrics(unittest.TestCase):
         self.assertIsNone(micro["precision"])
         self.assertIsNone(micro["recall"])
         self.assertIsNone(micro["f1"])
+
+    def test_macro_metrics_report_defined_component_counts(self):
+        cohort, _, _, runs, resolved = self._validated()
+        scored = tre.score_review_runs(runs, cohort, resolved)
+        empty_counts = {key: 0 for key in tre.COUNT_KEYS}
+        for row in scored:
+            if row["repository"] == "reporting/alpha":
+                row.update(tre._metric_from_counts(empty_counts))
+        report = tre.review_metrics(scored)
+        self.assertEqual(
+            report["repository_macro"]["defined_repositories"],
+            {"precision": 2, "recall": 2, "f1": 2},
+        )
+        self.assertEqual(report["repository_macro"]["total_repositories"], 3)
+        self.assertEqual(
+            report["pr_macro"]["defined_prs"],
+            {"precision": 20, "recall": 20, "f1": 20},
+        )
+        self.assertEqual(report["pr_macro"]["total_prs"], 30)
 
 
 class TestBootstrapAndTelemetry(unittest.TestCase):
@@ -780,6 +1042,15 @@ class TestBootstrapAndTelemetry(unittest.TestCase):
     def test_bootstrap_rejects_non_integer_seed(self):
         with self.assertRaisesRegex(tre.ValidationError, "seed must be an integer"):
             tre.stratified_pr_bootstrap(self.scored, replicates=10, seed=True)
+
+    def test_bootstrap_interval_uses_interpolated_percentiles(self):
+        interval = tre._bootstrap_interval(
+            [0.0, 10.0],
+            alpha=0.05,
+            replicates=2,
+        )
+        self.assertEqual(interval["low"], 0.25)
+        self.assertEqual(interval["high"], 9.75)
 
     def test_telemetry_denominators_include_fail_open_degraded_and_failed(self):
         runs = copy.deepcopy(self.runs)
@@ -817,9 +1088,17 @@ class TestBootstrapAndTelemetry(unittest.TestCase):
             seed=9,
             input_hashes={"cohort_sha256": digest("manifest")},
         )
-        self.assertEqual(report["metric_version"], "trusted-review-v1")
+        self.assertEqual(report["metric_version"], "trusted-review-v2")
         self.assertRegex(report["generated_at"], r"Z$")
         self.assertEqual(report["input_hashes"], {"cohort_sha256": digest("manifest")})
+        self.assertEqual(
+            report["gold_freeze_commit"],
+            digest("gold-freeze-commit", 40),
+        )
+        self.assertEqual(
+            report["frozen_cohort_sha256"],
+            self.cohort["_canonical_sha256"],
+        )
         self.assertIn("agreement", report)
         self.assertIn("review", report)
         self.assertIn("bootstrap_95_ci", report)
@@ -842,6 +1121,13 @@ class TestInputBoundaryAndCLI(unittest.TestCase):
             tre.canonical_sha256({"b": 2, "a": 1}),
         )
 
+    def test_malformed_jsonl_reports_the_exact_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "annotations.jsonl"
+            path.write_text('{"valid": true}\n{"broken":\n', encoding="utf-8")
+            with self.assertRaisesRegex(tre.ValidationError, r":2 is not valid JSON"):
+                tre.load_jsonl(path)
+
     def test_validate_cohort_cli_is_offline_and_returns_two_on_invalid_data(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cohort.json"
@@ -863,13 +1149,21 @@ class TestInputBoundaryAndCLI(unittest.TestCase):
 
     def test_report_cli_loads_hash_binds_and_writes_deterministic_sections(self):
         cohort, annotations, runs = make_perfect_dataset()
+        selection_rows = make_selection_log(cohort)
+        selection_bytes = jsonl_bytes(selection_rows)
+        cohort["selection_log_sha256"] = hashlib.sha256(selection_bytes).hexdigest()
+        frozen_cohort_sha256 = tre.canonical_sha256(cohort)
+        for row in runs:
+            row["frozen_cohort_sha256"] = frozen_cohort_sha256
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cohort_path = root / "cohort.json"
+            selection_path = root / "selection.jsonl"
             annotations_path = root / "annotations.jsonl"
             runs_path = root / "runs.jsonl"
             output_path = root / "report.json"
             cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
+            selection_path.write_bytes(selection_bytes)
             annotations_path.write_text(
                 "\n".join(json.dumps(row) for row in annotations) + "\n",
                 encoding="utf-8",
@@ -885,6 +1179,8 @@ class TestInputBoundaryAndCLI(unittest.TestCase):
                         "report",
                         "--cohort",
                         str(cohort_path),
+                        "--selection-log",
+                        str(selection_path),
                         "--annotations",
                         str(annotations_path),
                         "--runs",
@@ -909,14 +1205,78 @@ class TestInputBoundaryAndCLI(unittest.TestCase):
                     "annotations_sha256",
                     "cohort_sha256",
                     "runs_sha256",
+                    "selection_log_sha256",
                 },
             )
+
+    def test_verify_selection_cli_checks_the_hashed_candidate_log(self):
+        cohort = make_cohort()
+        selection_rows = make_selection_log(cohort)
+        selection_bytes = jsonl_bytes(selection_rows)
+        cohort["selection_log_sha256"] = hashlib.sha256(selection_bytes).hexdigest()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cohort_path = root / "cohort.json"
+            selection_path = root / "selection.jsonl"
+            cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
+            selection_path.write_bytes(selection_bytes)
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                code = tre.main(
+                    [
+                        "verify-selection",
+                        "--cohort",
+                        str(cohort_path),
+                        "--selection-log",
+                        str(selection_path),
+                    ]
+                )
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(stdout.getvalue())["valid"])
 
     def test_committed_schemas_and_examples_are_valid_json(self):
         root = Path(__file__).resolve().parents[1]
         schema_root = root / "trusted_review" / "schemas"
-        for path in sorted(schema_root.glob("*.json")):
-            self.assertIsInstance(json.loads(path.read_text(encoding="utf-8")), dict)
+        schemas = {
+            path.name: json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(schema_root.glob("*.json"))
+        }
+        self.assertEqual(
+            set(schemas["cohort.schema.json"]["properties"]),
+            tre.COHORT_KEYS,
+        )
+        self.assertEqual(
+            set(schemas["cohort.schema.json"]["required"]),
+            tre.COHORT_KEYS,
+        )
+        self.assertEqual(
+            set(schemas["annotations.schema.json"]["properties"]),
+            tre.ANNOTATION_KEYS,
+        )
+        self.assertEqual(
+            set(schemas["annotations.schema.json"]["required"]),
+            tre.ANNOTATION_KEYS,
+        )
+        self.assertEqual(
+            set(schemas["runs.schema.json"]["properties"]),
+            tre.RUN_KEYS,
+        )
+        self.assertEqual(
+            set(schemas["runs.schema.json"]["required"]),
+            tre.RUN_KEYS,
+        )
+        plan = json.loads(
+            (root / "trusted_review" / "cohort-plan.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        validated_plan = tre.validate_cohort(plan, require_materialized=False)
+        self.assertEqual(
+            validated_plan["cohort_seed"],
+            tre.derive_cohort_seed(
+                validated_plan["cohort_seed_derivation"]["source_commit"]
+            ),
+        )
         example_root = root / "trusted_review" / "examples"
         for path in sorted(example_root.glob("*.jsonl")):
             for line in path.read_text(encoding="utf-8").splitlines():

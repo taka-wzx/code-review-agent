@@ -8,6 +8,7 @@
     "schema_version",
     "cohort_id",
     "cohort_seed",
+    "cohort_seed_derivation",
     "selection_window",
     "repositories",
     "prs",
@@ -25,6 +26,22 @@
     },
     "cohort_seed": {
       "$ref": "#/$defs/sha256"
+    },
+    "cohort_seed_derivation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "source_commit"
+      ],
+      "properties": {
+        "method": {
+          "const": "sha256_source_commit_v1"
+        },
+        "source_commit": {
+          "const": "9564cc817d5d0639b6c31cf4bde540594b38382d"
+        }
+      }
     },
     "selection_window": {
       "type": "object",
@@ -102,7 +119,7 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
     },
     "sha1": {
       "type": "string",

@@ -11,6 +11,8 @@
     "config_id",
     "purpose",
     "source_commit",
+    "gold_freeze_commit",
+    "frozen_cohort_sha256",
     "provider",
     "model_id",
     "pricing_revision",
@@ -51,6 +53,12 @@
     },
     "source_commit": {
       "$ref": "#/$defs/sha1"
+    },
+    "gold_freeze_commit": {
+      "$ref": "#/$defs/sha1"
+    },
+    "frozen_cohort_sha256": {
+      "$ref": "#/$defs/sha256"
     },
     "provider": {
       "$ref": "#/$defs/id"
@@ -140,7 +148,7 @@
     "timestamp": {
       "type": "string",
       "format": "date-time",
-      "pattern": "Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
     },
     "finding": {
       "type": "object",

@@ -142,7 +142,7 @@ docker run --rm code-review-agent --help
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **391 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，25.63s） |
+| 单测 + golden 测试 | **403 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，29.77s） |
 | 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
 | mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
@@ -162,13 +162,16 @@ Week 4 新增了完全独立于旧 `eval/` / `eval/holdout/` 的可信评测协�
   reporting 集；
 - gold 构建采用两名标注者独立发现/判断，冲突或 uncertain 由第三人仲裁；输出 exact
   agreement、Cohen's kappa、discovery Jaccard/F1 和仲裁率；
-- `trusted_review_eval.py` 严格校验 cohort/annotation/run schema、逐 PR gold hash 和
-  freeze/run 时间线、snapshot 与 exact model/pricing/runtime 绑定，统计 micro/macro
+- seed 由用户确认的基线提交机器复算；`verify-selection` 校验候选日志字节哈希、逐 PR
+  排名以及每仓 selected 集合，阻止 seed-shopping 和事后挑 PR；
+- `trusted_review_eval.py` 严格校验 cohort/annotation/run、逐 PR gold hash 和
+  freeze/run 时间线，要求 pre-run Git freeze commit 与 canonical cohort hash，并绑定
+  snapshot 与 exact model/pricing/runtime；统计 micro/macro
   precision、recall、F1、仓库内 PR 分层 Bootstrap 95% CI、成本、p50/p95 时延、工具调用、
   fail-open/degraded/hard-failure、测试失败和越权事件；
 - reporting 路径拒绝 tuning/prompt-selection/sentinel-design/threshold-search purpose，
   calibration 与 reporting 仓库重叠、少于 3 仓/30 PR、漏双标/漏仲裁、重复 PR/finding、
-  非有限 telemetry 都 fail closed。
+  非有限 telemetry 都 fail closed；重复 novel fingerprint 最多只记一次 TP，其余计 FP。
 
 离线验证预注册（不联网、不调用模型、不读取旧 eval）：
 
@@ -176,6 +179,10 @@ Week 4 新增了完全独立于旧 `eval/` / `eval/holdout/` 的可信评测协�
 python trusted_review_eval.py validate-cohort `
   --cohort trusted_review\cohort-plan.json
 ```
+
+真实数据获准并 materialize 后，还必须在任何 reporting run 前用
+`verify-selection --cohort ... --selection-log ...` 机器复核选择日志，并先提交只含输入哈希
+的 gold-freeze attestation。完整流程见下方协议。
 
 完整协议、标注口径和最终报告命令见
 [`docs/trusted-review-evaluation.md`](docs/trusted-review-evaluation.md)。**当前只完成了评测

@@ -18,30 +18,35 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NoReturn, Sequence
 
 
 SCHEMA_VERSION = 1
-METRIC_VERSION = "trusted-review-v1"
+METRIC_VERSION = "trusted-review-v2"
 DEFAULT_BOOTSTRAP_REPLICATES = 10_000
 DEFAULT_BOOTSTRAP_SEED = 20260718
+COHORT_SEED_DOMAIN = b"trusted-review-cohort-v1\0"
+PREREGISTERED_SEED_SOURCE_COMMIT = "9564cc817d5d0639b6c31cf4bde540594b38382d"
 
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 PR_ID_RE = re.compile(r"^(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#(?P<number>[1-9][0-9]*)$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$")
+TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 COHORT_KEYS = {
     "schema_version",
     "cohort_id",
     "cohort_seed",
+    "cohort_seed_derivation",
     "selection_window",
     "repositories",
     "prs",
     "gold_frozen_at",
     "selection_log_sha256",
 }
+COHORT_SEED_DERIVATION_KEYS = {"method", "source_commit"}
 SELECTION_WINDOW_KEYS = {"start", "end"}
 REPOSITORY_KEYS = {"slug", "role", "target_prs"}
 PR_KEYS = {
@@ -89,6 +94,8 @@ RUN_KEYS = {
     "config_id",
     "purpose",
     "source_commit",
+    "gold_freeze_commit",
+    "frozen_cohort_sha256",
     "provider",
     "model_id",
     "pricing_revision",
@@ -107,6 +114,17 @@ RUN_KEYS = {
     "findings",
 }
 FINDING_KEYS = {"finding_id", "fingerprint_sha256", "path", "line"}
+SELECTION_LOG_KEYS = {
+    "schema_version",
+    "pr_id",
+    "repository",
+    "number",
+    "merged_at",
+    "eligible",
+    "exclusion_reason",
+    "selected",
+    "rank_sha256",
+}
 
 GOLD_LABELS = {"valid_defect", "not_defect", "uncertain"}
 GOLD_FINAL_LABELS = GOLD_LABELS - {"uncertain"}
@@ -124,13 +142,22 @@ RUN_PURPOSES = {"final_report", "audit", "annotation"}
 FORBIDDEN_PURPOSES = {"tuning", "prompt_selection", "sentinel_design", "threshold_search"}
 TEST_STATUSES = {"not_applicable", "not_run", "passed", "failed"}
 SEVERITIES = {"low", "medium", "high"}
+SELECTION_EXCLUSION_REASONS = {
+    "dependency_only",
+    "generated_only",
+    "documentation_only",
+    "vendored",
+    "security_embargoed",
+    "inaccessible",
+    "non_reproducible",
+}
 
 
 class ValidationError(ValueError):
     """Raised when an evaluation artifact violates the frozen protocol."""
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     raise ValidationError(message)
 
 
@@ -216,8 +243,8 @@ def _expect_exact_keys(value: dict[str, Any], expected: set[str], where: str) ->
 
 def parse_timestamp(value: Any, where: str) -> datetime:
     text = _expect_str(value, where)
-    if not text.endswith("Z"):
-        _fail(f"{where} must use UTC with a trailing Z")
+    if not TIMESTAMP_RE.fullmatch(text):
+        _fail(f"{where} must use canonical UTC form YYYY-MM-DDTHH:MM:SSZ")
     try:
         parsed = datetime.fromisoformat(text[:-1] + "+00:00")
     except ValueError as exc:
@@ -240,6 +267,19 @@ def _canonical_json_bytes(value: Any) -> bytes:
 def canonical_sha256(value: Any) -> str:
     """Return SHA-256 of canonical JSON, useful for fixtures and audit bindings."""
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def derive_cohort_seed(source_commit: str) -> str:
+    """Derive the immutable cohort seed from the externally fixed base commit."""
+    _expect_sha(source_commit, "cohort seed source_commit", length=40)
+    return hashlib.sha256(COHORT_SEED_DOMAIN + source_commit.encode("ascii")).hexdigest()
+
+
+def selection_rank_sha256(cohort_seed: str, pr_id: str) -> str:
+    """Return the preregistered deterministic rank for one canonical PR ID."""
+    _expect_sha(cohort_seed, "cohort_seed", length=64)
+    _repository_from_pr_id(pr_id, "pr_id")
+    return hashlib.sha256(f"{cohort_seed}\n{pr_id}".encode("utf-8")).hexdigest()
 
 
 def _reject_forbidden_path(path: Path) -> Path:
@@ -300,7 +340,34 @@ def validate_cohort(raw: Any, *, require_materialized: bool) -> dict[str, Any]:
     if _expect_int(cohort["schema_version"], "cohort.schema_version") != SCHEMA_VERSION:
         _fail(f"unsupported cohort schema_version {cohort['schema_version']!r}")
     _expect_identifier(cohort["cohort_id"], "cohort.cohort_id")
-    _expect_sha(cohort["cohort_seed"], "cohort.cohort_seed", length=64)
+    cohort_seed = _expect_sha(cohort["cohort_seed"], "cohort.cohort_seed", length=64)
+    seed_derivation = _expect_dict(
+        cohort["cohort_seed_derivation"],
+        "cohort.cohort_seed_derivation",
+    )
+    _expect_exact_keys(
+        seed_derivation,
+        COHORT_SEED_DERIVATION_KEYS,
+        "cohort.cohort_seed_derivation",
+    )
+    if seed_derivation["method"] != "sha256_source_commit_v1":
+        _fail("cohort.cohort_seed_derivation.method is unsupported")
+    seed_source_commit = _expect_sha(
+        seed_derivation["source_commit"],
+        "cohort.cohort_seed_derivation.source_commit",
+        length=40,
+    )
+    if seed_source_commit != PREREGISTERED_SEED_SOURCE_COMMIT:
+        _fail(
+            "cohort.cohort_seed_derivation.source_commit does not match "
+            "the preregistered Week 4 base"
+        )
+    expected_seed = derive_cohort_seed(seed_source_commit)
+    if cohort_seed != expected_seed:
+        _fail(
+            "cohort.cohort_seed does not match the declared deterministic "
+            "source-commit derivation"
+        )
 
     window = _expect_dict(cohort["selection_window"], "cohort.selection_window")
     _expect_exact_keys(window, SELECTION_WINDOW_KEYS, "cohort.selection_window")
@@ -313,7 +380,7 @@ def validate_cohort(raw: Any, *, require_materialized: bool) -> dict[str, Any]:
     if not repositories:
         _fail("cohort.repositories must not be empty")
     repo_by_slug: dict[str, dict[str, Any]] = {}
-    targets = Counter()
+    targets: Counter[str] = Counter()
     for index, item in enumerate(repositories):
         where = f"cohort.repositories[{index}]"
         repo = _expect_dict(item, where)
@@ -344,8 +411,8 @@ def validate_cohort(raw: Any, *, require_materialized: bool) -> dict[str, Any]:
     prs = _expect_list(cohort["prs"], "cohort.prs")
     seen_pr_ids: set[str] = set()
     seen_snapshots: set[str] = set()
-    selected_counts = Counter()
-    validated_prs = []
+    selected_counts: Counter[str] = Counter()
+    validated_prs: list[dict[str, Any]] = []
     reporting_size_bands: dict[str, set[str]] = defaultdict(set)
     reporting_change_types: set[str] = set()
     reporting_review_comment_values: set[bool] = set()
@@ -381,6 +448,8 @@ def validate_cohort(raw: Any, *, require_materialized: bool) -> dict[str, Any]:
         selected_at = parse_timestamp(pr["selected_at"], f"{where}.selected_at")
         if selected_at < start:
             _fail(f"{where}.selected_at precedes the selection window")
+        if selected_at < merged_at:
+            _fail(f"{where}.selected_at precedes merged_at")
         changed_lines = _expect_int(pr["changed_lines"], f"{where}.changed_lines", minimum=1)
         change_type = _expect_enum(
             pr["change_type"],
@@ -451,10 +520,135 @@ def validate_cohort(raw: Any, *, require_materialized: bool) -> dict[str, Any]:
 
     return {
         **cohort,
+        "_canonical_sha256": canonical_sha256(cohort),
         "_repo_by_slug": repo_by_slug,
         "_reporting_repositories": reporting_repos,
         "_calibration_repositories": calibration_repos,
         "_pr_by_id": {pr["pr_id"]: pr for pr in validated_prs},
+    }
+
+
+def validate_selection_log(
+    raw_rows: Sequence[Any],
+    cohort: dict[str, Any],
+    *,
+    artifact_sha256: str,
+) -> dict[str, Any]:
+    """Verify the hashed candidate log and deterministic selected PR set."""
+    _expect_sha(artifact_sha256, "selection log artifact hash", length=64)
+    expected_artifact_hash = cohort["selection_log_sha256"]
+    if artifact_sha256 != expected_artifact_hash:
+        _fail(
+            "selection log artifact hash does not match "
+            "cohort.selection_log_sha256"
+        )
+
+    start = parse_timestamp(
+        cohort["selection_window"]["start"],
+        "cohort.selection_window.start",
+    )
+    end = parse_timestamp(
+        cohort["selection_window"]["end"],
+        "cohort.selection_window.end",
+    )
+    repo_by_slug = cohort["_repo_by_slug"]
+    candidates_by_repo: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    seen_pr_ids: set[str] = set()
+    for index, raw in enumerate(raw_rows):
+        where = f"selection_log[{index}]"
+        row = _expect_dict(raw, where)
+        _expect_exact_keys(row, SELECTION_LOG_KEYS, where)
+        if _expect_int(row["schema_version"], f"{where}.schema_version") != SCHEMA_VERSION:
+            _fail(f"{where} has unsupported schema_version")
+        pr_id = _expect_str(row["pr_id"], f"{where}.pr_id")
+        repository, number = _repository_from_pr_id(pr_id, f"{where}.pr_id")
+        if pr_id in seen_pr_ids:
+            _fail(f"selection log has duplicate candidate {pr_id!r}")
+        seen_pr_ids.add(pr_id)
+        if repository not in repo_by_slug:
+            _fail(f"{where} references unregistered repository {repository!r}")
+        declared_repository = _expect_str(row["repository"], f"{where}.repository")
+        declared_number = _expect_int(row["number"], f"{where}.number", minimum=1)
+        if declared_repository != repository or declared_number != number:
+            _fail(f"{where} repository/number do not match pr_id")
+        merged_at = parse_timestamp(row["merged_at"], f"{where}.merged_at")
+        if not start <= merged_at < end:
+            _fail(f"{where}.merged_at is outside the preregistered selection window")
+        eligible = _expect_bool(row["eligible"], f"{where}.eligible")
+        selected = _expect_bool(row["selected"], f"{where}.selected")
+        reason = row["exclusion_reason"]
+        if eligible:
+            if reason is not None:
+                _fail(f"{where}.exclusion_reason must be null for an eligible candidate")
+        else:
+            _expect_enum(
+                reason,
+                SELECTION_EXCLUSION_REASONS,
+                f"{where}.exclusion_reason",
+            )
+            if selected:
+                _fail(f"{where} cannot select an ineligible candidate")
+        expected_rank = selection_rank_sha256(cohort["cohort_seed"], pr_id)
+        rank = _expect_sha(row["rank_sha256"], f"{where}.rank_sha256", length=64)
+        if rank != expected_rank:
+            _fail(f"{where}.rank_sha256 does not match the preregistered formula")
+        candidates_by_repo[repository].append(row)
+
+    materialized_by_repo: dict[str, set[str]] = defaultdict(set)
+    materialized_prs = cohort["_pr_by_id"]
+    for pr in cohort["prs"]:
+        materialized_by_repo[pr["repository"]].add(pr["pr_id"])
+
+    selected_total = 0
+    eligible_total = 0
+    for repository, repo in sorted(repo_by_slug.items()):
+        candidates = candidates_by_repo.get(repository, [])
+        eligible_candidates = sorted(
+            (row for row in candidates if row["eligible"]),
+            key=lambda row: (row["rank_sha256"], row["pr_id"]),
+        )
+        target = repo["target_prs"]
+        if len(eligible_candidates) < target:
+            _fail(
+                f"selection log repository {repository!r} has "
+                f"{len(eligible_candidates)} eligible "
+                f"candidates; needs at least {target}"
+            )
+        expected_selected = {
+            row["pr_id"] for row in eligible_candidates[:target]
+        }
+        declared_selected = {row["pr_id"] for row in candidates if row["selected"]}
+        if declared_selected != expected_selected:
+            _fail(
+                f"selection log selected set mismatch for {repository!r}: "
+                f"expected={sorted(expected_selected)}, "
+                f"declared={sorted(declared_selected)}"
+            )
+        manifest_selected = materialized_by_repo.get(repository, set())
+        if manifest_selected != expected_selected:
+            _fail(
+                f"cohort PR set does not match deterministic selection for {repository!r}: "
+                f"expected={sorted(expected_selected)}, "
+                f"manifest={sorted(manifest_selected)}"
+            )
+        for row in candidates:
+            if row["selected"] and (
+                row["merged_at"] != materialized_prs[row["pr_id"]]["merged_at"]
+            ):
+                _fail(
+                    f"selection log merge time does not match the manifest "
+                    f"for {row['pr_id']!r}"
+                )
+        selected_total += len(expected_selected)
+        eligible_total += len(eligible_candidates)
+
+    return {
+        "artifact_sha256": artifact_sha256,
+        "candidate_rows": len(raw_rows),
+        "eligible_candidates": eligible_total,
+        "selected_prs": selected_total,
+        "repositories": len(repo_by_slug),
+        "valid": True,
     }
 
 
@@ -567,12 +761,15 @@ def resolve_annotations(
             if created_at > frozen_at:
                 _fail(f"gold annotation {row['annotation_id']!r} was created after gold freeze")
         elif runs is not None:
-            run = run_by_finding.get(row["subject_id"])
-            if run is None:
+            finding_run = run_by_finding.get(row["subject_id"])
+            if finding_run is None:
                 _fail(f"system annotation references unknown finding {row['subject_id']!r}")
-            if run["pr_id"] != row["pr_id"]:
+            if finding_run["pr_id"] != row["pr_id"]:
                 _fail(f"finding annotation {row['annotation_id']!r} has wrong PR")
-            if created_at < parse_timestamp(run["completed_at"], "run.completed_at"):
+            if created_at < parse_timestamp(
+                finding_run["completed_at"],
+                "run.completed_at",
+            ):
                 _fail(
                     f"system annotation {row['annotation_id']!r} predates run completion"
                 )
@@ -594,6 +791,14 @@ def resolve_annotations(
         annotator_ids = {row["annotator_id"] for row in independent}
         if len(annotator_ids) != 2:
             _fail(f"subject {subject_id!r} requires two distinct annotators")
+        if (
+            independent[0]["subject_kind"] == "gold_candidate"
+            and not any(row["discovered"] for row in independent)
+        ):
+            _fail(
+                f"gold candidate {subject_id!r} was not discovered by either "
+                "independent annotator"
+            )
         if global_annotators is None:
             global_annotators = annotator_ids
         elif global_annotators != annotator_ids:
@@ -739,6 +944,7 @@ def _agreement_block(
         "arbitration_rate": round(arbitrated / total, 6) if total else None,
         "unresolved_subjects": 0,
         "malformed_subjects": 0,
+        "invalid_subject_policy": "fail_closed_before_metrics",
         "discovery": {
             "annotator_a": len(discovered_left),
             "annotator_b": len(discovered_right),
@@ -797,6 +1003,12 @@ def _validate_run_row(raw: Any, index: int) -> dict[str, Any]:
     if purpose not in RUN_PURPOSES:
         _fail(f"{where}.purpose must be one of {sorted(RUN_PURPOSES)}")
     _expect_sha(row["source_commit"], f"{where}.source_commit", length=40)
+    _expect_sha(row["gold_freeze_commit"], f"{where}.gold_freeze_commit", length=40)
+    _expect_sha(
+        row["frozen_cohort_sha256"],
+        f"{where}.frozen_cohort_sha256",
+        length=64,
+    )
     _expect_identifier(row["provider"], f"{where}.provider")
     _expect_identifier(row["model_id"], f"{where}.model_id")
     _expect_identifier(row["pricing_revision"], f"{where}.pricing_revision")
@@ -886,6 +1098,11 @@ def validate_runs(
         expected_snapshot = cohort["_pr_by_id"][pr_id]["snapshot_sha256"]
         if row["snapshot_sha256"] != expected_snapshot:
             _fail(f"run {row['run_id']!r} snapshot_sha256 does not match its frozen PR")
+        if row["frozen_cohort_sha256"] != cohort["_canonical_sha256"]:
+            _fail(
+                f"run {row['run_id']!r} frozen_cohort_sha256 does not match "
+                "the materialized cohort"
+            )
         if parse_timestamp(row["started_at"], "run.started_at") < frozen_at:
             _fail(f"run {row['run_id']!r} started before gold_frozen_at")
         if row["purpose"] != "final_report":
@@ -896,6 +1113,8 @@ def validate_runs(
         frozen_signatures.add(
             (
                 row["source_commit"],
+                row["gold_freeze_commit"],
+                row["frozen_cohort_sha256"],
                 row["provider"],
                 row["model_id"],
                 row["pricing_revision"],
@@ -914,7 +1133,7 @@ def validate_runs(
         _fail(f"config {config_id!r} run coverage mismatch: missing={missing}, extra={extra}")
     if len(frozen_signatures) != 1:
         _fail(
-            f"config {config_id!r} mixes source/model/pricing/runtime identities"
+            f"config {config_id!r} mixes freeze/source/model/pricing/runtime identities"
         )
     return [by_pr[pr_id] for pr_id in sorted(by_pr)]
 
@@ -996,8 +1215,12 @@ def score_review_runs(
         gold = gold_by_pr.get(pr_id, set())
         matched_gold: set[str] = set()
         counts = {key: 0 for key in COUNT_KEYS}
-        finding_labels = Counter()
-        duplicate_targets: set[str] = set()
+        finding_labels: Counter[str] = Counter()
+        duplicate_gold_targets: set[str] = set()
+        duplicate_novel_targets: set[str] = set()
+        credited_novel_findings: set[str] = set()
+        credited_novel_fingerprints: dict[str, str] = {}
+        run_finding_ids = {finding["finding_id"] for finding in run["findings"]}
         for finding in run["findings"]:
             finding_id = finding["finding_id"]
             final = finding_finals.get(finding_id)
@@ -1019,13 +1242,26 @@ def score_review_runs(
                 matched_gold.add(gold_id)
                 counts["tp_findings"] += 1
             elif label == "novel_valid":
-                counts["tp_findings"] += 1
-                counts["novel_valid"] += 1
+                fingerprint = finding["fingerprint_sha256"]
+                if fingerprint in credited_novel_fingerprints:
+                    counts["fp_findings"] += 1
+                    counts["duplicates"] += 1
+                else:
+                    credited_novel_fingerprints[fingerprint] = finding_id
+                    credited_novel_findings.add(finding_id)
+                    counts["tp_findings"] += 1
+                    counts["novel_valid"] += 1
             elif label == "duplicate":
-                gold_id = final["gold_id"]
-                if gold_id not in gold:
-                    _fail(f"duplicate finding {finding_id!r} references invalid gold {gold_id!r}")
-                duplicate_targets.add(gold_id)
+                duplicate_of = final["gold_id"]
+                if duplicate_of in gold:
+                    duplicate_gold_targets.add(duplicate_of)
+                elif duplicate_of in run_finding_ids:
+                    duplicate_novel_targets.add(duplicate_of)
+                else:
+                    _fail(
+                        f"duplicate finding {finding_id!r} references neither frozen "
+                        f"gold nor a same-run finding: {duplicate_of!r}"
+                    )
                 counts["fp_findings"] += 1
                 counts["duplicates"] += 1
             elif label == "unscorable":
@@ -1035,11 +1271,19 @@ def score_review_runs(
                 counts["fp_findings"] += 1
             else:
                 _fail(f"finding {finding_id!r} has unsupported final label {label!r}")
-        unmatched_duplicate_targets = sorted(duplicate_targets - matched_gold)
+        unmatched_duplicate_targets = sorted(duplicate_gold_targets - matched_gold)
         if unmatched_duplicate_targets:
             _fail(
                 f"run {run['run_id']!r} labels findings as duplicate without a matched "
                 f"primary finding for gold IDs {unmatched_duplicate_targets}"
+            )
+        invalid_novel_targets = sorted(
+            duplicate_novel_targets - credited_novel_findings
+        )
+        if invalid_novel_targets:
+            _fail(
+                f"run {run['run_id']!r} labels findings as duplicate without a credited "
+                f"primary novel finding for IDs {invalid_novel_targets}"
             )
         counts["tp_gold"] = len(matched_gold)
         counts["fn_gold"] = len(gold - matched_gold)
@@ -1161,14 +1405,24 @@ def review_metrics(scored_prs: Sequence[dict[str, Any]]) -> dict[str, Any]:
         repository: _metric_from_counts(_sum_counts(rows))
         for repository, rows in sorted(by_repository_rows.items())
     }
-    repository_macro = {
+    repository_macro: dict[str, Any] = {
         metric: _rounded(_mean_defined(value[metric] for value in by_repository.values()))
         for metric in ("precision", "recall", "f1")
     }
-    pr_macro = {
+    repository_macro["defined_repositories"] = {
+        metric: sum(value[metric] is not None for value in by_repository.values())
+        for metric in ("precision", "recall", "f1")
+    }
+    repository_macro["total_repositories"] = len(by_repository)
+    pr_macro: dict[str, Any] = {
         metric: _rounded(_mean_defined(row[metric] for row in scored_prs))
         for metric in ("precision", "recall", "f1")
     }
+    pr_macro["defined_prs"] = {
+        metric: sum(row[metric] is not None for row in scored_prs)
+        for metric in ("precision", "recall", "f1")
+    }
+    pr_macro["total_prs"] = len(scored_prs)
     return {
         "micro": overall,
         "repository_macro": repository_macro,
@@ -1191,17 +1445,11 @@ def _bootstrap_interval(
             "defined_replicates": 0,
             "reason": "metric undefined in every bootstrap replicate",
         }
-    ordered = sorted(values)
-    low_index = min(len(ordered) - 1, math.floor((len(ordered) - 1) * alpha / 2.0))
-    high_index = min(
-        len(ordered) - 1,
-        math.ceil((len(ordered) - 1) * (1.0 - alpha / 2.0)),
-    )
     return {
-        "low": _rounded(ordered[low_index]),
-        "high": _rounded(ordered[high_index]),
-        "defined_replicates": len(ordered),
-        "reason": None if len(ordered) == replicates else "undefined replicates omitted",
+        "low": _rounded(_percentile(values, alpha / 2.0)),
+        "high": _rounded(_percentile(values, 1.0 - alpha / 2.0)),
+        "defined_replicates": len(values),
+        "reason": None if len(values) == replicates else "undefined replicates omitted",
     }
 
 
@@ -1279,6 +1527,10 @@ def build_report(
         "config_id": config_id,
         "split": "reporting",
         "source_commits": sorted({run["source_commit"] for run in runs}),
+        "gold_freeze_commit": runs[0]["gold_freeze_commit"] if runs else None,
+        "frozen_cohort_sha256": (
+            runs[0]["frozen_cohort_sha256"] if runs else None
+        ),
         "provider": runs[0]["provider"] if runs else None,
         "model_id": runs[0]["model_id"] if runs else None,
         "pricing_revision": runs[0]["pricing_revision"] if runs else None,
@@ -1313,6 +1565,7 @@ def _public_cohort_summary(cohort: dict[str, Any]) -> dict[str, Any]:
         ),
         "materialized_prs": len(cohort["prs"]),
         "gold_frozen": cohort["gold_frozen_at"] is not None,
+        "canonical_cohort_sha256": cohort["_canonical_sha256"],
     }
 
 
@@ -1343,11 +1596,19 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--cohort", required=True)
     validate.add_argument("--materialized", action="store_true")
 
+    verify_selection = subparsers.add_parser(
+        "verify-selection",
+        help="verify a materialized cohort against its hashed candidate log",
+    )
+    verify_selection.add_argument("--cohort", required=True)
+    verify_selection.add_argument("--selection-log", required=True)
+
     report = subparsers.add_parser(
         "report",
         help="validate frozen inputs and calculate the reporting split",
     )
     report.add_argument("--cohort", required=True)
+    report.add_argument("--selection-log", required=True)
     report.add_argument("--annotations", required=True)
     report.add_argument("--runs", required=True)
     report.add_argument("--config-id", required=True)
@@ -1364,7 +1625,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         cohort_raw, cohort_hash = load_json(args.cohort)
         cohort = validate_cohort(
             cohort_raw,
-            require_materialized=args.command == "report" or args.materialized,
+            require_materialized=(
+                args.command in {"report", "verify-selection"}
+                or getattr(args, "materialized", False)
+            ),
         )
         if args.command == "validate-cohort":
             _write_json(
@@ -1375,6 +1639,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 },
                 None,
             )
+            return 0
+
+        selection_rows, selection_hash = load_jsonl(args.selection_log)
+        selection_summary = validate_selection_log(
+            selection_rows,
+            cohort,
+            artifact_sha256=selection_hash,
+        )
+        if args.command == "verify-selection":
+            _write_json(selection_summary, None)
             return 0
 
         annotation_rows, annotation_hash = load_jsonl(args.annotations)
@@ -1392,6 +1666,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "annotations_sha256": annotation_hash,
                 "cohort_sha256": cohort_hash,
                 "runs_sha256": runs_hash,
+                "selection_log_sha256": selection_hash,
             },
         )
         _write_json(report, args.output)

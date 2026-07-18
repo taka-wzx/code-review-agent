@@ -1,7 +1,11 @@
 {
   "schema_version": 1,
   "cohort_id": "week4-trusted-review-v1",
-  "cohort_seed": "2f7eb8f0b6d8fcb4fb6ef65e8e16af5ab43d12af7058d8cbd75f377b2289f12a",
+  "cohort_seed": "eb832b864d2094ce30983c92edf7a7ec77a612ae218244a1a37c7692c340ee95",
+  "cohort_seed_derivation": {
+    "method": "sha256_source_commit_v1",
+    "source_commit": "9564cc817d5d0639b6c31cf4bde540594b38382d"
+  },
   "selection_window": {
     "start": "2024-01-01T00:00:00Z",
     "end": "2026-01-01T00:00:00Z"

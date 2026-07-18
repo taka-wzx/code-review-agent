@@ -132,6 +132,17 @@ The cohort seed, window, exclusions, inclusion decisions, snapshot hashes, and
 selection-log hash are immutable after materialization. A PR may occur once.
 Base/head commits and snapshot artifacts are content-addressed.
 
+The seed is not operator-selected. Version 1 derives it as
+`SHA256(b"trusted-review-cohort-v1" + b"\x00" + ASCII(source_commit))`, where
+`source_commit` is the user-confirmed Week 4 base. The cohort records the
+derivation method and source commit, and validation recomputes the seed.
+
+The selection log is JSONL with one row per candidate: identity, merge time,
+eligibility, a preregistered exclusion reason or null, selected flag, and the
+derived rank hash. `verify-selection` binds its exact byte hash to the cohort,
+recomputes ranks, and requires both the log-selected set and materialized
+manifest to equal the first `target_prs` eligible rows per repository.
+
 ### Required diversity and exclusions
 
 The materialized reporting cohort must include at least:
@@ -162,6 +173,14 @@ All schemas carry an integer `schema_version`, canonical IDs, and SHA-256
 bindings. Metric reports include the input file hashes, metric version, seed,
 bootstrap count, split, and creation timestamp. Input order never affects
 results.
+
+Before any reporting run, an authorized data-control branch must commit a
+freeze attestation containing the raw cohort/annotation hashes, canonical
+cohort hash, protocol version, and primary configuration. Each run binds that
+prior Git commit as `gold_freeze_commit` and the materialized cohort as
+`frozen_cohort_sha256`. The offline validator checks the hash and shared
+identity; an independent auditor checks the external Git ordering because
+self-reported timestamps alone cannot prove it.
 
 The reporting command fails closed when:
 
@@ -232,7 +251,8 @@ label each system finding:
 - `matched` with exactly one frozen gold ID;
 - `novel_valid` for a valid defect outside frozen gold;
 - `invalid`;
-- `duplicate` with the already matched gold ID;
+- `duplicate` with the already matched gold ID or same-run primary novel
+  finding ID;
 - `unscorable` for corrupt or missing evidence;
 - `uncertain`.
 
@@ -242,6 +262,11 @@ recall credit. `novel_valid` counts as valid for precision but is reported
 separately and never retroactively expands the frozen recall denominator.
 `unscorable` stays in the denominator as non-valid unless the entire PR is
 invalidated by a preregistered data-integrity rule.
+
+Exact repeated novel fingerprints receive at most one TP even if mislabeled:
+later identical fingerprints count as duplicate FP. This makes precision
+robust to repeated emission while preserving an explicit annotation route for
+semantic novel duplicates.
 
 ## Metrics
 
@@ -261,7 +286,8 @@ Headline values are micro-aggregated over the sealed reporting split. Undefined
 zero-denominator metrics are JSON `null`, never zero. The report also includes
 per-repository micro metrics, repository-macro metrics, PR-macro metrics, raw
 numerators/denominators, novel-valid count, duplicate count, and unscorable
-count.
+count. Macro blocks report the number of defined repository/PR components so
+undefined values are never silently omitted.
 
 ### Bootstrap 95% confidence intervals
 
@@ -269,7 +295,9 @@ Use a deterministic percentile bootstrap with a recorded seed and at least
 10,000 replicates for a final report. The sampling unit is PR, stratified by
 repository: sample ten PR records with replacement inside each reporting
 repository, then recompute the complete micro metric. This preserves repository
-weights and within-PR clustering of findings and gold units.
+weights and within-PR clustering of findings and gold units. The 2.5% and
+97.5% endpoints use the same linear-interpolation percentile definition as the
+resource distributions.
 
 Unit tests may use fewer replicates for speed. Intervals are omitted with an
 explicit reason when fewer than two PRs contribute or a metric is undefined in
@@ -318,7 +346,8 @@ raw independent labels in agreement calculations.
   development paths; only content hashes and aggregate reports may be
   committed after authorization.
 - Gold is frozen before system execution. Run timestamps and purpose fields are
-  validated against the freeze.
+  validated against the freeze; the required pre-run Git attestation provides
+  the external time anchor.
 - Reporting data may be opened only for `annotation`, `audit`, or `final_report`
   purposes. `tuning`, `prompt_selection`, `sentinel_design`, and
   `threshold_search` are rejected.
@@ -331,7 +360,8 @@ raw independent labels in agreement calculations.
 - Ablations are preregistered and run against identical snapshots. Their
   results support mechanism comparison, not post-hoc variant selection.
 - Report hashes, cohort hashes, annotation hashes, exact model IDs, pricing
-  revision, source commit, and runtime configuration provide an audit trail.
+  revision, source commit, freeze commit, and runtime configuration provide an
+  audit trail.
 
 ## Preregistered ablations
 
@@ -353,6 +383,8 @@ offline implementation does not execute these ablations.
 module. It must:
 
 - load and strictly validate cohort, annotation, and run records;
+- verify the exact selection-log hash and deterministic per-repository
+  selected set;
 - enforce repository split and timeline constraints;
 - resolve two-person labels plus required adjudication;
 - calculate annotation agreement;
@@ -363,6 +395,11 @@ module. It must:
 - emit JSON with input hashes, a report-generation timestamp, and deterministic
   calculation sections for fixed inputs/seed;
 - make no network, subprocess, SDK, model, GitHub, or evaluation-asset calls.
+
+The Python validator is normative. JSON Schemas are deliberately weaker
+interoperability references because cross-row, cross-file, role, count, and
+timeline constraints cannot all be expressed there without adding a runtime
+dependency.
 
 The implementation uses integer micro-USD for exact cost accounting. JSON
 numbers must be finite. Unknown keys may be rejected where accepting them could
@@ -419,6 +456,8 @@ artifacts, generated reports, or unrelated formatting.
   are rejected.
 - Agreement and kappa use only the two independent labels.
 - Duplicate findings cannot inflate recall and reduce precision as specified.
+- Repeated novel fingerprints cannot inflate precision, and a duplicate may
+  reference a same-run primary novel finding.
 - Novel valid findings improve precision but never mutate the frozen recall
   denominator.
 - Precision, recall, F1, per-repository, macro, bootstrap CI, cost, latency,
@@ -427,6 +466,8 @@ artifacts, generated reports, or unrelated formatting.
 - Bootstrap is order-independent for identical canonical inputs and stable for
   a fixed seed.
 - Reporting runs marked for tuning or started before gold freeze are rejected.
+- Cohort seed derivation, selection-log ranking/set equality, freeze-commit
+  identity, and frozen cohort hashes fail closed when inconsistent.
 - Negative, non-finite, duplicate, or internally inconsistent telemetry fails
   closed.
 - The full offline repository validation passes without reading existing
@@ -450,6 +491,28 @@ artifacts, generated reports, or unrelated formatting.
    complete integration diff.
 6. Stop on the validated integration branch. Merge or push to `master` only
    after explicit user confirmation.
+
+## Claude review disposition
+
+Claude reviewed handoff `d7aa90ac359432029bf86ba776a443427534eba0`
+and recorded 13 findings in commit
+`852b253a3fff12da8f2a57f4a36f9578e9fef506`.
+
+| Finding | Disposition |
+| --- | --- |
+| F-1 (P1) repeated novel findings inflate precision | Fixed: exact repeated novel fingerprints receive one TP; later occurrences are duplicate FP. `duplicate` may also reference a same-run credited primary novel finding. |
+| F-2 (P2) seed shopping | Fixed: seed provenance is explicit and machine-recomputed from the user-confirmed base commit with a domain-separated formula. |
+| F-3 (P2) self-reported freeze timeline | Mitigated: every run binds one pre-run Git freeze commit and the canonical materialized cohort hash; the protocol requires an independently audited attestation. Git ordering remains an explicit external trust boundary. |
+| F-4 (P2) unverifiable selection log | Fixed: a strict JSONL contract and `verify-selection` command bind exact bytes, recompute ranks, and compare declared and materialized selected sets. |
+| F-5 (P3) silent undefined macro components | Fixed: macro blocks report defined and total repository/PR counts per metric. |
+| F-6 (P3) bootstrap percentile mismatch | Fixed: CI endpoints use the same linear-interpolation percentile implementation as resource statistics. |
+| F-7 (P3) zero-only unresolved/malformed fields | Clarified: successful reports identify `fail_closed_before_metrics`; invalid subjects never enter metric calculation. |
+| F-8 (P3) selection before merge | Fixed: `selected_at < merged_at` is rejected. |
+| F-9 (P3) noncanonical timestamps | Fixed: Python and schemas require `YYYY-MM-DDTHH:MM:SSZ`. |
+| F-10 (P3) undiscovered gold injection | Fixed: every gold candidate requires `discovered=true` from at least one independent annotator. |
+| F-11 (P3) schema/runtime authority ambiguity | Fixed: Python is documented as normative, schemas as weaker interoperability references; tests lock top-level property parity. |
+| F-12 (P3) seed/fingerprint value reuse | Fixed: example fingerprint is independent and the seed has auditable provenance. |
+| F-13 (P3) missing fail-closed regression tests | Fixed: unannotated findings, malformed JSONL, and calibration-PR annotations have regression tests. |
 
 ## Delivery record
 
