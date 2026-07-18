@@ -276,6 +276,13 @@ Phase 4 使用本地 content-addressed 镜像串行执行 12 个无网络、只�
 12 个精确容器配置/探针，不是任意镜像、宿主或远程 collector/exporter。全程未下载数据、
 未执行模型产生的工具调用，也未读取既有 eval/holdout。**
 
+独立 Claude 审查未发现 P0/P1；integration 已修复其唯一 P2：Phase 4 结果校验器现在
+从逐行 timeout、exit、cleanup、error 与 evidence 重新派生 `passed`，并单独强制残留
+具名容器为 0。保留的解释限制是：DK-10 只证明具名 host canary 未通过符号链接目标可见，
+不是一般性的符号链接逃逸证明；运行时锁定的是本地 Docker image config ID，合同中的
+`repository_digest` 不是已向 registry 验证的 manifest digest；结果交叉校验器兼作全清
+验收门，因此诚实记录的失败仍会保留在不可变报告中，但验收命令会非零退出。
+
 ### 历史开发基准
 
 - **公开集**：16 diffs / 30 埋点，源自一个真实项目（pingpong tracker）的 bug 蒸馏（dt 感知门、单位/量纲、死旗标、降采样过滤等），含 2 个无埋点陷阱用例（专测误报）与 1 个信息缺失用例（专测"编造 vs 诚实报告"）；ground truth 在 `eval/truth.json`，每个埋点附命中标准，`eval/check_consistency.py` 保证 diff↔fixture↔truth 三方一致

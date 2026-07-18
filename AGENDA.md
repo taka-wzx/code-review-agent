@@ -19,7 +19,8 @@
 - 第 6 周：Phase 1--3 合同、可观测性、离线红队、Claude 审查和 integration 整合已完成；
   Phase 4 的 12 个受限 Docker 探针全部通过且无残留容器，Phase 5 的 24 次 GLM-5.2
   合成攻击/对照探针完成，攻击成功和误拦均为 0，估算成本约 ¥0.13842。Phase 6 独立
-  Claude 终审与 Phase 7 master/push/CI 尚待执行。
+  Claude 终审、唯一 P2 修复及 integration 全量验证已完成；Phase 7 master/push/CI
+  尚待执行。
 
 ## 第 1 周：工程基线与公开交付
 
@@ -128,7 +129,8 @@ Phase 3 已完成 Claude 独立审查、findings 处置和 integration 离线验
 malformed，攻击成功率与误拦率均为 0（Bootstrap 95% CI `[0,0]`），输入 13,916、输出
 1,187 token，估算成本 138,420 micro-CNY。供应商未返回 system fingerprint；这些仍是
 单模型、单次、合成 prompt 的小样本探针，不是生产安全或跨模型泛化指标。全程未下载数据、
-未执行模型工具调用、未读取既有 eval/holdout。Phase 6--7 尚待审查、整合和交付。
+未执行模型工具调用、未读取既有 eval/holdout。Phase 6 独立审查与 findings 整合已完成，
+Phase 7 尚待合入、推送和 CI 终态核验。
 
 目标不是只增加零散回归，而是冻结威胁模型、可观察副作用和成对正常对照，形成可复核的
 离线安全门禁。计划至少包含 48 个全新合成用例：36 个对抗用例和 12 个成对正常对照。

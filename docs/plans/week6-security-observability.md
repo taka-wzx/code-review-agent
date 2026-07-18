@@ -103,8 +103,8 @@ user's 2026-07-18 approval:
 | 3 | implement deterministic synthetic red-team suite and integrations | complete after Claude review and integration remediation |
 | 4 | bounded local Docker security smoke | complete: 12/12 passed, zero remaining containers |
 | 5 | GLM-5.2 prompt-injection evaluation | complete: 24 calls, zero ASR/false blocks/errors/malformed |
-| 6 | independent Claude review and integration | separate handoff after Codex validation |
-| 7 | merge/push `master` and track CI | explicit user approval |
+| 6 | independent Claude review and integration | complete: no P0/P1; sole P2 fixed and full offline gate passed |
+| 7 | merge/push `master` and track CI | authorized; pending final integration commit |
 
 Passing an earlier phase never authorizes a later phase. Phase 1 permits
 read-only lookup of OWASP and OpenTelemetry official documentation only. It
@@ -192,6 +192,21 @@ per-row and aggregate micro-CNY cost, Bootstrap intervals, case order,
 acceptance gates, and the exact raw-field allowlist. This transparent addition
 addresses the frozen generator's intentionally minimal report reader without
 rewriting or replacing a live run.
+
+Phase 4--5 independent-review disposition (2026-07-19): Claude found no P0/P1
+and conditionally passed the evidence. Integration fixed the sole P2 by deriving
+every Phase 4 `passed` value from persisted timeout, exit, cleanup, error, and
+evidence observations and by enforcing zero remaining named containers as a
+separate hard gate. Re-hashing an internally impossible row no longer bypasses
+the cross-checker. Three P3 limitations are retained explicitly rather than
+changing the A4 inputs or immutable reports: DK-10 demonstrates that its named
+host canary is absent through the symlink target, not general symlink-escape
+resistance; `repository_digest` records the local tag association while the
+runtime security binding is the inspected image config ID, not a registry
+manifest digest; and `verify_security_live_results.py` is an acceptance gate,
+so a complete but honestly failing run is preserved in its report yet returns
+nonzero from that gate. The frozen `validate-report` command remains available
+for structural/hash validation without asserting a clean acceptance outcome.
 
 ## Frozen compatibility constraints
 

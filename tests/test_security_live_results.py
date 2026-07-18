@@ -56,6 +56,66 @@ class SecurityLiveResultTests(unittest.TestCase):
         with self.assertRaises(results.ResultValidationError):
             results.validate_phase4(changed, self.profile, A4)
 
+    def test_phase4_rejects_passed_label_inconsistent_with_observations(self) -> None:
+        changed = copy.deepcopy(self.phase4)
+        row = changed["cases"][0]
+        row.update(
+            {
+                "passed": True,
+                "timed_out": True,
+                "exit_code": 99,
+                "container_absent": False,
+                "error_present": True,
+                "evidence": None,
+            }
+        )
+        changed["summary"]["containers_remaining"] = 1
+        changed["report_sha256"] = results.live._report_hash(changed)
+        with self.assertRaisesRegex(
+            results.ResultValidationError,
+            "passed disagrees with persisted observations",
+        ):
+            results.validate_phase4(changed, self.profile, A4)
+
+    def test_phase4_rejects_honest_failure_and_remaining_container(self) -> None:
+        changed = copy.deepcopy(self.phase4)
+        row = changed["cases"][0]
+        row.update(
+            {
+                "passed": False,
+                "timed_out": False,
+                "exit_code": 99,
+                "container_absent": False,
+                "error_present": True,
+                "evidence": None,
+            }
+        )
+        changed["summary"].update(
+            {
+                "passed": 11,
+                "failed_ids": [row["case_id"]],
+                "containers_remaining": 1,
+                "valid": False,
+            }
+        )
+        changed["report_sha256"] = results.live._report_hash(changed)
+        with self.assertRaisesRegex(
+            results.ResultValidationError,
+            "named containers remain",
+        ):
+            results.validate_phase4(changed, self.profile, A4)
+
+    def test_phase4_rejects_slow_case_with_impossible_exit_code(self) -> None:
+        changed = copy.deepcopy(self.phase4)
+        row = changed["cases"][-1]
+        row["exit_code"] = 0
+        changed["report_sha256"] = results.live._report_hash(changed)
+        with self.assertRaisesRegex(
+            results.ResultValidationError,
+            "passed disagrees with persisted observations",
+        ):
+            results.validate_phase4(changed, self.profile, A4)
+
     def test_phase5_rejects_cost_tamper_with_valid_hash(self) -> None:
         changed = copy.deepcopy(self.phase5)
         changed["cases"][0]["cost_micro_cny"] += 1

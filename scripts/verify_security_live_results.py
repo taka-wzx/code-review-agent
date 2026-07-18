@@ -123,6 +123,48 @@ def _rate_summary(
     }
 
 
+def _phase4_observation_passed(row: dict[str, Any]) -> bool:
+    """Derive the Phase 4 outcome from persisted observations, not its label."""
+    case_id = row["case_id"]
+    timed_out = row["timed_out"]
+    exit_code = row["exit_code"]
+    container_absent = row["container_absent"]
+    error_present = row["error_present"]
+    evidence = row["evidence"]
+    _require(isinstance(timed_out, bool), f"phase4 {case_id} timed_out must be boolean")
+    _require(
+        exit_code is None or (isinstance(exit_code, int) and not isinstance(exit_code, bool)),
+        f"phase4 {case_id} exit_code must be an integer or null",
+    )
+    _require(
+        isinstance(container_absent, bool),
+        f"phase4 {case_id} cleanup must be boolean",
+    )
+    _require(
+        isinstance(error_present, bool),
+        f"phase4 {case_id} error_present must be boolean",
+    )
+    _require(
+        evidence is None or isinstance(evidence, dict),
+        f"phase4 {case_id} evidence must be an object or null",
+    )
+    if case_id == "W6-DK-12":
+        return (
+            timed_out
+            and exit_code is None
+            and container_absent
+            and not error_present
+            and evidence is None
+        )
+    return (
+        not timed_out
+        and exit_code == 0
+        and container_absent
+        and not error_present
+        and isinstance(evidence, dict)
+    )
+
+
 def validate_phase4(
     report: dict[str, Any],
     profile: dict[str, Any],
@@ -146,8 +188,12 @@ def validate_phase4(
         _require(isinstance(row, dict), "phase4 row must be an object")
         _exact_keys(row, PHASE4_ROW_KEYS, f"phase4 {row.get('case_id')}")
         _require(isinstance(row["passed"], bool), "phase4 passed must be boolean")
-        _require(isinstance(row["container_absent"], bool), "phase4 cleanup must be boolean")
         _require(isinstance(row["duration_ms"], int) and row["duration_ms"] >= 0, "bad phase4 duration")
+        observed_passed = _phase4_observation_passed(row)
+        _require(
+            row["passed"] is observed_passed,
+            f"phase4 {row['case_id']} passed disagrees with persisted observations",
+        )
         argv = row["argv_profile"]
         _require(isinstance(argv, list) and argv[0:3] == ["docker", "run", "--rm"], "bad phase4 argv")
         joined = " ".join(str(item) for item in argv)
@@ -165,14 +211,16 @@ def validate_phase4(
         ):
             _require(required in joined, f"phase4 argv lacks {required}")
         _require(":\\" not in joined, "phase4 report leaks a Windows host path")
+    containers_remaining = sum(not row["container_absent"] for row in rows)
     summary = {
         "executed": len(rows),
         "passed": sum(bool(row["passed"]) for row in rows),
         "failed_ids": [row["case_id"] for row in rows if not row["passed"]],
-        "containers_remaining": sum(not row["container_absent"] for row in rows),
-        "valid": all(row["passed"] for row in rows),
+        "containers_remaining": containers_remaining,
+        "valid": all(row["passed"] for row in rows) and containers_remaining == 0,
     }
     _require(report["summary"] == summary, "phase4 summary is not derivable from rows")
+    _require(containers_remaining == 0, "phase4 named containers remain")
     _require(summary["valid"] is True, "phase4 acceptance gate failed")
     return summary
 
