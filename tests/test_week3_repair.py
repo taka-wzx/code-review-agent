@@ -589,10 +589,12 @@ class OrchestratorCase(unittest.TestCase):
             error_type="ValueError",
             error_category="internal",
         )
-        self.assertEqual(
-            original.__notes__,
-            ["telemetry close failed: RuntimeError"],
+        expected_notes = (
+            ["telemetry close failed: RuntimeError"]
+            if callable(getattr(original, "add_note", None))
+            else []
         )
+        self.assertEqual(getattr(original, "__notes__", []), expected_notes)
 
     def make_checkpoint(self, worktree, **overrides):
         values = {
