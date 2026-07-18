@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "plan_id": "swebench-repair-configs-week5-v1",
+  "cohort_id": "swebench-verified-week5-v1",
+  "source_commit": "afb6e1fa85701d7b6af5b16198c9dd992740a03d",
+  "primary_configuration_id": "primary",
+  "models_frozen": false,
+  "configurations": [
+    {
+      "configuration_id": "primary",
+      "finder": "dual",
+      "context_retrieval": true,
+      "verifier": true,
+      "repair_reflection": true,
+      "model_slot": "model_a"
+    },
+    {
+      "configuration_id": "single_finder",
+      "finder": "single",
+      "context_retrieval": true,
+      "verifier": true,
+      "repair_reflection": true,
+      "model_slot": "model_a"
+    },
+    {
+      "configuration_id": "no_context",
+      "finder": "dual",
+      "context_retrieval": false,
+      "verifier": true,
+      "repair_reflection": true,
+      "model_slot": "model_a"
+    },
+    {
+      "configuration_id": "no_verifier",
+      "finder": "dual",
+      "context_retrieval": true,
+      "verifier": false,
+      "repair_reflection": true,
+      "model_slot": "model_a"
+    },
+    {
+      "configuration_id": "no_reflection",
+      "finder": "dual",
+      "context_retrieval": true,
+      "verifier": true,
+      "repair_reflection": false,
+      "model_slot": "model_a"
+    },
+    {
+      "configuration_id": "model_b",
+      "finder": "dual",
+      "context_retrieval": true,
+      "verifier": true,
+      "repair_reflection": true,
+      "model_slot": "model_b"
+    }
+  ],
+  "model_slots": {
+    "model_a": {
+      "provider": null,
+      "model": null,
+      "pricing_revision": null
+    },
+    "model_b": {
+      "provider": null,
+      "model": null,
+      "pricing_revision": null
+    }
+  },
+  "per_run_budget": {
+    "total_seconds": 3600,
+    "total_tokens": 120000,
+    "total_cost_microusd": 500000,
+    "tool_calls": 150,
+    "repair_attempts": 2,
+    "test_command_invocations": 10,
+    "command_seconds": 600,
+    "command_output_bytes": 1048576
+  },
+  "docker": {
+    "cpus": 2,
+    "memory_mib": 4096,
+    "pids": 256,
+    "writable_mib": 20480,
+    "network_mode": "none",
+    "read_only_root": true,
+    "run_as_non_root": true,
+    "cap_drop_all": true,
+    "no_new_privileges": true,
+    "maximum_parallel_runs": 2
+  },
+  "reporting_budget": {
+    "tasks": 20,
+    "configurations": 6,
+    "attempts": 120,
+    "cost_ceiling_microusd": 60000000,
+    "container_hour_ceiling": 120
+  },
+  "week5_paid_ceiling_microusd": 80000000,
+  "bootstrap": {
+    "method": "repository_stratified_task_percentile_v1",
+    "seed": 20260718,
+    "replicates": 10000,
+    "confidence": 0.95
+  }
+}
