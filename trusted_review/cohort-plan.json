@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "cohort_id": "week4-trusted-review-v1",
+  "cohort_seed": "2f7eb8f0b6d8fcb4fb6ef65e8e16af5ab43d12af7058d8cbd75f377b2289f12a",
+  "selection_window": {
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2026-01-01T00:00:00Z"
+  },
+  "repositories": [
+    {
+      "slug": "pallets/click",
+      "role": "calibration",
+      "target_prs": 10
+    },
+    {
+      "slug": "pallets/flask",
+      "role": "reporting",
+      "target_prs": 10
+    },
+    {
+      "slug": "psf/requests",
+      "role": "reporting",
+      "target_prs": 10
+    },
+    {
+      "slug": "encode/httpx",
+      "role": "reporting",
+      "target_prs": 10
+    }
+  ],
+  "prs": [],
+  "gold_frozen_at": null,
+  "selection_log_sha256": null
+}

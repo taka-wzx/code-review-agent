@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/trusted-review/cohort-v1.json",
+  "title": "Trusted Review cohort manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cohort_id",
+    "cohort_seed",
+    "selection_window",
+    "repositories",
+    "prs",
+    "gold_frozen_at",
+    "selection_log_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "cohort_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "cohort_seed": {
+      "$ref": "#/$defs/sha256"
+    },
+    "selection_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "end"
+      ],
+      "properties": {
+        "start": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "end": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "repositories": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "slug",
+          "role",
+          "target_prs"
+        ],
+        "properties": {
+          "slug": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+          },
+          "role": {
+            "enum": [
+              "calibration",
+              "reporting"
+            ]
+          },
+          "target_prs": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "prs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pr"
+      }
+    },
+    "gold_frozen_at": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "selection_log_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "pr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pr_id",
+        "repository",
+        "number",
+        "role",
+        "base_sha",
+        "head_sha",
+        "merge_sha",
+        "diff_sha256",
+        "snapshot_sha256",
+        "merged_at",
+        "selected_at",
+        "changed_lines",
+        "change_type",
+        "human_review_comments_present",
+        "author_is_benchmark_implementer",
+        "previously_used",
+        "gold_review_complete",
+        "gold_annotation_set_sha256"
+      ],
+      "properties": {
+        "pr_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$"
+        },
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "role": {
+          "enum": [
+            "calibration",
+            "reporting"
+          ]
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "merge_sha": {
+          "$ref": "#/$defs/sha1"
+        },
+        "diff_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "merged_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "selected_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "changed_lines": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "change_type": {
+          "enum": [
+            "bug_fix",
+            "non_bug_fix"
+          ]
+        },
+        "human_review_comments_present": {
+          "type": "boolean"
+        },
+        "author_is_benchmark_implementer": {
+          "type": "boolean"
+        },
+        "previously_used": {
+          "type": "boolean"
+        },
+        "gold_review_complete": {
+          "type": "boolean"
+        },
+        "gold_annotation_set_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

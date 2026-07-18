@@ -137,20 +137,51 @@ docker run --rm code-review-agent --help
 
 ## 测试与质量
 
-以下为 2026-07-15 在本机（Windows 11，Python 3.13 独立 venv）对当前提交实测的结果，非复制而来：
+以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 4 Codex
+任务分支实测的结果，非复制而来：
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **190 个测试全部通过**（unittest，零 API 调用，0.40s） |
-| 分支覆盖率 | **总计 96%**（`src/` 全包，门禁 `fail_under=85`） |
+| 单测 + golden 测试 | **391 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，25.63s） |
+| 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
-| mypy | 14 个源文件无问题（`check_untyped_defs` 等严格项开启） |
+| mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
-| 评测资产一致性 | eval：16 diffs / 30 埋点一致；holdout：6 diffs / 7 埋点一致 |
+| 评测资产一致性 | **本轮未运行**：Week 4 合同禁止读取现有 `eval/` / `eval/holdout/` |
 
 测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟——Week 1 交付已在私有仓库 `master` 上实际运行通过；**Week 2 改动尚未在 GitHub CI 上运行**，上表为本地离线验证结果。
 
 ## 评测
+
+### 可信 Review 评测框架（Week 4）
+
+Week 4 新增了完全独立于旧 `eval/` / `eval/holdout/` 的可信评测协议和离线统计工具：
+
+- 预注册 4 个仓库、40 个真实 PR 的采集计划：`pallets/click` 的 10 PR 只做 calibration，
+  `pallets/flask`、`psf/requests`、`encode/httpx` 各 10 PR 组成仓库级隔离的 30 PR
+  reporting 集；
+- gold 构建采用两名标注者独立发现/判断，冲突或 uncertain 由第三人仲裁；输出 exact
+  agreement、Cohen's kappa、discovery Jaccard/F1 和仲裁率；
+- `trusted_review_eval.py` 严格校验 cohort/annotation/run schema、逐 PR gold hash 和
+  freeze/run 时间线、snapshot 与 exact model/pricing/runtime 绑定，统计 micro/macro
+  precision、recall、F1、仓库内 PR 分层 Bootstrap 95% CI、成本、p50/p95 时延、工具调用、
+  fail-open/degraded/hard-failure、测试失败和越权事件；
+- reporting 路径拒绝 tuning/prompt-selection/sentinel-design/threshold-search purpose，
+  calibration 与 reporting 仓库重叠、少于 3 仓/30 PR、漏双标/漏仲裁、重复 PR/finding、
+  非有限 telemetry 都 fail closed。
+
+离线验证预注册（不联网、不调用模型、不读取旧 eval）：
+
+```powershell
+python trusted_review_eval.py validate-cohort `
+  --cohort trusted_review\cohort-plan.json
+```
+
+完整协议、标注口径和最终报告命令见
+[`docs/trusted-review-evaluation.md`](docs/trusted-review-evaluation.md)。**当前只完成了评测
+仪器与采集预注册；尚未下载真实 PR、调用外部评测模型或产生任何 30-PR 效果数字。**
+
+### 历史开发基准
 
 - **公开集**：16 diffs / 30 埋点，源自一个真实项目（pingpong tracker）的 bug 蒸馏（dt 感知门、单位/量纲、死旗标、降采样过滤等），含 2 个无埋点陷阱用例（专测误报）与 1 个信息缺失用例（专测"编造 vs 诚实报告"）；ground truth 在 `eval/truth.json`，每个埋点附命中标准，`eval/check_consistency.py` 保证 diff↔fixture↔truth 三方一致
 - **holdout**：6 diffs / 7 埋点 + 1 陷阱，独立 fixture 副本，纪律上只在 prompt/判据迭代验收时运行
@@ -188,10 +219,18 @@ docker run --rm code-review-agent --help
 - **W17**：哨兵族四（缺失反转）+ 鲁棒性双修（API 异常降级语义、anchor 重试）+ GitHub PR 行内评论载荷/dry-run
 - **Week 1 硬化**：src-layout import 解析修复 + 回归测试、dev extra、覆盖率 85% 门禁、mypy 配置、`scripts/verify.py` 一键验证、Dockerfile + CI 容器冒烟、CI 矩阵扩至 3.13；交付后推送私有 GitHub 仓库，master CI 运行通过，发布 v0.1.0 Release
 - **Week 2 延迟韧性（本轮）**：finder 锚定/采样与 verifier A/B 改为阶段内双线程并行（两阶段仍串联）；全程 300s monotonic 软截止（截止后不发起新请求、单请求 timeout 封顶 min(剩余预算, 120s)）；trace 写入线程安全化并新增并行阶段/截止事件；新增并发与超时回归测试（本地离线验证 190 测试 / 96% 覆盖率，真实 provider 延迟基准未做）
+- **Week 3 Review + Repair Agent**：审批绑定的 PLAN→PATCH→TEST→REFLECT 状态机、Docker
+  沙箱、预算/Checkpoint/恢复、两次人工确认；10 个真实 Issue 本地 pilot 和两次受控中断恢复
+  已完成，严格 red-to-green 证据仅覆盖其中后 4 个，不能把 10-run pilot 报成 pass@1
+- **Week 4 可信 Review 评测**：预注册 4 仓/40 PR（密封 reporting 为 3 仓/30 PR），实现
+  双标/仲裁一致率、仓库切分、PR 分层 Bootstrap CI、质量/成本/时延/工具/降级统计和防污染
+  校验；真实数据采集与付费运行仍待单独授权
 
 ## 已知限制
 
 - **真实代码库泛化仍需验证**：评测集源自单一项目的人工植入缺陷；分布外证据目前只有 W16 的 3-commit 真实 PR 抽查（规模小、人工判读）
+- **Week 4 可信集尚未 materialize**：3 仓/30 PR reporting 只是已冻结的采集与统计计划，
+  当前没有真实 PR snapshot、人工 gold 或 Agent 运行数字，不能用框架完成代替泛化结果
 - **评测规模较小**：16+6 diffs、30+7 埋点、n=3 重复跑无显著性检验；mean [min–max] 是 3 点极差，bug 级 bootstrap CI（W14 v2 recall [0.811, 0.978]）才接近决策级区间
 - **judge 与被测 agent 同模型**：self-preference 偏置已被 GLM 交叉重判实测收窄（100% 一致），但两模型共享盲区无法排除；人工校准只有 W2 的 9 埋点（n=9 无统计意义）
 - **holdout 并非严格 held-out**：自 W8 起被跑过 15+ 次并据结果迭代，实际是第二开发集；用途是回归门不是泛化证明

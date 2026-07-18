@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/trusted-review/run-row-v1.json",
+  "title": "Trusted Review run JSONL row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "pr_id",
+    "config_id",
+    "purpose",
+    "source_commit",
+    "provider",
+    "model_id",
+    "pricing_revision",
+    "runtime_config_sha256",
+    "snapshot_sha256",
+    "started_at",
+    "completed_at",
+    "status",
+    "scorable",
+    "cost_microusd",
+    "latency_seconds",
+    "tool_calls",
+    "tool_calls_by_component",
+    "test_status",
+    "unauthorized_operation_count",
+    "findings"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "run_id": {
+      "$ref": "#/$defs/id"
+    },
+    "pr_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$"
+    },
+    "config_id": {
+      "$ref": "#/$defs/id"
+    },
+    "purpose": {
+      "enum": [
+        "final_report",
+        "audit",
+        "annotation"
+      ]
+    },
+    "source_commit": {
+      "$ref": "#/$defs/sha1"
+    },
+    "provider": {
+      "$ref": "#/$defs/id"
+    },
+    "model_id": {
+      "$ref": "#/$defs/id"
+    },
+    "pricing_revision": {
+      "$ref": "#/$defs/id"
+    },
+    "runtime_config_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "snapshot_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "started_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "completed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "degraded",
+        "fail_open",
+        "failed"
+      ]
+    },
+    "scorable": {
+      "type": "boolean"
+    },
+    "cost_microusd": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "latency_seconds": {
+      "type": "number",
+      "minimum": 0
+    },
+    "tool_calls": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tool_calls_by_component": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "test_status": {
+      "enum": [
+        "not_applicable",
+        "not_run",
+        "passed",
+        "failed"
+      ]
+    },
+    "unauthorized_operation_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha1": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "finding_id",
+        "fingerprint_sha256",
+        "path",
+        "line"
+      ],
+      "properties": {
+        "finding_id": {
+          "$ref": "#/$defs/id"
+        },
+        "fingerprint_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/trusted-review/annotation-row-v1.json",
+  "title": "Trusted Review annotation JSONL row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "annotation_id",
+    "subject_kind",
+    "subject_id",
+    "pr_id",
+    "annotator_id",
+    "role",
+    "label",
+    "gold_id",
+    "discovered",
+    "severity",
+    "rationale",
+    "evidence_sha256",
+    "source_annotation_ids",
+    "source_annotation_sha256s",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "annotation_id": {
+      "$ref": "#/$defs/id"
+    },
+    "subject_kind": {
+      "enum": [
+        "gold_candidate",
+        "system_finding"
+      ]
+    },
+    "subject_id": {
+      "$ref": "#/$defs/id"
+    },
+    "pr_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#[1-9][0-9]*$"
+    },
+    "annotator_id": {
+      "$ref": "#/$defs/id"
+    },
+    "role": {
+      "enum": [
+        "annotator",
+        "adjudicator"
+      ]
+    },
+    "label": {
+      "enum": [
+        "valid_defect",
+        "not_defect",
+        "matched",
+        "novel_valid",
+        "invalid",
+        "duplicate",
+        "unscorable",
+        "uncertain"
+      ]
+    },
+    "gold_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "discovered": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "severity": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        null
+      ]
+    },
+    "rationale": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "source_annotation_ids": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/id"
+      }
+    },
+    "source_annotation_sha256s": {
+      "type": "array",
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/sha256"
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

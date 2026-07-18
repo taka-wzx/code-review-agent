@@ -1,0 +1,467 @@
+# Week 4: Trusted Review Evaluation
+
+## Goal
+
+Build an offline, auditable evaluation framework for Review Agent quality. The
+framework must support a newly acquired cohort of at least 30 real pull requests
+from at least three repositories, independent human annotation, adjudication,
+repository-level isolation, deterministic statistics, and explicit degraded or
+fail-open accounting.
+
+Week 4 delivers the protocol, schemas, cohort preregistration, local metric
+implementation, synthetic examples, tests, and documentation. It does not
+claim that the real-PR cohort has already been acquired or evaluated. Network
+download, external review-model calls, paid evaluation, and access to the
+existing `eval/` or `eval/holdout/` assets remain prohibited unless the user
+separately authorizes them.
+
+## Base and delivery
+
+- User-supplied historical baseline: `1bbf47b5576792097358946fe0277921de74069e`
+- Clarified base policy: current latest local `master`
+- Actual base commit: `9564cc817d5d0639b6c31cf4bde540594b38382d`
+- Codex branch: `codex/week4-trusted-review-evaluation`
+- Codex worktree:
+  `E:\shiyan\code_review_agent\traces\worktrees\codex-week4`
+- Planned Claude branch: `claude/week4-trusted-review-evaluation-review`
+- Planned integration branch: `integration/week4-trusted-review-evaluation`
+
+The actual base contains the Week 3 integration commit plus later Windows CI
+path fixes. The user clarified that Week 4 should start from the latest
+`master`, so the historical SHA is recorded for traceability but is not used as
+the branch point.
+
+No task step authorizes a merge, rebase, or push to `master`. No step
+authorizes publication, PR comments, or changes to external repositories.
+
+## Authorization boundary
+
+Authorized local work:
+
+- create the task contract, protocol, preregistration, schemas, examples,
+  metric implementation, tests, and documentation;
+- run offline tests, lint, type checks, coverage, and CLI smoke checks that do
+  not inspect existing evaluation assets;
+- create local task, Claude-review, and integration branches/worktrees;
+- create local handoff and integration commits;
+- run Claude only for the explicitly requested independent code review, without
+  granting Claude access to evaluation data or credentials.
+
+Not authorized:
+
+- network access or downloading PR data;
+- external model calls other than the explicitly requested Claude code-review
+  phase;
+- any paid Review or Repair evaluation;
+- reading, copying, hashing, listing contents of, or running validation against
+  `eval/` or `eval/holdout/`;
+- modifying finder/verifier prompts, sentinel rules, runtime review behavior,
+  existing evaluation scripts/assets, dependencies, lockfiles, packaging, CI,
+  or public APIs;
+- merging or pushing `master`.
+
+If a validation helper would implicitly read `eval/` or `eval/holdout/`, use
+the documented no-eval-assets mode or a focused command instead.
+
+## File ownership
+
+Codex may create or modify only:
+
+- `docs/plans/week4-trusted-review-evaluation.md`
+- `docs/trusted-review-evaluation.md`
+- `trusted_review_eval.py`
+- `trusted_review/cohort-plan.json`
+- `trusted_review/schemas/cohort.schema.json`
+- `trusted_review/schemas/annotations.schema.json`
+- `trusted_review/schemas/runs.schema.json`
+- `trusted_review/examples/annotations.jsonl`
+- `trusted_review/examples/runs.jsonl`
+- `tests/test_trusted_review_eval.py`
+- `README.md`
+- `AGENDA.md`
+
+During the Claude review, Claude owns only:
+
+- `docs/reviews/week4-claude.md`
+
+Claude treats all implementation files as read-only and reports proposed fixes
+with exact paths and tests. Codex may apply confirmed fixes during integration
+only to the Codex-owned paths above. This avoids concurrent writers while
+preserving independent review.
+
+All other paths are read-only. Any ownership expansion requires a contract
+update and explicit user approval before the first edit.
+
+## Evaluation cohort preregistration
+
+The acquisition plan contains two repository-disjoint parts:
+
+| Role | Repository | Target | Purpose |
+| --- | --- | ---: | --- |
+| calibration | `pallets/click` | 10 PRs | annotation training and tool dry-runs only |
+| reporting | `pallets/flask` | 10 PRs | sealed headline evaluation |
+| reporting | `psf/requests` | 10 PRs | sealed headline evaluation |
+| reporting | `encode/httpx` | 10 PRs | sealed headline evaluation |
+
+Thus the sealed reporting set is planned as 30 real PRs from three repositories,
+with a fourth repository supplying ten separate calibration PRs. Repository
+identity, not individual PR identity, is the split unit. A repository may
+appear in exactly one role.
+
+The repository names are preregistered targets, not evidence that any PR data
+has been downloaded. Acquisition requires a later user-approved network phase.
+If a target is unavailable, replacement happens only before selection and is
+recorded as a preregistration amendment; a reporting repository may not be
+replaced after any model result from it has been inspected.
+
+### Deterministic selection
+
+For each repository, an authorized acquisition script or human operator will:
+
+1. enumerate merged, non-draft PRs in the preregistered UTC window;
+2. exclude dependency-only, generated-file-only, documentation-only, vendored,
+   security-embargoed, inaccessible, or non-reproducible PRs;
+3. require a base SHA, head SHA, merge SHA, unified diff, changed-file metadata,
+   and enough repository context to review the change offline;
+4. place eligible PR identities in canonical `owner/repo#number` order;
+5. rank them by `SHA256(cohort_seed + "\n" + canonical_pr_id)`;
+6. take the first ten eligible PRs per repository before any Agent output is
+   generated or inspected.
+
+The cohort seed, window, exclusions, inclusion decisions, snapshot hashes, and
+selection-log hash are immutable after materialization. A PR may occur once.
+Base/head commits and snapshot artifacts are content-addressed.
+
+### Required diversity and exclusions
+
+The materialized reporting cohort must include at least:
+
+- three repositories and ten PRs per repository;
+- two meaningful size bands per repository;
+- bug-fix and non-bug-fix changes, with type hidden from the tested Agent;
+- PRs with and without human review comments;
+- no PR authored by the benchmark implementer;
+- no PR previously used in this repository's prompts, tests, examples,
+  evaluation assets, issue pilot, or manual model inspection.
+
+Selection is outcome-blind. PRs are never included or excluded based on Agent
+quality, human defect count, or whether a model found an issue.
+
+## Data model and immutable lineage
+
+The framework consumes three local artifacts:
+
+1. a cohort manifest containing repository roles, immutable PR identities,
+   commit and artifact hashes, selection metadata, and freeze timestamps;
+2. annotation JSONL containing independent labels and, where required,
+   adjudication;
+3. run JSONL containing one frozen Agent run per PR, its findings, final human
+   judgments, resource usage, status, and policy events.
+
+All schemas carry an integer `schema_version`, canonical IDs, and SHA-256
+bindings. Metric reports include the input file hashes, metric version, seed,
+bootstrap count, split, and creation timestamp. Input order never affects
+results.
+
+The reporting command fails closed when:
+
+- fewer than three reporting repositories or 30 reporting PRs are present;
+- repositories overlap calibration and reporting roles;
+- PRs, snapshot hashes, or run IDs are duplicated;
+- run PRs differ from the selected split;
+- gold annotations were not frozen before model runs;
+- required independent labels or adjudications are missing;
+- an annotation references an unknown PR, finding, or gold unit;
+- a reporting run declares a tuning, development, or prompt-selection purpose;
+- non-finite, negative, or inconsistent telemetry is supplied.
+
+## Annotation protocol
+
+### Roles and blinding
+
+Use two trained annotators, `A` and `B`, who work independently. They cannot see
+each other's labels, Agent outputs during gold construction, repository split
+metrics, or prior model results. Annotator IDs in committed artifacts are
+pseudonyms. A third person `C` adjudicates only after both independent records
+are frozen.
+
+Annotators receive the same offline snapshot, PR intent, repository policy, and
+rubric. File order is randomized independently. The Agent name, model, prompt,
+and ablation are hidden.
+
+### Stage 1: independent defect discovery
+
+Each annotator reviews every calibration or reporting PR without Agent output
+and proposes concrete, actionable defect units. A unit needs:
+
+- stable candidate ID and PR ID;
+- affected file and minimal line/range anchor;
+- claim, failure mechanism, evidence, severity, and match criteria;
+- discovery provenance indicating A, B, or both.
+
+A coordinator canonicalizes the union without deciding validity. Discovery set
+Jaccard and set-F1 are reported before validity adjudication.
+
+### Stage 2: independent validity labels
+
+Both annotators independently label every canonical gold candidate as:
+
+- `valid_defect`
+- `not_defect`
+- `uncertain`
+
+Exact agreement and Cohen's kappa are reported overall and by repository.
+Severity agreement is secondary and never changes whether a unit enters the
+headline recall denominator.
+
+### Stage 3: third-party adjudication
+
+If A and B disagree, either uses `uncertain`, or their match targets differ, C
+must provide an adjudication. C may not silently delete records. The final
+label, rationale, evidence, and source-label hashes are persisted. Agreed
+non-uncertain pairs become final without a C record.
+
+Only final `valid_defect` gold units frozen before any reporting run enter the
+recall denominator.
+
+### Stage 4: system-finding labels
+
+After gold freeze and one frozen run per configuration, A and B independently
+label each system finding:
+
+- `matched` with exactly one frozen gold ID;
+- `novel_valid` for a valid defect outside frozen gold;
+- `invalid`;
+- `duplicate` with the already matched gold ID;
+- `unscorable` for corrupt or missing evidence;
+- `uncertain`.
+
+The same arbitration rule applies. A gold unit may be credited at most once per
+PR; duplicate findings stay in the precision denominator and receive no extra
+recall credit. `novel_valid` counts as valid for precision but is reported
+separately and never retroactively expands the frozen recall denominator.
+`unscorable` stays in the denominator as non-valid unless the entire PR is
+invalidated by a preregistered data-integrity rule.
+
+## Metrics
+
+### Headline Review metrics
+
+For each PR:
+
+- `TP_findings = matched + novel_valid`
+- `FP_findings = invalid + duplicate + unscorable`
+- `TP_gold = number of unique frozen gold IDs matched`
+- `FN_gold = frozen valid gold units - TP_gold`
+- `precision = TP_findings / (TP_findings + FP_findings)`
+- `recall = TP_gold / (TP_gold + FN_gold)`
+- `F1 = 2 * precision * recall / (precision + recall)`
+
+Headline values are micro-aggregated over the sealed reporting split. Undefined
+zero-denominator metrics are JSON `null`, never zero. The report also includes
+per-repository micro metrics, repository-macro metrics, PR-macro metrics, raw
+numerators/denominators, novel-valid count, duplicate count, and unscorable
+count.
+
+### Bootstrap 95% confidence intervals
+
+Use a deterministic percentile bootstrap with a recorded seed and at least
+10,000 replicates for a final report. The sampling unit is PR, stratified by
+repository: sample ten PR records with replacement inside each reporting
+repository, then recompute the complete micro metric. This preserves repository
+weights and within-PR clustering of findings and gold units.
+
+Unit tests may use fewer replicates for speed. Intervals are omitted with an
+explicit reason when fewer than two PRs contribute or a metric is undefined in
+every resample.
+
+### Resource and reliability statistics
+
+Report over all attempted PRs, including failed runs:
+
+- cost in integer micro-USD: total, mean, median, p95, and cost per scorable PR;
+- latency seconds: p50, p95, mean, and maximum;
+- tool calls: total, mean, p50, p95, and optional component breakdown;
+- `fail_open_rate = fail_open runs / attempted runs`;
+- `degraded_rate = degraded runs / attempted runs`;
+- hard-failure rate and scorable-run rate;
+- test-failure rate and unauthorized-operation rate when Repair telemetry is
+  present;
+- status counts and explicit denominators.
+
+`fail_open` and `degraded` are mutually exclusive primary run statuses.
+Account-level authentication or rate-limit failures remain hard failures and
+must not be recoded as fail-open.
+
+## Annotation agreement statistics
+
+The framework reports:
+
+- exact independent-label agreement;
+- Cohen's kappa for categorical validity labels;
+- discovery-set Jaccard and F1;
+- number and rate of arbitrated subjects;
+- number of unresolved or malformed subjects;
+- overall and per-repository breakdowns.
+
+Kappa is `null` with a reason when expected agreement is one or the required
+two-annotator matrix cannot be formed. Adjudicated labels never replace the two
+raw independent labels in agreement calculations.
+
+## Leakage and tuning-pollution controls
+
+- The existing `eval/` and `eval/holdout/` are forbidden inputs and forbidden
+  comparison sources for Week 4.
+- Calibration and reporting repositories are disjoint. Any repo overlap is a
+  fatal validation error.
+- Reporting snapshots, annotations, and results live outside normal model
+  development paths; only content hashes and aggregate reports may be
+  committed after authorization.
+- Gold is frozen before system execution. Run timestamps and purpose fields are
+  validated against the freeze.
+- Reporting data may be opened only for `annotation`, `audit`, or `final_report`
+  purposes. `tuning`, `prompt_selection`, `sentinel_design`, and
+  `threshold_search` are rejected.
+- Version 1 accepts exactly one headline run per PR and preregistered
+  configuration. It does not silently replace infrastructure failures: a
+  headline failure remains a failure. Any future rerun protocol requires a
+  preregistration/schema amendment before results are viewed.
+- No prompt, sentinel, threshold, model, context policy, or decoding parameter
+  may be changed based on reporting outcomes.
+- Ablations are preregistered and run against identical snapshots. Their
+  results support mechanism comparison, not post-hoc variant selection.
+- Report hashes, cohort hashes, annotation hashes, exact model IDs, pricing
+  revision, source commit, and runtime configuration provide an audit trail.
+
+## Preregistered ablations
+
+The later paid phase, if authorized, compares:
+
+1. single Finder;
+2. dual Finder;
+3. context retrieval off/on;
+4. Verifier off/on;
+5. Review-only versus Repair Reflection where applicable;
+6. exact model A versus exact model B.
+
+All configurations are frozen before opening reporting results. The Week 4
+offline implementation does not execute these ablations.
+
+## Implementation requirements
+
+`trusted_review_eval.py` is a repository-only, standard-library CLI and importable
+module. It must:
+
+- load and strictly validate cohort, annotation, and run records;
+- enforce repository split and timeline constraints;
+- resolve two-person labels plus required adjudication;
+- calculate annotation agreement;
+- calculate exact Review counts and metrics;
+- calculate deterministic repository-stratified PR bootstrap intervals;
+- calculate cost, latency, tool-call, degraded, fail-open, failure, test, and
+  policy-violation statistics;
+- emit JSON with input hashes, a report-generation timestamp, and deterministic
+  calculation sections for fixed inputs/seed;
+- make no network, subprocess, SDK, model, GitHub, or evaluation-asset calls.
+
+The implementation uses integer micro-USD for exact cost accounting. JSON
+numbers must be finite. Unknown keys may be rejected where accepting them could
+hide a misspelling in a metric-critical field.
+
+## Validation
+
+Focused development:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_trusted_review_eval
+.\.venv\Scripts\python.exe -m ruff check trusted_review_eval.py tests\test_trusted_review_eval.py
+```
+
+Full offline validation, explicitly without evaluation assets:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\verify.py
+```
+
+The implementation must not run:
+
+```text
+scripts\verify.py --eval-assets
+eval\check_consistency.py
+run_eval.py
+judge.py
+repeat_eval.py
+replay_verifier.py
+bench_verifier.py
+```
+
+Before every handoff or commit:
+
+```powershell
+git status --short
+git diff --check
+git diff --stat <base>...HEAD
+git diff <base>...HEAD
+```
+
+The complete changed-path set must be a subset of the ownership list and must
+contain no secrets, raw PR data, credentials, private paths in committed
+artifacts, generated reports, or unrelated formatting.
+
+## Automated acceptance criteria
+
+- A valid synthetic cohort with one calibration repository and three reporting
+  repositories validates without network or external models.
+- A materialized headline cohort with fewer than 30 PRs or three reporting
+  repositories is rejected.
+- Any calibration/reporting repository overlap or duplicate PR is rejected.
+- Missing second labels, required adjudication, or invalid gold/finding links
+  are rejected.
+- Agreement and kappa use only the two independent labels.
+- Duplicate findings cannot inflate recall and reduce precision as specified.
+- Novel valid findings improve precision but never mutate the frozen recall
+  denominator.
+- Precision, recall, F1, per-repository, macro, bootstrap CI, cost, latency,
+  tool-call, fail-open, degraded, hard-failure, test-failure, and unauthorized
+  rates have deterministic tests including zero denominators.
+- Bootstrap is order-independent for identical canonical inputs and stable for
+  a fixed seed.
+- Reporting runs marked for tuning or started before gold freeze are rejected.
+- Negative, non-finite, duplicate, or internally inconsistent telemetry fails
+  closed.
+- The full offline repository validation passes without reading existing
+  evaluation assets or calling external services.
+
+## Codex, Claude, and integration workflow
+
+1. Codex writes this contract before implementation.
+2. Codex implements only the owned paths, runs focused and full offline
+   validation, reviews the complete diff, and creates one local handoff commit.
+3. Claude reviews the exact handoff commit in a separate worktree. Claude may
+   read the owned implementation and tests but may write only
+   `docs/reviews/week4-claude.md`. The report classifies findings by severity,
+   gives exact evidence, suggests tests/fixes, records commands and results,
+   and creates one local Claude commit. Claude does not use network data,
+   external evaluation models, paid evals, or existing eval assets.
+4. Codex creates `integration/week4-trusted-review-evaluation` from the Codex
+   handoff, integrates the Claude report, applies confirmed fixes within Codex
+   ownership, and records rejected suggestions with rationale.
+5. Codex runs the focused and full offline validation again and reviews the
+   complete integration diff.
+6. Stop on the validated integration branch. Merge or push to `master` only
+   after explicit user confirmation.
+
+## Delivery record
+
+This section is filled only after implementation and integration:
+
+- Codex handoff branch/SHA:
+- Claude review branch/SHA:
+- Integration branch/SHA:
+- Changed files:
+- Focused validation:
+- Full offline validation:
+- Claude findings and dispositions:
+- External/network/paid actions performed:
+- Remaining risks:
+- Ownership deviations:
