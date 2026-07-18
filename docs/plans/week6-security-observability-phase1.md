@@ -10,7 +10,8 @@ This is the normative Phase 1 annex to
 - Phase 1 freeze time: `2026-07-18T08:31:44Z`
 - Contract profile: `crag.observability/v1alpha1`
 - Runtime implementation: Phase 2 authorized at `2026-07-18T08:54:43Z`
-- Synthetic case materialization or execution: not authorized
+- Synthetic case materialization and deterministic offline execution:
+  authorized at `2026-07-18T12:56:11Z` by Amendment A3 below
 - Docker: not authorized
 - External models or agents: not authorized
 - Paid evaluation: not authorized
@@ -466,3 +467,36 @@ A2 does not change:
   authorization.
 
 The hash table above binds the A2 profile and schema.
+
+## Amendment A3: Phase 3 deterministic offline authorization
+
+At `2026-07-18T12:56:11Z`, after Phase 2 implementation, independent Claude
+review, integration remediation, and full offline validation, the user
+explicitly authorized Phase 3.
+
+This authorization permits only:
+
+- materializing the 48 identities already frozen in
+  `security_redteam/case-plan.json` into deterministic synthetic cases;
+- implementing and running effect-recording fake model, tool, filesystem,
+  process, clock, approval, checkpoint, and exporter boundaries;
+- generating and validating deterministic local reports from those cases;
+- updating the Phase 3-owned implementation, tests, schemas, and truthful
+  status documentation listed in this annex.
+
+The input-only `case-plan.json` deliberately remains byte-for-byte unchanged
+with `materialized:false` and all later-phase authorization flags set to
+`false`. Those values attest that the identities and hashes were frozen before
+authorization or results; they are not runtime feature flags. The Phase 3
+runner must verify that preauthorization state before materialization. This A3
+commit is the separate human-authorization anchor.
+
+A3 does not authorize or change:
+
+- any case identity, title, family, risk mapping, expected outcome, matching
+  relationship, forbidden effect, or per-case hash;
+- any Phase 1 machine-readable input or frozen hash;
+- Docker, host process execution, host credential access, network access,
+  dependency installation, external models/agents, paid evaluation, existing
+  evaluation assets, or sealed Week 4/5 artifacts;
+- merge or push of `master`.

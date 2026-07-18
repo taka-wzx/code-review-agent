@@ -14,8 +14,9 @@ Current execution status:
 - Phase 1 contract/profile freeze: complete, including transparent A1/A2
   amendments;
 - Phase 2 observability implementation and default offline validation:
-  complete; manual Claude review and integration are the next gates;
-- Phase 3 synthetic corpus materialization/execution: not authorized;
+  complete; Claude review, P2 remediation, and integration validation complete;
+- Phase 3 synthetic corpus materialization/execution: authorized 2026-07-18;
+  active on an isolated Codex branch;
 - Docker, external-model, and paid-evaluation phases: not authorized.
 
 Week 6 is successful only when:
@@ -68,8 +69,8 @@ user's 2026-07-18 approval:
 | --- | --- | --- |
 | 0 | plan, threat model, budgets, ownership proposal, README/agenda truthfulness | complete at `74a53dfaf84582a2c2d63bcb94e8aee8e559e4db` |
 | 1 | freeze exact telemetry profile, schemas, case plan, and implementation ownership | complete in this contract commit |
-| 2 | implement offline observability core, redaction, validators, and compatibility bridge | authorized 2026-07-18; active |
-| 3 | implement deterministic synthetic red-team suite and integrations | requires user approval |
+| 2 | implement offline observability core, redaction, validators, and compatibility bridge | complete after Claude review and integration remediation |
+| 3 | implement deterministic synthetic red-team suite and integrations | authorized 2026-07-18; active |
 | 4 | bounded local Docker security smoke | separate Docker approval |
 | 5 | optional external-model prompt-injection evaluation | separate model, network, and cost approval |
 | 6 | independent Claude review and integration | separate handoff after Codex validation |
