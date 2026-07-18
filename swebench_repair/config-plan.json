@@ -98,7 +98,7 @@
   },
   "week5_paid_ceiling_microusd": 80000000,
   "bootstrap": {
-    "method": "repository_stratified_task_percentile_v1",
+    "method": "repository_stratified_task_sha256_v2",
     "seed": 20260718,
     "replicates": 10000,
     "confidence": 0.95

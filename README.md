@@ -196,15 +196,17 @@ Verified 离线评测合同与统计仪器：
 - 预注册 30 个候选槽位：5 development、5 tuning、20 sealed reporting；仓库是切分
   单位，三种角色严格仓库隔离，且排除 Week 3/4 已使用或计划使用的仓库；
 - 数据尚未下载时不编造 instance ID；获准 acquisition 后从固定 Verified revision
-  生成 exact-byte selection log，按基线派生 seed 复算 repository/task rank，固定选择
-  4 个 reporting 仓各 5 任务、1 个 tuning 仓 5 任务和 1 个 development 仓 5 任务；
+  生成覆盖冻结 manifest 全量任务的 exact-byte selection log，按 gold patch changed-line
+  固定公式复算 size band，并按基线派生 seed 复算 repository/task rank，固定选择 4 个
+  reporting 仓各 5 任务、1 个 tuning 仓 5 任务和 1 个 development 仓 5 任务；
 - 主配置加 5 个单因素消融：单 Finder、关闭上下文、关闭 Verifier、关闭 Repair
   Reflection、模型 B；完整 reporting 矩阵固定为 20×6=120 个 task/config attempts；
 - `swebench_repair_runner.py` 只做本地严格验证和确定性 run-plan 生成，为每次 attempt
   派生唯一 branch/worktree/container/judge/state 身份，不启动 Git、Docker 或模型；
 - `swebench_repair_eval.py` 在 120 条证据齐全后计算 primary pass@1、配对消融差值、
   每任务成本与 token、p50/p95 时延、平均工具调用、测试失败率、非法操作率、终态统计和仓库内
-  task 分层 Bootstrap 95% CI；
+  task 分层 Bootstrap 95% CI；额外校验 repair/command 预算、真实终止尾差、并发上限及
+  Agent/judge container-hour，Bootstrap 使用跨 Python 版本稳定的 SHA-256 抽样；
 - 网络非 none、root 容器、额外可写挂载、复用 worktree/container/trace、原 checkout
   改变、官方 `FAIL_TO_PASS`/`PASS_TO_PASS` 证据矛盾、漏跑或替换失败 run 都会在指标前
   fail closed。
@@ -268,8 +270,9 @@ SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用�
   校验；真实数据采集与付费运行仍待单独授权
 - **Week 5 可信 Repair 评测**：预注册 SWE-bench Verified 30 任务的开发/调参/报告仓库级
   隔离、20×6 reporting 消融矩阵和 USD 80 总硬上限；实现唯一 Docker/worktree 身份
-  run-plan、pass@1/资源/失败/越权统计及仓库分层配对 Bootstrap CI；真实数据、Docker 与
-  付费运行仍待单独授权
+  run-plan、manifest 完整性/客观 size-band 校验、pass@1/资源/失败/越权统计、并发与
+  container-hour 审计及仓库分层配对 Bootstrap CI；Claude 的 13 项发现已在 integration
+  中逐项处置，真实数据、Docker 与付费运行仍待单独授权
 
 ## 已知限制
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
+import io
 import json
 from pathlib import Path
+import tempfile
 import unittest
 
 import swebench_repair_eval as evaluation
@@ -21,6 +24,12 @@ def _sha(value: str) -> str:
 
 def _timestamp(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_test_timestamp(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
 
 
 def records_bytes(records: list[dict]) -> bytes:
@@ -63,6 +72,10 @@ def make_run_records(
         started = base_time + timedelta(minutes=index * 2)
         duration_seconds = 60 + index
         completed = started + timedelta(seconds=duration_seconds)
+        container_started = started + timedelta(seconds=1)
+        container_completed = completed - timedelta(seconds=20)
+        judge_started = completed - timedelta(seconds=15)
+        judge_completed = completed - timedelta(seconds=2)
         model_slot = config_rows[config_id]["model_slot"]
         f2p_total = row["fail_to_pass_count"]
         p2p_total = row["pass_to_pass_count"]
@@ -70,7 +83,8 @@ def make_run_records(
         test_total = index % 4
         test_failed = 1 if index % 11 == 0 and test_total else 0
         tool_calls = 5 + index % 10
-        operations_total = tool_calls + test_total + 2
+        repair_attempts = 0 if config_id == "no_reflection" else index % 3
+        operations_total = tool_calls
         records.append(
             {
                 "schema_version": 1,
@@ -95,6 +109,9 @@ def make_run_records(
                 "tool_calls": tool_calls,
                 "test_commands_total": test_total,
                 "test_commands_failed": test_failed,
+                "repair_attempts_used": repair_attempts,
+                "max_command_milliseconds": 1000 + index,
+                "max_command_output_bytes": 128 + index,
                 "unauthorized_operations": 0,
                 "operations_total": operations_total,
                 "model": copy.deepcopy(config["model_slots"][model_slot]),
@@ -104,8 +121,12 @@ def make_run_records(
                     "task_branch": row["task_branch"],
                     "container_name": row["container_name"],
                     "container_started": True,
+                    "container_started_at": _timestamp(container_started),
+                    "container_completed_at": _timestamp(container_completed),
                     "judge_container_name": row["judge_container_name"],
                     "judge_container_started": True,
+                    "judge_container_started_at": _timestamp(judge_started),
+                    "judge_container_completed_at": _timestamp(judge_completed),
                     "state_id": row["state_id"],
                     "image_digest": row["image_digest"],
                     "network_mode": "none",
@@ -195,6 +216,8 @@ def mark_unattempted_failure(record: dict, *, status: str) -> None:
     record["resolved"] = False
     record["patch_sha256"] = None
     record["isolation"]["judge_container_started"] = False
+    record["isolation"]["judge_container_started_at"] = None
+    record["isolation"]["judge_container_completed_at"] = None
     record["evaluator"] = {
         "attempted": False,
         "fail_to_pass_total": record["evaluator"]["fail_to_pass_total"],
@@ -235,6 +258,12 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(report["headline"]["tokens_total"]["total"], expected_tokens)
         self.assertEqual(report["headline"]["tool_calls"]["total"], expected_tools)
         self.assertIsNotNone(report["headline"]["latency_milliseconds"]["p95"])
+        self.assertEqual(
+            report["integrity"]["reporting_cost_microusd_observed"],
+            sum(record["cost_microusd"] for record in records),
+        )
+        self.assertFalse(report["integrity"]["reporting_cost_ceiling_exceeded"])
+        self.assertEqual(report["integrity"]["runs_with_budget_overrun"], 0)
 
     def test_test_failure_rates_have_explicit_denominators(self):
         cohort, config, selection, plan, records = make_inputs()
@@ -326,6 +355,8 @@ class EvaluationTests(unittest.TestCase):
     def test_judge_cannot_start_before_agent_container(self):
         cohort, config, selection, plan, records = make_inputs()
         records[0]["isolation"]["container_started"] = False
+        records[0]["isolation"]["container_started_at"] = None
+        records[0]["isolation"]["container_completed_at"] = None
         records[0]["isolation"]["writable_mounts"] = 0
         with self.assertRaisesRegex(
             evaluation.EvaluationValidationError,
@@ -362,7 +393,7 @@ class EvaluationTests(unittest.TestCase):
         target = next(record for record in records if record["configuration_id"] == "primary")
         mark_unattempted_failure(target, status="policy_violation")
         target["unauthorized_operations"] = 1
-        target["operations_total"] = max(1, target["operations_total"])
+        target["operations_total"] = target["tool_calls"] + 1
         normalized = validate(cohort, config, selection, plan, records)
         self.assertFalse(next(r for r in normalized if r["run_id"] == target["run_id"])["resolved"])
         report = make_report(cohort, config, selection, plan, records)
@@ -371,13 +402,16 @@ class EvaluationTests(unittest.TestCase):
             1,
         )
 
-    def test_unauthorized_event_cannot_complete(self):
+    def test_unauthorized_event_can_keep_truthful_completed_status(self):
         cohort, config, selection, plan, records = make_inputs()
-        records[0]["unauthorized_operations"] = 1
-        with self.assertRaisesRegex(
-            evaluation.EvaluationValidationError, "policy violation"
-        ):
-            validate(cohort, config, selection, plan, records)
+        target = next(record for record in records if record["resolved"])
+        target["unauthorized_operations"] = 1
+        target["operations_total"] = target["tool_calls"] + 1
+        target["resolved"] = False
+        observed = validate(cohort, config, selection, plan, records)
+        normalized = next(run for run in observed if run["run_id"] == target["run_id"])
+        self.assertEqual(normalized["status"], "completed")
+        self.assertFalse(normalized["resolved"])
 
     def test_failed_tests_cannot_exceed_total(self):
         cohort, config, selection, plan, records = make_inputs()
@@ -391,14 +425,16 @@ class EvaluationTests(unittest.TestCase):
     def test_cost_budget_is_enforced(self):
         cohort, config, selection, plan, records = make_inputs()
         records[0]["cost_microusd"] = 500001
-        with self.assertRaisesRegex(evaluation.EvaluationValidationError, "cost budget"):
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "settlement grace"
+        ):
             validate(cohort, config, selection, plan, records)
 
     def test_token_budget_is_enforced(self):
         cohort, config, selection, plan, records = make_inputs()
         records[0]["tokens_total"] = 120001
         with self.assertRaisesRegex(
-            evaluation.EvaluationValidationError, "token budget"
+            evaluation.EvaluationValidationError, "settlement grace"
         ):
             validate(cohort, config, selection, plan, records)
 
@@ -406,9 +442,39 @@ class EvaluationTests(unittest.TestCase):
         cohort, config, selection, plan, records = make_inputs()
         records[0]["latency_milliseconds"] = 3600001
         with self.assertRaisesRegex(
-            evaluation.EvaluationValidationError, "latency contradicts|time budget"
+            evaluation.EvaluationValidationError,
+            "latency contradicts|termination grace",
         ):
             validate(cohort, config, selection, plan, records)
+
+    def test_bounded_budget_and_timeout_overruns_are_recorded_truthfully(self):
+        cohort, config, selection, plan, records = make_inputs()
+        budget_target = records[0]
+        mark_unattempted_failure(budget_target, status="budget_exhausted")
+        budget_target["cost_microusd"] = 510000
+
+        timeout_target = records[-1]
+        mark_unattempted_failure(timeout_target, status="timeout")
+        started = datetime(2026, 7, 18, 13, 0, 0, tzinfo=timezone.utc) + timedelta(
+            minutes=119 * 2
+        )
+        completed = started + timedelta(seconds=3604)
+        timeout_target["started_at"] = _timestamp(started)
+        timeout_target["completed_at"] = _timestamp(completed)
+        timeout_target["recorded_at"] = _timestamp(completed + timedelta(seconds=1))
+        timeout_target["latency_milliseconds"] = 3604000
+        timeout_target["isolation"]["container_started_at"] = _timestamp(
+            started + timedelta(seconds=1)
+        )
+        timeout_target["isolation"]["container_completed_at"] = _timestamp(
+            started + timedelta(seconds=20)
+        )
+
+        observed = validate(cohort, config, selection, plan, records)
+        self.assertEqual(len(observed), 120)
+        report = make_report(cohort, config, selection, plan, records)
+        by_run = {row["instance_id"] + row["configuration_id"]: row for row in report["per_task"]}
+        self.assertTrue(any(row["budget_overrun_dimensions"] for row in by_run.values()))
 
     def test_model_binding_is_enforced(self):
         cohort, config, selection, plan, records = make_inputs()
@@ -460,11 +526,29 @@ class EvaluationTests(unittest.TestCase):
         mark_unattempted_failure(target, status="sandbox_failure")
         target["isolation"]["worktree_created"] = False
         target["isolation"]["container_started"] = False
+        target["isolation"]["container_started_at"] = None
+        target["isolation"]["container_completed_at"] = None
         target["isolation"]["writable_mounts"] = 0
         target["isolation"]["cleanup_status"] = "not_created"
         normalized = validate(cohort, config, selection, plan, records)
         observed = next(run for run in normalized if run["run_id"] == target["run_id"])
         self.assertFalse(observed["resolved"])
+
+    def test_created_worktree_with_unstarted_container_is_valid_failure(self):
+        cohort, config, selection, plan, records = make_inputs()
+        target = records[0]
+        mark_unattempted_failure(target, status="sandbox_failure")
+        target["isolation"]["container_started"] = False
+        target["isolation"]["container_started_at"] = None
+        target["isolation"]["container_completed_at"] = None
+        target["isolation"]["writable_mounts"] = 0
+        target["isolation"]["cleanup_status"] = "removed"
+        observed = validate(cohort, config, selection, plan, records)
+        self.assertFalse(
+            next(run for run in observed if run["run_id"] == target["run_id"])[
+                "resolved"
+            ]
+        )
 
     def test_cleanup_quarantine_overrides_official_success(self):
         cohort, config, selection, plan, records = make_inputs()
@@ -477,6 +561,112 @@ class EvaluationTests(unittest.TestCase):
         observed = next(run for run in normalized if run["run_id"] == target["run_id"])
         self.assertFalse(observed["resolved"])
         self.assertTrue(observed["evaluator"]["official_resolved"])
+
+    def test_operations_total_must_match_executed_plus_rejected(self):
+        cohort, config, selection, plan, records = make_inputs()
+        records[0]["operations_total"] -= 1
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "operations_total"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_run_and_container_intervals_need_positive_duration(self):
+        cohort, config, selection, plan, records = make_inputs()
+        records[0]["completed_at"] = records[0]["started_at"]
+        records[0]["recorded_at"] = records[0]["started_at"]
+        records[0]["latency_milliseconds"] = 1
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "timestamps are out of order"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+        cohort, config, selection, plan, records = make_inputs()
+        records[0]["isolation"]["container_completed_at"] = records[0][
+            "isolation"
+        ]["container_started_at"]
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "timestamps are out of order"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_no_reflection_cannot_report_a_repair_attempt(self):
+        cohort, config, selection, plan, records = make_inputs()
+        target = next(
+            record
+            for record in records
+            if record["configuration_id"] == "no_reflection"
+        )
+        target["repair_attempts_used"] = 1
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "repair-attempt"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_test_failure_status_needs_a_failed_test(self):
+        cohort, config, selection, plan, records = make_inputs()
+        target = records[0]
+        mark_unattempted_failure(target, status="test_failure")
+        target["test_commands_failed"] = 0
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "failed test command"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_more_than_two_parallel_runs_is_rejected(self):
+        cohort, config, selection, plan, records = make_inputs()
+        started = datetime(2026, 7, 18, 13, 0, 0, tzinfo=timezone.utc)
+        completed = started + timedelta(seconds=120)
+        for record in records[:3]:
+            record["started_at"] = _timestamp(started)
+            record["completed_at"] = _timestamp(completed)
+            record["recorded_at"] = _timestamp(completed + timedelta(seconds=1))
+            record["latency_milliseconds"] = 120000
+            record["isolation"]["container_started_at"] = _timestamp(
+                started + timedelta(seconds=1)
+            )
+            record["isolation"]["container_completed_at"] = _timestamp(
+                started + timedelta(seconds=90)
+            )
+            record["isolation"]["judge_container_started_at"] = _timestamp(
+                started + timedelta(seconds=90)
+            )
+            record["isolation"]["judge_container_completed_at"] = _timestamp(
+                started + timedelta(seconds=110)
+            )
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "maximum_parallel_runs"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_reused_checkpoint_hash_is_rejected(self):
+        cohort, config, selection, plan, records = make_inputs()
+        records[1]["hashes"]["checkpoint_sha256"] = records[0]["hashes"][
+            "checkpoint_sha256"
+        ]
+        with self.assertRaisesRegex(
+            evaluation.EvaluationValidationError, "checkpoint"
+        ):
+            validate(cohort, config, selection, plan, records)
+
+    def test_exact_resource_budget_boundaries_are_accepted(self):
+        cohort, config, selection, plan, records = make_inputs()
+        target = records[-1]
+        budget = plan["rows"][-1]["budget"]
+        target["cost_microusd"] = budget["total_cost_microusd"]
+        target["tokens_total"] = budget["total_tokens"]
+        target["tool_calls"] = budget["tool_calls"]
+        target["test_commands_total"] = budget["test_command_invocations"]
+        target["test_commands_failed"] = 0
+        target["repair_attempts_used"] = budget["repair_attempts"]
+        target["max_command_milliseconds"] = budget["command_seconds"] * 1000
+        target["max_command_output_bytes"] = budget["command_output_bytes"]
+        target["operations_total"] = target["tool_calls"]
+        started = _parse_test_timestamp(target["started_at"])
+        completed = started + timedelta(seconds=budget["total_seconds"])
+        target["completed_at"] = _timestamp(completed)
+        target["recorded_at"] = _timestamp(completed + timedelta(seconds=1))
+        target["latency_milliseconds"] = budget["total_seconds"] * 1000
+        self.assertEqual(len(validate(cohort, config, selection, plan, records)), 120)
 
     def test_zero_denominator_is_null(self):
         self.assertEqual(
@@ -526,6 +716,52 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(set(schema["properties"]), set(rows[0]))
         self.assertFalse(rows[0]["resolved"])
         self.assertEqual(rows[0]["status"], "sandbox_failure")
+
+    def test_cli_validates_runs_and_refuses_unsafe_report_output(self):
+        cohort, config, selection, plan, records = make_inputs()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cohort_path = root / "cohort.json"
+            config_path = root / "config.json"
+            selection_path = root / "selection.jsonl"
+            plan_path = root / "run-plan.json"
+            runs_path = root / "runs.jsonl"
+            cohort_path.write_text(json.dumps(cohort), encoding="utf-8")
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            selection_path.write_bytes(selection)
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            runs_path.write_bytes(records_bytes(records))
+            common = [
+                "--cohort",
+                str(cohort_path),
+                "--config",
+                str(config_path),
+                "--selection-log",
+                str(selection_path),
+                "--run-plan",
+                str(plan_path),
+                "--runs",
+                str(runs_path),
+            ]
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                result = evaluation.main(["validate-runs", *common])
+            self.assertEqual(result, 0)
+            self.assertEqual(json.loads(output.getvalue())["runs"], 120)
+
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors), self.assertRaises(SystemExit):
+                evaluation.main(
+                    [
+                        "report",
+                        *common,
+                        "--created-at",
+                        REPORT_CREATED_AT,
+                        "--out",
+                        str(root / "eval." / "report.json"),
+                    ]
+                )
+            self.assertIn("forbidden inputs or outputs", errors.getvalue())
 
 
 if __name__ == "__main__":

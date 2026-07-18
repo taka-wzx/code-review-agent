@@ -49,7 +49,7 @@ def make_frozen_config() -> dict:
 def make_materialized_cohort() -> tuple[dict, bytes]:
     cohort = runner.load_json(ROOT / "swebench_repair" / "cohort-plan.json")
     seed = cohort["selection"]["seed"]
-    repositories = [f"example/repo-{letter}" for letter in "abcdef"]
+    repositories = [f"example/repo-{letter}" for letter in "abcdefg"]
     candidates_by_repo: dict[str, list[dict]] = {}
     for repo in repositories:
         token = repo.rsplit("-", 1)[1]
@@ -71,9 +71,9 @@ def make_materialized_cohort() -> tuple[dict, bytes]:
             )
         rows.sort(key=lambda row: row["task_rank_sha256"])
         for index, row in enumerate(rows):
-            row["size_band"] = "medium" if index == 4 else (
-                "large" if index == 5 else "small"
-            )
+            changed_lines = 10 if index == 4 else (30 if index == 5 else index + 1)
+            row["patch_changed_lines"] = changed_lines
+            row["size_band"] = runner.size_band_for_changed_lines(changed_lines)
         candidates_by_repo[repo] = rows
 
     ranked_repositories = sorted(
@@ -90,10 +90,12 @@ def make_materialized_cohort() -> tuple[dict, bytes]:
     selection_rows: list[dict] = []
     tasks: list[dict] = []
     for repo in sorted(repositories):
-        role = roles[repo]
+        role = roles.get(repo)
         for index, row in enumerate(candidates_by_repo[repo]):
-            row["role"] = role
-            row["selected"] = index < runner.TASKS_PER_REPOSITORY
+            row["selected"] = (
+                role is not None and index < runner.TASKS_PER_REPOSITORY
+            )
+            row["role"] = role if row["selected"] else None
             selection_rows.append(row)
             if row["selected"]:
                 instance_id = row["instance_id"]
@@ -113,6 +115,7 @@ def make_materialized_cohort() -> tuple[dict, bytes]:
                         "image_digest": f"sha256:{_sha256(f'image:{instance_id}')}",
                         "fail_to_pass_count": 1 + (index % 2),
                         "pass_to_pass_count": index % 3,
+                        "patch_changed_lines": row["patch_changed_lines"],
                         "size_band": row["size_band"],
                         "repository_rank_sha256": row[
                             "repository_rank_sha256"
@@ -131,6 +134,7 @@ def make_materialized_cohort() -> tuple[dict, bytes]:
         "name": runner.DATASET_NAME,
         "revision": "1" * 40,
         "manifest_sha256": "2" * 64,
+        "manifest_task_count": len(selection_rows),
         "harness_revision": "3" * 40,
     }
     cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(
@@ -175,6 +179,12 @@ class RunnerPlanTests(unittest.TestCase):
         rows = runner.validate_selection(cohort, selection)
         self.assertEqual(sum(row["selected"] for row in rows), 30)
         self.assertEqual(len(cohort["tasks"]), 30)
+        self.assertTrue(
+            any(
+                row["eligible"] and not row["selected"] and row["role"] is None
+                for row in rows
+            )
+        )
 
     def test_run_plan_has_complete_matrix(self):
         _cohort, _config, _selection, plan = make_run_plan()
@@ -277,14 +287,19 @@ class RunnerPlanTests(unittest.TestCase):
     def test_selection_log_needs_six_allocatable_repositories(self):
         cohort, selection = make_materialized_cohort()
         rows = runner.load_jsonl_bytes(selection, label="selection")
-        removed_repo = rows[0]["repository"]
-        rows = [row for row in rows if row["repository"] != removed_repo]
+        removed_repositories = set(
+            sorted({row["repository"] for row in rows})[:2]
+        )
+        rows = [
+            row for row in rows if row["repository"] not in removed_repositories
+        ]
         data = b"".join(
             json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
             + b"\n"
             for row in rows
         )
         cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
+        cohort["dataset"]["manifest_task_count"] = len(rows)
         with self.assertRaisesRegex(runner.PlanValidationError, "six allocatable"):
             runner.validate_selection(cohort, data)
 
@@ -316,7 +331,9 @@ class RunnerPlanTests(unittest.TestCase):
             for row in rows
         )
         cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
-        with self.assertRaisesRegex(runner.PlanValidationError, "selection flag"):
+        with self.assertRaisesRegex(
+            runner.PlanValidationError, "selection flag|selected row"
+        ):
             runner.validate_selection(cohort, data)
 
     def test_single_size_band_repository_is_not_allocatable(self):
@@ -325,6 +342,7 @@ class RunnerPlanTests(unittest.TestCase):
         target_repo = rows[0]["repository"]
         for row in rows:
             if row["repository"] == target_repo:
+                row["patch_changed_lines"] = 1
                 row["size_band"] = "small"
         data = b"".join(
             json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
@@ -332,7 +350,79 @@ class RunnerPlanTests(unittest.TestCase):
             for row in rows
         )
         cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
-        with self.assertRaisesRegex(runner.PlanValidationError, "six allocatable"):
+        with self.assertRaisesRegex(
+            runner.PlanValidationError, "six allocatable|selection role mismatch"
+        ):
+            runner.validate_selection(cohort, data)
+
+    def test_assigned_repository_may_include_ineligible_audit_row(self):
+        cohort, selection = make_materialized_cohort()
+        rows = runner.load_jsonl_bytes(selection, label="selection")
+        assigned_repo = cohort["tasks"][0]["repository"]
+        instance_id = "excluded_flaky_task"
+        rows.append(
+            {
+                "instance_id": instance_id,
+                "repository": assigned_repo,
+                "eligible": False,
+                "exclusion_reason": "flaky",
+                "selected": False,
+                "role": None,
+                "patch_changed_lines": 2,
+                "size_band": "small",
+                "repository_rank_sha256": runner.repository_rank(
+                    cohort["selection"]["seed"], assigned_repo
+                ),
+                "task_rank_sha256": runner.task_rank(
+                    cohort["selection"]["seed"], instance_id
+                ),
+            }
+        )
+        data = b"".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+            for row in rows
+        )
+        cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
+        cohort["dataset"]["manifest_task_count"] = len(rows)
+        observed = runner.validate_selection(cohort, data)
+        self.assertFalse(next(row for row in observed if row["instance_id"] == instance_id)["selected"])
+
+        rows[-1]["role"] = cohort["tasks"][0]["role"]
+        bad_data = b"".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+            for row in rows
+        )
+        cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(bad_data)
+        with self.assertRaisesRegex(runner.PlanValidationError, "excluded row"):
+            runner.validate_selection(cohort, bad_data)
+
+    def test_manifest_task_count_prevents_silent_selection_row_deletion(self):
+        cohort, selection = make_materialized_cohort()
+        rows = runner.load_jsonl_bytes(selection, label="selection")
+        data = b"".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+            for row in rows[:-1]
+        )
+        cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
+        with self.assertRaisesRegex(runner.PlanValidationError, "manifest task count"):
+            runner.validate_selection(cohort, data)
+
+    def test_size_band_is_recomputed_from_changed_lines(self):
+        cohort, selection = make_materialized_cohort()
+        rows = runner.load_jsonl_bytes(selection, label="selection")
+        rows[0]["size_band"] = (
+            "large" if rows[0]["size_band"] != "large" else "small"
+        )
+        data = b"".join(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+            + b"\n"
+            for row in rows
+        )
+        cohort["selection"]["selection_log_sha256"] = runner.sha256_bytes(data)
+        with self.assertRaisesRegex(runner.PlanValidationError, "size_band"):
             runner.validate_selection(cohort, data)
 
     def test_configuration_tampering_is_rejected(self):
@@ -390,7 +480,14 @@ class RunnerPlanTests(unittest.TestCase):
 
     def test_existing_eval_or_holdout_path_is_rejected_before_read(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for directory in ("eval", "holdout"):
+            for directory in (
+                "eval",
+                "holdout",
+                "EVAL.",
+                "holdout ",
+                "EVAL~1",
+                "HOLDOUT~1",
+            ):
                 path = Path(tmp) / directory / "missing.json"
                 with self.assertRaisesRegex(
                     runner.PlanValidationError, "forbidden inputs or outputs"

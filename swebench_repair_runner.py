@@ -21,6 +21,8 @@ from typing import Any, Iterable, Mapping, Sequence
 SCHEMA_VERSION = 1
 DATASET_NAME = "princeton-nlp/SWE-bench_Verified"
 COHORT_METHOD = "sha256_repo_then_task_v1"
+SIZE_BAND_METHOD = "gold_patch_changed_lines_v1"
+BOOTSTRAP_METHOD = "repository_stratified_task_sha256_v2"
 SEED_DERIVATION = (
     "sha256(swebench-repair-cohort-v1\\0 + ascii(source_commit))"
 )
@@ -98,8 +100,10 @@ REPOSITORY = re.compile(
     r"^[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?/"
     r"[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?$"
 )
+TASK_BRANCH = re.compile(r"^repair/[a-z0-9]+(?:-[a-z0-9]+)*$")
 CANONICAL_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 FORBIDDEN_ARTIFACT_DIRECTORIES = {"eval", "holdout"}
+FORBIDDEN_SHORT_PATH = re.compile(r"^(?:eval|holdou?t)~[0-9]+$", re.IGNORECASE)
 
 
 class PlanValidationError(ValueError):
@@ -123,10 +127,16 @@ def safe_artifact_path(path: Path) -> Path:
     """Resolve a path and reject any existing-evaluation directory component."""
 
     resolved = path.resolve()
-    if any(
-        part.casefold() in FORBIDDEN_ARTIFACT_DIRECTORIES
-        for part in resolved.parts
-    ):
+    unsafe = False
+    for part in resolved.parts:
+        windows_normalized = part.rstrip(" .").casefold()
+        if (
+            windows_normalized in FORBIDDEN_ARTIFACT_DIRECTORIES
+            or FORBIDDEN_SHORT_PATH.fullmatch(windows_normalized) is not None
+        ):
+            unsafe = True
+            break
+    if unsafe:
         raise PlanValidationError(
             f"existing eval/holdout assets are forbidden inputs or outputs: {resolved}"
         )
@@ -212,6 +222,17 @@ def canonical_sha256(value: Any) -> str:
 def derive_cohort_seed(source_commit: str) -> str:
     _hex(source_commit, 40, "source_commit")
     return sha256_bytes(SEED_DOMAIN + source_commit.encode("ascii"))
+
+
+def size_band_for_changed_lines(changed_lines: int) -> str:
+    """Derive the preregistered coarse band from gold-patch changed lines."""
+
+    changed_lines = _integer(changed_lines, "patch_changed_lines", minimum=1)
+    if changed_lines <= 5:
+        return "small"
+    if changed_lines <= 20:
+        return "medium"
+    return "large"
 
 
 def repository_rank(seed: str, repository: str) -> str:
@@ -359,7 +380,13 @@ def validate_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
     dataset = _object(cohort["dataset"], "cohort.dataset")
     _exact_keys(
         dataset,
-        {"name", "revision", "manifest_sha256", "harness_revision"},
+        {
+            "name",
+            "revision",
+            "manifest_sha256",
+            "manifest_task_count",
+            "harness_revision",
+        },
         "cohort.dataset",
     )
     if _text(dataset["name"], "cohort.dataset.name") != DATASET_NAME:
@@ -367,9 +394,19 @@ def validate_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
     if materialized:
         _hex(dataset["revision"], 40, "cohort.dataset.revision")
         _hex(dataset["manifest_sha256"], 64, "cohort.dataset.manifest_sha256")
+        _integer(
+            dataset["manifest_task_count"],
+            "cohort.dataset.manifest_task_count",
+            minimum=1,
+        )
         _hex(dataset["harness_revision"], 40, "cohort.dataset.harness_revision")
     else:
-        for name in ("revision", "manifest_sha256", "harness_revision"):
+        for name in (
+            "revision",
+            "manifest_sha256",
+            "manifest_task_count",
+            "harness_revision",
+        ):
             if dataset[name] is not None:
                 raise PlanValidationError(
                     f"unmaterialized cohort dataset.{name} must be null"
@@ -380,6 +417,7 @@ def validate_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
         selection,
         {
             "method",
+            "size_band_method",
             "seed_derivation",
             "seed",
             "selection_log_sha256",
@@ -389,6 +427,11 @@ def validate_cohort(cohort: dict[str, Any]) -> dict[str, Any]:
     )
     if _text(selection["method"], "cohort.selection.method") != COHORT_METHOD:
         raise PlanValidationError("unsupported cohort selection method")
+    if (
+        _text(selection["size_band_method"], "cohort.selection.size_band_method")
+        != SIZE_BAND_METHOD
+    ):
+        raise PlanValidationError("unsupported cohort size-band method")
     if (
         _text(selection["seed_derivation"], "cohort.selection.seed_derivation")
         != SEED_DERIVATION
@@ -568,6 +611,7 @@ def _validate_task(value: Any, index: int) -> dict[str, Any]:
             "image_digest",
             "fail_to_pass_count",
             "pass_to_pass_count",
+            "patch_changed_lines",
             "size_band",
             "repository_rank_sha256",
             "task_rank_sha256",
@@ -599,12 +643,18 @@ def _validate_task(value: Any, index: int) -> dict[str, Any]:
         f"cohort.tasks[{index}].pass_to_pass_count",
         minimum=0,
     )
-    if _text(task["size_band"], f"cohort.tasks[{index}].size_band") not in {
-        "small",
-        "medium",
-        "large",
-    }:
-        raise PlanValidationError(f"cohort.tasks[{index}].size_band is invalid")
+    changed_lines = _integer(
+        task["patch_changed_lines"],
+        f"cohort.tasks[{index}].patch_changed_lines",
+        minimum=1,
+    )
+    if (
+        _text(task["size_band"], f"cohort.tasks[{index}].size_band")
+        != size_band_for_changed_lines(changed_lines)
+    ):
+        raise PlanValidationError(
+            f"cohort.tasks[{index}].size_band does not match {SIZE_BAND_METHOD}"
+        )
     return task
 
 
@@ -624,6 +674,10 @@ def validate_selection(
         _validate_selection_row(row, index, cohort["selection"]["seed"])
         for index, row in enumerate(rows)
     ]
+    if len(normalized) != cohort["dataset"]["manifest_task_count"]:
+        raise PlanValidationError(
+            "selection log row count differs from frozen manifest task count"
+        )
     ids = [row["instance_id"] for row in normalized]
     if len(set(ids)) != len(ids):
         raise PlanValidationError("selection log contains duplicate instance_id")
@@ -672,12 +726,17 @@ def validate_selection(
             expected_selected.update(item["instance_id"] for item in selected)
 
     for row in normalized:
-        expected_role = expected_role_by_repo.get(row["repository"])
+        expected_selected_flag = row["instance_id"] in expected_selected
+        expected_role = (
+            expected_role_by_repo.get(row["repository"])
+            if expected_selected_flag
+            else None
+        )
         if row["role"] != expected_role:
             raise PlanValidationError(
                 f"selection role mismatch for {row['instance_id']}"
             )
-        if row["selected"] != (row["instance_id"] in expected_selected):
+        if row["selected"] != expected_selected_flag:
             raise PlanValidationError(
                 f"selection flag mismatch for {row['instance_id']}"
             )
@@ -693,6 +752,7 @@ def validate_selection(
         fields = (
             "repository",
             "role",
+            "patch_changed_lines",
             "size_band",
             "repository_rank_sha256",
             "task_rank_sha256",
@@ -717,6 +777,7 @@ def _validate_selection_row(
             "exclusion_reason",
             "selected",
             "role",
+            "patch_changed_lines",
             "size_band",
             "repository_rank_sha256",
             "task_rank_sha256",
@@ -752,9 +813,24 @@ def _validate_selection_row(
         role = _text(role, f"selection[{index}].role")
         if role not in ROLE_TARGETS:
             raise PlanValidationError(f"selection[{index}] role is invalid")
-    size_band = _text(row["size_band"], f"selection[{index}].size_band")
-    if size_band not in {"small", "medium", "large"}:
-        raise PlanValidationError(f"selection[{index}] size_band is invalid")
+    if selected and role is None:
+        raise PlanValidationError(f"selection[{index}] selected row needs a role")
+    if not selected and role is not None:
+        raise PlanValidationError(
+            f"selection[{index}] unselected row must have a null role"
+        )
+    changed_lines = _integer(
+        row["patch_changed_lines"],
+        f"selection[{index}].patch_changed_lines",
+        minimum=1,
+    )
+    if (
+        _text(row["size_band"], f"selection[{index}].size_band")
+        != size_band_for_changed_lines(changed_lines)
+    ):
+        raise PlanValidationError(
+            f"selection[{index}] size_band does not match {SIZE_BAND_METHOD}"
+        )
     expected_repo_rank = repository_rank(seed, repo)
     expected_task_rank = task_rank(seed, instance_id)
     if (
@@ -979,7 +1055,7 @@ def validate_config_plan(
     )
     if (
         _text(bootstrap["method"], "config.bootstrap.method")
-        != "repository_stratified_task_percentile_v1"
+        != BOOTSTRAP_METHOD
     ):
         raise PlanValidationError("unsupported bootstrap method")
     _integer(bootstrap["seed"], "config.bootstrap.seed", minimum=0)
@@ -1330,7 +1406,7 @@ def _validate_run_plan_row(value: Any, index: int) -> dict[str, Any]:
     ):
         _identifier(row[name], f"run_plan.rows[{index}].{name}")
     task_branch = _text(row["task_branch"], f"run_plan.rows[{index}].task_branch")
-    if not task_branch.startswith("repair/") or ".." in task_branch:
+    if TASK_BRANCH.fullmatch(task_branch) is None:
         raise PlanValidationError(f"run-plan row {index} has unsafe task_branch")
     for name in (
         "worktree_path_token_sha256",

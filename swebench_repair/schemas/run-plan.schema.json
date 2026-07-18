@@ -79,7 +79,8 @@
     },
     "repository": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+      "pattern": "^[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?$",
+      "maxLength": 201
     },
     "sha1": {
       "type": "string",
@@ -258,7 +259,7 @@
         },
         "task_branch": {
           "type": "string",
-          "pattern": "^repair/[a-z0-9-]+$"
+          "pattern": "^repair/[a-z0-9]+(?:-[a-z0-9]+)*$"
         },
         "worktree_id": {
           "$ref": "#/$defs/identifier"

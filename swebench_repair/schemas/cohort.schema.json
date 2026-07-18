@@ -36,6 +36,7 @@
         "name",
         "revision",
         "manifest_sha256",
+        "manifest_task_count",
         "harness_revision"
       ],
       "properties": {
@@ -62,6 +63,17 @@
             }
           ]
         },
+        "manifest_task_count": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "harness_revision": {
           "anyOf": [
             {
@@ -79,6 +91,7 @@
       "additionalProperties": false,
       "required": [
         "method",
+        "size_band_method",
         "seed_derivation",
         "seed",
         "selection_log_sha256",
@@ -87,6 +100,9 @@
       "properties": {
         "method": {
           "const": "sha256_repo_then_task_v1"
+        },
+        "size_band_method": {
+          "const": "gold_patch_changed_lines_v1"
         },
         "seed_derivation": {
           "type": "string"
@@ -243,7 +259,8 @@
     },
     "repository": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+      "pattern": "^[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?$",
+      "maxLength": 201
     },
     "sha1": {
       "type": "string",
@@ -271,6 +288,7 @@
         "image_digest",
         "fail_to_pass_count",
         "pass_to_pass_count",
+        "patch_changed_lines",
         "size_band",
         "repository_rank_sha256",
         "task_rank_sha256"
@@ -311,6 +329,10 @@
         "pass_to_pass_count": {
           "type": "integer",
           "minimum": 0
+        },
+        "patch_changed_lines": {
+          "type": "integer",
+          "minimum": 1
         },
         "size_band": {
           "enum": [

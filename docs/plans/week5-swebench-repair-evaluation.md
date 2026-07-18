@@ -114,7 +114,9 @@ IDs, repository snapshots, issue text, gold patches, or test specifications.
 The absence is required by the user's no-download boundary. Task IDs must not
 be invented from memory. A later acquisition commit must replace the placeholder
 revision with an immutable revision and bind the byte hash of the complete
-candidate-selection log before any model run.
+candidate-selection log before any model run. It must also freeze the raw
+manifest task count. The exact-byte selection log must contain exactly that
+many rows, so changing its hash cannot conceal a deleted candidate row.
 
 ### Target size and split
 
@@ -177,6 +179,19 @@ For this base it is:
 
 `39a89ee8c3368d08f2444ce84c5c86294bef36b2164397f514b50b01be963ce0`
 
+The acquisition controller computes `patch_changed_lines` from the frozen
+official gold patch as the number of added plus deleted content lines, excluding
+diff headers. The immutable method ID is `gold_patch_changed_lines_v1`:
+
+- `small`: 1--5 changed lines;
+- `medium`: 6--20 changed lines;
+- `large`: 21 or more changed lines.
+
+The controller may derive this sealed metadata, but neither the developer nor
+the Agent receives the gold patch. The validator recomputes every `size_band`
+from `patch_changed_lines`; a free-form band cannot influence repository
+allocation.
+
 After objective eligibility screening:
 
 1. canonicalize every instance ID and repository identity;
@@ -188,9 +203,14 @@ After objective eligibility screening:
 5. rank tasks within a repository by
    `SHA256(seed + "\ntask\n" + canonical_instance_id)`;
 6. take tasks in rank order while satisfying only preregistered repository and
-   coarse size-band quotas;
-7. record every candidate, exclusion reason, rank, role, and selected flag in
+   fixed size-band quotas;
+7. record every manifest task, eligibility decision, exclusion reason,
+   changed-line count, derived band, rank, selected flag, and selected role in
    an exact-byte JSONL selection log.
+
+Only selected rows carry a role. Every unselected row, including ineligible
+rows inside an assigned repository and rank-six-or-later eligible rows, carries
+`role: null`. The log row count must equal the frozen raw-manifest task count.
 
 No selection or exclusion may depend on Agent success, test outcome after an
 Agent patch, token/cost use, model familiarity, issue difficulty inferred from
@@ -250,7 +270,7 @@ not enter reporting metrics.
 
 ## Resource budget
 
-### Per task/config hard limits
+### Per task/config launch and reservation limits
 
 | Resource | Limit |
 | --- | ---: |
@@ -280,6 +300,16 @@ run counts, and aggregate ceiling. The ledger reserves worst-case cost before
 each request. Unknown pricing, an unbound model alias, a missing usage record,
 or an exhausted per-task/config/global ledger fails closed.
 
+The limits prohibit starting new work; they are not instructions to clamp
+observed telemetry. A `budget_exhausted` record may truthfully carry up to 5%
+post-response settlement tail for tokens/cost and one already-in-flight
+tool/test operation. A `timeout` or `budget_exhausted` record may carry up to
+5 seconds of process-termination latency and up to 1 second of command-kill
+latency. These bounded tails authorize no additional request or operation.
+Every exceeded dimension is emitted per task. Command output is truncated at
+the frozen byte cap and repair-attempt count never receives a grace allowance;
+values beyond those caps remain invalid evidence.
+
 At most two task/config runs may execute concurrently. The full reporting
 matrix has a 120 container-hour hard ceiling and must stop on any cohort-wide
 integrity failure. Docker image acquisition/build time is accounted separately
@@ -289,8 +319,8 @@ and cannot be hidden inside Agent latency.
 
 Every `(instance_id, configuration_id)` attempt receives:
 
-- a unique `run_id`, `repair/<instance>-<run-id>` branch, and fresh worktree
-  from the exact task base SHA;
+- a unique `run_id`, `repair/<slug-at-most-32>-<identity-prefix-12>` branch,
+  and fresh worktree from the exact task base SHA;
 - a unique container namespace and content-addressed image digest;
 - task worktree as the only writable bind mount;
 - read-only container root, non-root UID/GID, all capabilities dropped,
@@ -302,10 +332,12 @@ Every `(instance_id, configuration_id)` attempt receives:
 - a disjoint state/checkpoint directory outside every repository/worktree;
 - pre/post original-checkout snapshots and cleanup/quarantine evidence.
 
-Worktree paths are not committed in portable artifacts. Reports carry a salted
-path identity hash, task branch, base SHA, worktree creation evidence, and
-container/image identities. Duplicate worktree IDs, branch names, container
-names, run IDs, task/config pairs, or task output hashes fail closed.
+Worktree paths are not committed in portable artifacts. Reports carry a
+domain-separated deterministic path token derived without a host path, plus
+task branch, base SHA, worktree creation evidence, and container/image
+identities. The token proves the planned identity, not the observed absolute
+path. Duplicate worktree IDs, branch names, container names, run IDs,
+task/config pairs, or evidence hashes fail closed.
 
 The official evaluator runs after the Agent patch is frozen, in a different
 judge container with the gold/test specifications mounted read-only. The Agent
@@ -323,7 +355,8 @@ For each task/config:
 4. route writes through the Week 3 preflight and approval boundary;
 5. freeze the first submitted patch (or explicit no-patch terminal result);
 6. run the official evaluator exactly once in the isolated judge container;
-7. collect trace/checkpoint/budget/policy/isolation evidence;
+7. collect trace/checkpoint/budget/policy/isolation evidence, including actual
+   repair-attempt and per-command maxima plus Agent/judge container intervals;
 8. prove original checkout unchanged and container cleanup or quarantine;
 9. atomically append one immutable run record.
 
@@ -343,6 +376,13 @@ reviewed, non-model-callable provider bound to the exact preflight candidate.
 It cannot auto-approve path-scope violations or bypass Week 3 bindings.
 Reporting never creates or pushes task commits to external repositories.
 
+A rejected policy operation increments `unauthorized_operations`, remains
+unexecuted, and may coexist with the run's truthful later terminal status.
+Such a run is always unresolved, even if the evaluator passes. `tool_calls`
+counts accepted/executed tool operations and includes accepted test commands;
+therefore `operations_total` is exactly
+`tool_calls + unauthorized_operations`, not an adapter-chosen denominator.
+
 ## Metrics
 
 ### Headline and per-task outputs
@@ -357,6 +397,8 @@ Report:
 - end-to-end Agent latency p50/p95/mean/max, excluding acquisition/image build
   but including worktree, model, tools, tests, and cleanup;
 - mean/p50/p95 tool calls and optional tool-kind breakdown;
+- observed repair-attempt total/mean/max and maximum single-command
+  time/output;
 - Agent test-command failure rate:
   failed/timed-out/truncated test invocations divided by all test invocations;
 - task test-failure rate:
@@ -370,14 +412,21 @@ Report:
 
 Every rate includes raw counts and an explicit denominator. Undefined
 zero-denominator values are JSON `null`, never zero. Costs are integer
-micro-USD; non-finite, negative, rounded binary-float, or internally
-inconsistent telemetry is rejected.
+micro-USD. The validator rejects non-finite/negative values and its enumerated
+cross-field contradictions: test failures exceeding tests, a `test_failure`
+status without a failed test, denominator mismatch, unauthorized success,
+budget-tail/status mismatch, isolation/timestamp mismatch, and official
+evaluator contradictions. Other counters remain adapter-supplied evidence and
+are not claimed to be independently trace-derived.
 
 ### Bootstrap 95% confidence intervals
 
 Final reports use at least 10,000 deterministic percentile-bootstrap
 replicates. The sampling unit is task, stratified by repository, preserving
-within-task clustering across all telemetry and paired configurations.
+within-task clustering across all telemetry and paired configurations. Method
+`repository_stratified_task_sha256_v2` uses SHA-256 rejection sampling over
+seed, replicate, repository, draw, and retry counter, so results do not depend
+on Python's `random.choice` implementation.
 
 Confidence intervals are reported for:
 
@@ -416,9 +465,16 @@ Validation fails closed on:
 - missing primary/ablation run, more than one run, or silent replacement;
 - reused worktree/container, writable extra mount, network enabled, root user,
   missing cleanup evidence, or original checkout changed;
+- more than two overlapping task/config run intervals or Agent-plus-judge
+  container time above the reporting ceiling;
 - task start before the external freeze attestation;
 - official evaluator evidence missing/inconsistent with `resolved`;
 - negative/non-finite/inconsistent cost, timing, tool, test, or policy counts.
+
+Trace, checkpoint, evaluator-input, and evaluator-output artifacts must use a
+canonical envelope containing the exact `run_id` before hashing. Global
+evidence-hash uniqueness then detects reuse without rejecting two legitimate
+runs whose inner patch or evaluator payload happens to be byte-identical.
 
 ## Offline implementation requirements
 
@@ -507,6 +563,8 @@ absolute paths, or unrelated formatting.
   role count, or reporting set below four repositories is rejected.
 - Selection-log byte hash, seed, repository/task ranks, and selected sets are
   recomputed and fail closed on mismatch.
+- Selection-log row count equals the frozen manifest count; changed-line size
+  bands and selected-only roles are recomputed.
 - Every task/config receives a unique run, worktree, branch, container, state,
   and judge identity with network-none/read-only/non-root evidence.
 - Missing/reused isolation evidence or changed original checkout fails closed.
@@ -514,6 +572,9 @@ absolute paths, or unrelated formatting.
 - Primary pass@1 counts all 20 attempts; failures are never silently dropped.
 - Cost, latency, tool, test-failure, unauthorized-operation, state, and failure
   statistics have exact deterministic tests including zero denominators.
+- Bounded termination/settlement overruns remain truthful, explicitly marked
+  evidence; repair and command caps plus parallel/container ceilings are
+  cross-checked.
 - Bootstrap is repository-stratified, paired for ablation deltas,
   order-independent, and stable for a fixed seed.
 - Reporting refuses development/tuning purposes, duplicate/replacement runs,
@@ -541,6 +602,51 @@ absolute paths, or unrelated formatting.
 
 No acquisition, Docker/model run, or result claim is part of this local
 implementation workflow.
+
+## Claude review integration dispositions
+
+Claude's independent review is preserved unchanged in
+`docs/reviews/week5-claude.md` at commit
+`0451d5b93dc08cfe7d84ef01b6891f6966fb2244`. Integration dispositions:
+
+- **F-1 (P1), accepted and fixed:** roles now exist only on selected rows;
+  ineligible/unselected rows are null-role audit rows. The selection log must
+  exactly match the frozen manifest row count.
+- **F-2 (P2), accepted and fixed:** `operations_total` is exactly executed
+  `tool_calls` plus rejected `unauthorized_operations`; tests are a subset of
+  tool calls.
+- **F-3 (P2), accepted and fixed:** rejected operations may coexist with the
+  truthful terminal status, but always force unresolved.
+- **F-4 (P2), accepted and fixed:** bounded termination/in-flight/settlement
+  tails are accepted only with matching terminal states and are reported per
+  task instead of clamped.
+- **F-5 (P2), accepted and fixed:** run evidence and metrics now include repair
+  attempts and maximum command time/output; `no_reflection` is enforceably zero.
+- **F-6 (P2), accepted and fixed:** `gold_patch_changed_lines_v1` and frozen
+  changed-line inputs make size bands machine-recomputable.
+- **F-7 (P3), accepted and fixed:** Agent/judge intervals, run-overlap scanning,
+  and aggregate container-time validation make both ceilings auditable.
+- **F-8 (P3), accepted as an adapter precondition:** canonical evidence
+  envelopes must embed `run_id`, so uniqueness detects reuse without
+  forbidding identical inner payloads.
+- **F-9 (P3), accepted and narrowed:** test/status, policy/resolution,
+  operations, budget, isolation, and evaluator cross-field invariants are
+  enforced; documentation no longer claims independent trace derivation for
+  every adapter-supplied counter.
+- **F-10 (P3), accepted and fixed:** Python/schema repository and task-branch
+  patterns match; branch and domain-separated path-token wording match the
+  implementation.
+- **F-11 (P3), accepted and fixed:** bootstrap draws use explicit SHA-256
+  rejection sampling rather than Python's `random.choice`.
+- **F-12 (P3), accepted and fixed:** conservative Windows trailing-dot/space
+  and short-alias guards plus explicit degenerate-bootstrap failure handling
+  are covered by tests.
+- **F-13 (P3), accepted:** the listed high-risk paths received focused
+  regressions, including materialized selection variants, CLI output guards,
+  evidence reuse, setup failure, and exact budget boundaries.
+
+These changes amend the implementation contract before any acquisition,
+attestation freeze, execution-adapter work, or real sealed run.
 
 ## Codex delivery record
 

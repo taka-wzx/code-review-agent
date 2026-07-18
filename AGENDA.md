@@ -12,8 +12,9 @@
 - 第 5 周：已从第 4 周合入后的 `master` 冻结 SWE-bench Verified 30 任务候选合同
   （5 development / 5 tuning / 20 sealed reporting）、6 配置单因素消融、独立
   worktree/Docker 身份和 USD 80 总硬上限；已实现纯离线选择/run-plan 验证、pass@1、
-  成本/时延/工具/测试失败/非法操作统计和仓库分层配对 Bootstrap 95% CI。真实任务尚未
-  下载或物化，Docker/外部模型/付费评测均未运行，等待 Claude 独立审查与 integration。
+  成本/时延/工具/测试失败/非法操作统计、并发/container-hour 审计和仓库分层配对
+  Bootstrap 95% CI。Claude 独立审查的 13 项发现已在 integration 逐项处置；真实任务
+  尚未下载或物化，Docker/外部模型/付费评测均未运行，等待本地 master 合入批准。
 
 ## 第 1 周：工程基线与公开交付
 

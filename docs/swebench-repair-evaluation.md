@@ -78,14 +78,23 @@ Each row has:
 - objective `eligible` boolean
 - preregistered `exclusion_reason` or null
 - `selected` boolean
-- assigned `role` or null
-- coarse `size_band`
+- assigned `role` only when selected, otherwise null
+- gold-patch `patch_changed_lines`
+- derived `size_band`
 - recomputed `repository_rank_sha256`
 - recomputed `task_rank_sha256`
 
 Allowed exclusion reasons are fixed in the Python validator. A forbidden
 repository must be logged with `forbidden_repository`; silently dropping it is
-invalid.
+invalid. The materialized dataset also freezes `manifest_task_count`, and the
+log must have exactly that many unique task rows. Rehashing a shortened log
+therefore cannot hide a deleted candidate.
+
+The data controller counts added plus deleted content lines in the frozen
+official gold patch, excluding diff headers. Method
+`gold_patch_changed_lines_v1` maps 1--5 lines to `small`, 6--20 to `medium`,
+and 21 or more to `large`. The validator recomputes the band. The controller
+does not expose the patch to the developer or Agent.
 
 The materialized cohort adds only selected task metadata:
 
@@ -124,6 +133,10 @@ minimum:
 5. assign the next repository to tuning and select five;
 6. assign the next repository to development and select five;
 7. leave later repositories unassigned and unselected.
+
+Only the selected first-five rows in an assigned repository carry its role.
+All ineligible rows, unselected eligible rows, and rows from later repositories
+carry `role: null`.
 
 Thus repositories cannot cross roles and a human cannot choose convenient task
 IDs. If six qualifying repositories do not exist, selection fails instead of
@@ -195,8 +208,16 @@ Per task/config:
 
 `no_reflection` receives zero post-initial repair attempts. Reporting is capped
 at USD 60 and 120 container-hours; all Week 5 paid phases are capped at USD 80.
-No more than two task/config attempts run concurrently. These are hard limits,
-not spending approval.
+No more than two task/config attempts run concurrently. These launch and
+reservation limits are not spending approval.
+
+Do not clamp actual observations to make evidence validate. A
+`budget_exhausted` terminal record may include a bounded 5% token/cost
+settlement tail and one already-in-flight tool or test operation. A `timeout`
+or `budget_exhausted` record may include up to 5 seconds of overall
+termination latency and 1 second of command-kill latency. The report lists each
+overrun dimension. These tails authorize no new work; command output remains
+truncated at 1 MiB and repair attempts remain strictly capped.
 
 ## Freeze and run-plan generation
 
@@ -232,6 +253,11 @@ python -B swebench_repair_runner.py generate-run-plan `
 The output has exactly 120 rows. Every row derives unique run, branch,
 worktree, container, judge-container, state, and path-token identities. It
 contains no host absolute path and starts no process.
+
+Branches have the exact form
+`repair/<slug-at-most-32>-<identity-prefix-12>`. The path token is a
+domain-separated deterministic token derived without the host path; it is not
+a salted hash of an observed absolute path.
 
 ## Per-attempt isolation
 
@@ -283,13 +309,25 @@ One immutable JSON object is appended for every run-plan row. It binds:
 - terminal status/reason and frozen patch hash;
 - integer micro-USD, combined tokens, latency milliseconds, tools, tests, and
   policy events;
-- planned versus observed worktree/container isolation;
+- observed repair attempts and maximum command time/output;
+- planned versus observed worktree/container isolation, including canonical
+  Agent and judge container start/completion timestamps;
 - official evaluator counts and outcome;
 - trace, checkpoint, run-plan, evaluator-input, and evaluator-output hashes.
 
+`tool_calls` counts accepted/executed tool operations, including accepted test
+commands. `unauthorized_operations` counts rejected operations that were not
+executed, and `operations_total` must equal their sum. A rejected operation may
+be followed by continued execution and any truthful terminal status, but it
+always forces `resolved=false`.
+
+Trace, checkpoint, evaluator-input, and evaluator-output files use a canonical
+envelope that contains the exact `run_id` before hashing. This makes evidence
+hash uniqueness meaningful even when two runs have identical inner payloads.
 The validator rejects unknown keys, duplicate run/task-config identities,
 non-finite numbers, negative counters, reused worktrees/containers/evidence,
-and any cross-file mismatch.
+cross-file mismatch, more than two overlapping run intervals, and reporting
+container time above 120 hours.
 
 ## pass@1 and failures
 
@@ -323,6 +361,7 @@ The report contains, per configuration and for primary headline:
 - per-task tokens plus aggregate token total/mean/p50/p95;
 - latency mean/p50/p95/max;
 - tool total/mean/p50/p95;
+- repair-attempt total/mean/max and maximum command time/output;
 - failed Agent test invocations / all test invocations;
 - tasks with a failed Agent test / attempted tasks;
 - rejected policy events / all attempted operations;
@@ -334,7 +373,9 @@ At least 10,000 deterministic percentile-bootstrap replicates sample tasks with
 replacement inside each reporting repository. The same sampled task IDs are
 used across configurations, so ablation deltas are paired. Intervals cover
 pass@1, paired deltas, mean cost, p50/p95 latency, mean tools, task test-failure
-rate, and unauthorized-operation task rate.
+rate, and unauthorized-operation task rate. Method
+`repository_stratified_task_sha256_v2` selects each draw through SHA-256
+rejection sampling, avoiding Python-version dependence in `random.choice`.
 
 Generate a final report only from a complete sealed matrix:
 

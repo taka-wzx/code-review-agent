@@ -4,13 +4,14 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
-import random
 from typing import Any, Sequence
 
 from swebench_repair_runner import (
+    BOOTSTRAP_METHOD,
     CONFIGURATION_ORDER,
     PlanValidationError,
     _boolean,
@@ -34,6 +35,9 @@ from swebench_repair_runner import (
 
 
 METRIC_VERSION = 1
+TERMINATION_GRACE_MILLISECONDS = 5_000
+COMMAND_TERMINATION_GRACE_MILLISECONDS = 1_000
+SETTLEMENT_GRACE_PERCENT = 5
 RUN_STATUSES = {
     "approval_rejected",
     "budget_exhausted",
@@ -72,6 +76,42 @@ def _nullable_hex(value: Any, length: int, label: str) -> str | None:
     if value is None:
         return None
     return _hex(value, length, label)
+
+
+def _nullable_timestamp(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _timestamp(value, label)
+
+
+def _bounded_interval(
+    *,
+    started_value: Any,
+    completed_value: Any,
+    active: bool,
+    label: str,
+    run_started: datetime,
+    run_completed: datetime,
+) -> tuple[datetime | None, datetime | None]:
+    started_text = _nullable_timestamp(started_value, f"{label}_started_at")
+    completed_text = _nullable_timestamp(completed_value, f"{label}_completed_at")
+    if not active:
+        if started_text is not None or completed_text is not None:
+            raise EvaluationValidationError(
+                f"{label} timestamps must be null when it did not start"
+            )
+        return None, None
+    if started_text is None or completed_text is None:
+        raise EvaluationValidationError(
+            f"{label} needs start and completion timestamps"
+        )
+    started = _parse_timestamp(started_text)
+    completed = _parse_timestamp(completed_text)
+    if completed <= started:
+        raise EvaluationValidationError(f"{label} timestamps are out of order")
+    if started < run_started or completed > run_completed:
+        raise EvaluationValidationError(f"{label} falls outside run timestamps")
+    return started, completed
 
 
 def _rate(numerator: int, denominator: int) -> dict[str, Any]:
@@ -113,6 +153,8 @@ def _validate_actual_isolation(
     index: int,
     plan_row: dict[str, Any],
     status: str,
+    run_started: datetime,
+    run_completed: datetime,
 ) -> dict[str, Any]:
     label = f"runs[{index}].isolation"
     isolation = _object(value, label)
@@ -124,8 +166,12 @@ def _validate_actual_isolation(
             "task_branch",
             "container_name",
             "container_started",
+            "container_started_at",
+            "container_completed_at",
             "judge_container_name",
             "judge_container_started",
+            "judge_container_started_at",
+            "judge_container_completed_at",
             "state_id",
             "image_digest",
             "network_mode",
@@ -167,6 +213,22 @@ def _validate_actual_isolation(
     )
     judge_started = _boolean(
         isolation["judge_container_started"], f"{label}.judge_container_started"
+    )
+    container_interval = _bounded_interval(
+        started_value=isolation["container_started_at"],
+        completed_value=isolation["container_completed_at"],
+        active=container_started,
+        label=f"{label}.container",
+        run_started=run_started,
+        run_completed=run_completed,
+    )
+    judge_interval = _bounded_interval(
+        started_value=isolation["judge_container_started_at"],
+        completed_value=isolation["judge_container_completed_at"],
+        active=judge_started,
+        label=f"{label}.judge_container",
+        run_started=run_started,
+        run_completed=run_completed,
     )
     for name in (
         "read_only_root",
@@ -222,6 +284,14 @@ def _validate_actual_isolation(
     if judge_started and not container_started:
         raise EvaluationValidationError(
             f"{label} judge container cannot start before the Agent container"
+        )
+    if (
+        judge_interval[0] is not None
+        and container_interval[1] is not None
+        and judge_interval[0] < container_interval[1]
+    ):
+        raise EvaluationValidationError(
+            f"{label} judge container must start after the Agent container completes"
         )
     return isolation
 
@@ -374,6 +444,139 @@ def _validate_hashes(
     return hashes
 
 
+def _settlement_grace_limit(limit: int) -> int:
+    return math.ceil(limit * (100 + SETTLEMENT_GRACE_PERCENT) / 100)
+
+
+def _budget_overrun_dimensions(
+    run: dict[str, Any], plan_row: dict[str, Any]
+) -> list[str]:
+    budget = plan_row["budget"]
+    observed = {
+        "cost_microusd": run["cost_microusd"],
+        "tokens_total": run["tokens_total"],
+        "latency_milliseconds": run["latency_milliseconds"],
+        "tool_calls": run["tool_calls"],
+        "test_commands_total": run["test_commands_total"],
+        "max_command_milliseconds": run["max_command_milliseconds"],
+        "max_command_output_bytes": run["max_command_output_bytes"],
+    }
+    limits = {
+        "cost_microusd": budget["total_cost_microusd"],
+        "tokens_total": budget["total_tokens"],
+        "latency_milliseconds": budget["total_seconds"] * 1000,
+        "tool_calls": budget["tool_calls"],
+        "test_commands_total": budget["test_command_invocations"],
+        "max_command_milliseconds": budget["command_seconds"] * 1000,
+        "max_command_output_bytes": budget["command_output_bytes"],
+    }
+    return sorted(name for name, value in observed.items() if value > limits[name])
+
+
+def _validate_budget_observations(
+    *,
+    run: dict[str, Any],
+    plan_row: dict[str, Any],
+    status: str,
+    index: int,
+) -> None:
+    """Keep truthful bounded termination overruns without authorizing new work."""
+
+    budget = plan_row["budget"]
+    settlement_fields = {
+        "cost_microusd": budget["total_cost_microusd"],
+        "tokens_total": budget["total_tokens"],
+    }
+    for name, limit in settlement_fields.items():
+        observed = run[name]
+        if observed > limit and (
+            status != "budget_exhausted"
+            or observed > _settlement_grace_limit(limit)
+        ):
+            raise EvaluationValidationError(
+                f"runs[{index}] {name} exceeds bounded settlement grace"
+            )
+
+    count_fields = {
+        "tool_calls": budget["tool_calls"],
+        "test_commands_total": budget["test_command_invocations"],
+    }
+    for name, limit in count_fields.items():
+        observed = run[name]
+        if observed > limit and (
+            status != "budget_exhausted" or observed > limit + 1
+        ):
+            raise EvaluationValidationError(
+                f"runs[{index}] {name} exceeds bounded in-flight grace"
+            )
+
+    latency_limit = budget["total_seconds"] * 1000
+    if run["latency_milliseconds"] > latency_limit and (
+        status not in {"budget_exhausted", "timeout"}
+        or run["latency_milliseconds"]
+        > latency_limit + TERMINATION_GRACE_MILLISECONDS
+    ):
+        raise EvaluationValidationError(
+            f"runs[{index}] latency exceeds termination grace"
+        )
+
+    command_limit = budget["command_seconds"] * 1000
+    if run["max_command_milliseconds"] > command_limit and (
+        status not in {"budget_exhausted", "timeout"}
+        or run["max_command_milliseconds"]
+        > command_limit + COMMAND_TERMINATION_GRACE_MILLISECONDS
+    ):
+        raise EvaluationValidationError(
+            f"runs[{index}] command time exceeds termination grace"
+        )
+    if run["max_command_output_bytes"] > budget["command_output_bytes"]:
+        raise EvaluationValidationError(
+            f"runs[{index}] command output exceeds frozen cap"
+        )
+    if run["repair_attempts_used"] > budget["repair_attempts"]:
+        raise EvaluationValidationError(
+            f"runs[{index}] exceeds repair-attempt budget"
+        )
+
+
+def _maximum_parallel_runs(records: Sequence[dict[str, Any]]) -> int:
+    events: list[tuple[datetime, int]] = []
+    for run in records:
+        started = _parse_timestamp(run["started_at"])
+        completed = _parse_timestamp(run["completed_at"])
+        if completed <= started:
+            continue
+        events.append((started, 1))
+        events.append((completed, -1))
+    current = 0
+    maximum = 0
+    for _timestamp_value, delta in sorted(
+        events, key=lambda item: (item[0], 0 if item[1] < 0 else 1)
+    ):
+        current += delta
+        maximum = max(maximum, current)
+    return maximum
+
+
+def _container_milliseconds(records: Sequence[dict[str, Any]]) -> int:
+    total = 0
+    for run in records:
+        isolation = run["isolation"]
+        for prefix in ("container", "judge_container"):
+            started_text = isolation[f"{prefix}_started_at"]
+            completed_text = isolation[f"{prefix}_completed_at"]
+            if started_text is None or completed_text is None:
+                continue
+            total += int(
+                (
+                    _parse_timestamp(completed_text)
+                    - _parse_timestamp(started_text)
+                ).total_seconds()
+                * 1000
+            )
+    return total
+
+
 def validate_run_records(
     records: list[dict[str, Any]],
     *,
@@ -425,6 +628,9 @@ def validate_run_records(
                 "tool_calls",
                 "test_commands_total",
                 "test_commands_failed",
+                "repair_attempts_used",
+                "max_command_milliseconds",
+                "max_command_output_bytes",
                 "unauthorized_operations",
                 "operations_total",
                 "model",
@@ -475,7 +681,7 @@ def validate_run_records(
         recorded = _parse_timestamp(recorded_text)
         if started < plan_created:
             raise EvaluationValidationError(f"runs[{index}] started before run-plan freeze")
-        if completed < started or recorded < completed:
+        if completed <= started or recorded < completed:
             raise EvaluationValidationError(f"runs[{index}] timestamps are out of order")
         latency_ms = _integer(
             run["latency_milliseconds"],
@@ -488,10 +694,10 @@ def validate_run_records(
                 f"runs[{index}] latency contradicts start/completion timestamps"
             )
 
-        cost = _integer(
+        _integer(
             run["cost_microusd"], f"runs[{index}].cost_microusd", minimum=0
         )
-        tokens = _integer(
+        _integer(
             run["tokens_total"], f"runs[{index}].tokens_total", minimum=0
         )
         tool_calls = _integer(
@@ -507,6 +713,21 @@ def validate_run_records(
             f"runs[{index}].test_commands_failed",
             minimum=0,
         )
+        _integer(
+            run["repair_attempts_used"],
+            f"runs[{index}].repair_attempts_used",
+            minimum=0,
+        )
+        _integer(
+            run["max_command_milliseconds"],
+            f"runs[{index}].max_command_milliseconds",
+            minimum=0,
+        )
+        _integer(
+            run["max_command_output_bytes"],
+            f"runs[{index}].max_command_output_bytes",
+            minimum=0,
+        )
         unauthorized = _integer(
             run["unauthorized_operations"],
             f"runs[{index}].unauthorized_operations",
@@ -517,37 +738,46 @@ def validate_run_records(
             f"runs[{index}].operations_total",
             minimum=0,
         )
-        if cost > plan_row["budget"]["total_cost_microusd"]:
-            raise EvaluationValidationError(f"runs[{index}] exceeds cost budget")
-        if tokens > plan_row["budget"]["total_tokens"]:
-            raise EvaluationValidationError(f"runs[{index}] exceeds token budget")
-        if latency_ms > plan_row["budget"]["total_seconds"] * 1000:
-            raise EvaluationValidationError(f"runs[{index}] exceeds time budget")
-        if tool_calls > plan_row["budget"]["tool_calls"]:
-            raise EvaluationValidationError(f"runs[{index}] exceeds tool-call budget")
-        if test_total > plan_row["budget"]["test_command_invocations"]:
-            raise EvaluationValidationError(f"runs[{index}] exceeds test-command budget")
         if test_failed > test_total:
             raise EvaluationValidationError(
                 f"runs[{index}] failed tests exceed test total"
             )
-        if unauthorized > operations_total:
+        if test_total > tool_calls:
             raise EvaluationValidationError(
-                f"runs[{index}] unauthorized operations exceed total operations"
+                f"runs[{index}] test commands must be a subset of tool calls"
             )
-        if unauthorized:
-            if status != "policy_violation" or resolved:
-                raise EvaluationValidationError(
-                    f"runs[{index}] policy violation must be terminal and unresolved"
-                )
-        elif status == "policy_violation":
+        if operations_total != tool_calls + unauthorized:
+            raise EvaluationValidationError(
+                f"runs[{index}] operations_total must equal tool_calls plus "
+                "unauthorized_operations"
+            )
+        if unauthorized and resolved:
+            raise EvaluationValidationError(
+                f"runs[{index}] unauthorized operation must remain unresolved"
+            )
+        if status == "policy_violation" and not unauthorized:
             raise EvaluationValidationError(
                 f"runs[{index}] policy_violation needs an unauthorized event"
             )
+        if status == "test_failure" and test_failed == 0:
+            raise EvaluationValidationError(
+                f"runs[{index}] test_failure needs a failed test command"
+            )
+        _validate_budget_observations(
+            run=run,
+            plan_row=plan_row,
+            status=status,
+            index=index,
+        )
 
         _validate_model(run["model"], index=index, plan_row=plan_row, config=config)
         isolation = _validate_actual_isolation(
-            run["isolation"], index=index, plan_row=plan_row, status=status
+            run["isolation"],
+            index=index,
+            plan_row=plan_row,
+            status=status,
+            run_started=started,
+            run_completed=completed,
         )
         evaluator = _validate_evaluator(
             run["evaluator"],
@@ -611,6 +841,19 @@ def validate_run_records(
     ]
     if len(set(evaluator_outputs)) != len(evaluator_outputs):
         raise EvaluationValidationError("run records reuse evaluator output evidence")
+    maximum_parallel = _maximum_parallel_runs(normalized)
+    if maximum_parallel > config["docker"]["maximum_parallel_runs"]:
+        raise EvaluationValidationError(
+            "run records exceed frozen maximum_parallel_runs"
+        )
+    container_milliseconds = _container_milliseconds(normalized)
+    container_limit = (
+        config["reporting_budget"]["container_hour_ceiling"] * 60 * 60 * 1000
+    )
+    if container_milliseconds > container_limit:
+        raise EvaluationValidationError(
+            "run records exceed reporting container-hour ceiling"
+        )
     return sorted(
         normalized,
         key=lambda run: (run["instance_id"], run["configuration_id"]),
@@ -624,6 +867,9 @@ def _configuration_metrics(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     tokens = [run["tokens_total"] for run in records]
     latencies = [run["latency_milliseconds"] for run in records]
     tools = [run["tool_calls"] for run in records]
+    repair_attempts = [run["repair_attempts_used"] for run in records]
+    command_milliseconds = [run["max_command_milliseconds"] for run in records]
+    command_output_bytes = [run["max_command_output_bytes"] for run in records]
     test_total = sum(run["test_commands_total"] for run in records)
     test_failed = sum(run["test_commands_failed"] for run in records)
     task_test_failed = sum(1 for run in records if run["test_commands_failed"] > 0)
@@ -663,6 +909,19 @@ def _configuration_metrics(records: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "mean": _mean(tools),
             "p50": percentile(tools, 0.5),
             "p95": percentile(tools, 0.95),
+        },
+        "repair_attempts_used": {
+            "total": sum(repair_attempts),
+            "mean": _mean(repair_attempts),
+            "maximum": None if not repair_attempts else max(repair_attempts),
+        },
+        "command_observations": {
+            "maximum_milliseconds": (
+                None if not command_milliseconds else max(command_milliseconds)
+            ),
+            "maximum_output_bytes": (
+                None if not command_output_bytes else max(command_output_bytes)
+            ),
         },
         "test_failures": {
             "invocation_rate": _rate(test_failed, test_total),
@@ -719,6 +978,31 @@ def _interval(values: Sequence[float], replicates: int) -> dict[str, Any]:
     }
 
 
+def _sha256_sample_index(
+    *,
+    seed: int,
+    replicate: int,
+    repository: str,
+    draw: int,
+    size: int,
+) -> int:
+    """Cross-version deterministic rejection sampling from SHA-256."""
+
+    if size < 1:
+        raise ValueError("sample size must be positive")
+    modulus = 1 << 256
+    cutoff = modulus - (modulus % size)
+    counter = 0
+    while True:
+        payload = (
+            f"{seed}\n{replicate}\n{repository}\n{draw}\n{counter}"
+        ).encode("utf-8")
+        value = int.from_bytes(hashlib.sha256(payload).digest(), "big")
+        if value < cutoff:
+            return value % size
+        counter += 1
+
+
 def bootstrap_intervals(
     records: Sequence[dict[str, Any]],
     *,
@@ -739,14 +1023,13 @@ def bootstrap_intervals(
         by_repo[repo] = sorted(set(by_repo[repo]))
     if sum(len(tasks) for tasks in by_repo.values()) < 2:
         return {
-            "method": "repository_stratified_task_percentile_v1",
+            "method": BOOTSTRAP_METHOD,
             "seed": seed,
             "replicates": replicates,
             "configurations": {},
             "paired_pass_at_1_delta": {},
             "reason": "fewer_than_two_tasks",
         }
-    rng = random.Random(seed)
     samples: dict[str, dict[str, list[float]]] = {
         config_id: {metric: [] for metric in BOOTSTRAP_METRICS}
         for config_id in CONFIGURATION_ORDER
@@ -756,11 +1039,22 @@ def bootstrap_intervals(
         for config_id in CONFIGURATION_ORDER
         if config_id != "primary"
     }
-    for _ in range(replicates):
+    for replicate in range(replicates):
         sampled_ids: list[str] = []
         for repo in sorted(by_repo):
             task_ids = by_repo[repo]
-            sampled_ids.extend(rng.choice(task_ids) for _item in task_ids)
+            sampled_ids.extend(
+                task_ids[
+                    _sha256_sample_index(
+                        seed=seed,
+                        replicate=replicate,
+                        repository=repo,
+                        draw=draw,
+                        size=len(task_ids),
+                    )
+                ]
+                for draw in range(len(task_ids))
+            )
         replicate_values: dict[str, dict[str, float]] = {}
         for config_id in CONFIGURATION_ORDER:
             selected = [
@@ -777,7 +1071,7 @@ def bootstrap_intervals(
                 replicate_values[config_id]["pass_at_1"] - primary
             )
     return {
-        "method": "repository_stratified_task_percentile_v1",
+        "method": BOOTSTRAP_METHOD,
         "seed": seed,
         "replicates": replicates,
         "configurations": {
@@ -851,9 +1145,13 @@ def build_report(
         replicates=replicates,
     )
     for config_id, values in ablations.items():
-        values["paired_bootstrap_95_ci"] = bootstrap[
-            "paired_pass_at_1_delta"
-        ][config_id]
+        paired_interval = bootstrap["paired_pass_at_1_delta"].get(config_id)
+        if paired_interval is None:
+            raise EvaluationValidationError(
+                f"bootstrap did not define paired interval for {config_id}"
+            )
+        values["paired_bootstrap_95_ci"] = paired_interval
+    plan_by_id = {row["run_id"]: row for row in run_plan["rows"]}
     per_task = [
         {
             "instance_id": run["instance_id"],
@@ -865,13 +1163,26 @@ def build_report(
             "tokens_total": run["tokens_total"],
             "latency_milliseconds": run["latency_milliseconds"],
             "tool_calls": run["tool_calls"],
+            "repair_attempts_used": run["repair_attempts_used"],
+            "max_command_milliseconds": run["max_command_milliseconds"],
+            "max_command_output_bytes": run["max_command_output_bytes"],
             "test_commands_failed": run["test_commands_failed"],
             "test_commands_total": run["test_commands_total"],
             "unauthorized_operations": run["unauthorized_operations"],
             "operations_total": run["operations_total"],
+            "budget_overrun_dimensions": _budget_overrun_dimensions(
+                run,
+                plan_by_id[run["run_id"]],
+            ),
         }
         for run in normalized
     ]
+    reporting_cost_observed = sum(run["cost_microusd"] for run in normalized)
+    reporting_cost_ceiling = config["reporting_budget"]["cost_ceiling_microusd"]
+    container_milliseconds_observed = _container_milliseconds(normalized)
+    container_milliseconds_ceiling = (
+        config["reporting_budget"]["container_hour_ceiling"] * 60 * 60 * 1000
+    )
     return {
         "schema_version": 1,
         "metric_version": METRIC_VERSION,
@@ -897,6 +1208,23 @@ def build_report(
             "all_run_plan_rows_covered_once": True,
             "all_isolation_identities_unique": True,
             "fail_closed_before_metrics": True,
+            "maximum_parallel_runs_observed": _maximum_parallel_runs(normalized),
+            "maximum_parallel_runs_frozen": config["docker"][
+                "maximum_parallel_runs"
+            ],
+            "reporting_cost_microusd_observed": reporting_cost_observed,
+            "reporting_cost_microusd_ceiling": reporting_cost_ceiling,
+            "reporting_cost_ceiling_exceeded": (
+                reporting_cost_observed > reporting_cost_ceiling
+            ),
+            "runs_with_budget_overrun": sum(
+                bool(row["budget_overrun_dimensions"]) for row in per_task
+            ),
+            "container_milliseconds_observed": container_milliseconds_observed,
+            "container_milliseconds_ceiling": container_milliseconds_ceiling,
+            "container_ceiling_exceeded": (
+                container_milliseconds_observed > container_milliseconds_ceiling
+            ),
         },
     }
 

@@ -25,6 +25,9 @@
     "tool_calls",
     "test_commands_total",
     "test_commands_failed",
+    "repair_attempts_used",
+    "max_command_milliseconds",
+    "max_command_output_bytes",
     "unauthorized_operations",
     "operations_total",
     "model",
@@ -128,6 +131,18 @@
       "type": "integer",
       "minimum": 0
     },
+    "repair_attempts_used": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_command_milliseconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "max_command_output_bytes": {
+      "type": "integer",
+      "minimum": 0
+    },
     "unauthorized_operations": {
       "type": "integer",
       "minimum": 0
@@ -176,7 +191,8 @@
     },
     "repository": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+      "pattern": "^[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?/[a-z0-9](?:[a-z0-9_.-]{0,98}[a-z0-9])?$",
+      "maxLength": 201
     },
     "sha256": {
       "type": "string",
@@ -199,8 +215,12 @@
         "task_branch",
         "container_name",
         "container_started",
+        "container_started_at",
+        "container_completed_at",
         "judge_container_name",
         "judge_container_started",
+        "judge_container_started_at",
+        "judge_container_completed_at",
         "state_id",
         "image_digest",
         "network_mode",
@@ -225,7 +245,7 @@
         },
         "task_branch": {
           "type": "string",
-          "pattern": "^repair/[a-z0-9-]+$"
+          "pattern": "^repair/[a-z0-9]+(?:-[a-z0-9]+)*$"
         },
         "container_name": {
           "$ref": "#/$defs/identifier"
@@ -233,11 +253,51 @@
         "container_started": {
           "type": "boolean"
         },
+        "container_started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "container_completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "judge_container_name": {
           "$ref": "#/$defs/identifier"
         },
         "judge_container_started": {
           "type": "boolean"
+        },
+        "judge_container_started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "judge_container_completed_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "state_id": {
           "$ref": "#/$defs/identifier"
