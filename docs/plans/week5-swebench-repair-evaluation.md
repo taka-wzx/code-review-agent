@@ -541,3 +541,47 @@ absolute paths, or unrelated formatting.
 
 No acquisition, Docker/model run, or result claim is part of this local
 implementation workflow.
+
+## Codex delivery record
+
+The contract was frozen before implementation in commit
+`d12169797eef8327d25f1ed0f5b27bc7a8f21727`. The reviewed Codex implementation
+is commit `a72ad9fc79b535276775d0ceeca5fc9b88bc012f`.
+
+Offline validation performed from the Week 5 worktree with
+`PYTHONPATH=E:\shiyan\code_review_agent\traces\worktrees\codex-week5\src`:
+
+- `python -m unittest tests.test_swebench_repair_runner
+  tests.test_swebench_repair_eval -v`: 67 tests passed;
+- Ruff on both Week 5 tools and their tests: passed;
+- mypy on both Week 5 tools: passed;
+- `python scripts\verify.py` without `--eval-assets`: exit 0, 470 tests passed,
+  3 environment skips, 85% total coverage, Ruff passed, 21 source files passed
+  mypy, and both CLI smoke checks passed;
+- committed unmaterialized plan validation: `valid: true`, zero selected real
+  tasks, six configurations, and 120 planned reporting attempts;
+- complete synthetic 20-task by 6-configuration report probe: 120 attempts and
+  10,000 deterministic Bootstrap replicates completed, with the primary
+  denominator remaining 20.
+
+No network request, data download, dependency installation, external-model
+call, paid evaluation, Docker task run, or existing `eval/` / `eval/holdout/`
+asset access occurred. The new CLIs also reject any input or output path whose
+resolved components include `eval` or `holdout`.
+
+Remaining risks for independent review:
+
+- the cohort and exact models are intentionally unmaterialized; there are no
+  real SWE-bench outcomes;
+- the authorized implementation is a planner, evidence validator, and
+  reporter, not the future adapter that maps all six ablations into the Week 3
+  Repair runtime and official harness;
+- run counters are supplied by that future adapter and hash-bound here, but
+  this reporter does not independently replay a trace to derive every counter;
+- freeze/run Git chronology needs the preregistered independent external
+  auditor because timestamps and hashes alone cannot prove commit ordering;
+- the 20-task/four-reporting-repository design is intentionally budget-bounded
+  and may produce wide confidence intervals;
+- the shared virtual environment uses an editable installation, so validation
+  explicitly fixed `PYTHONPATH` to this worktree; the installed `crag` smoke
+  entry point remains an environment-level check.
