@@ -127,6 +127,25 @@ class TestRedaction(unittest.TestCase):
                 )
         self.assertEqual(sanitize_value(".env.example").value, ".env.example")
 
+    def test_all_posix_absolute_path_shapes_are_omitted_and_rejected(self):
+        paths = (
+            "/usr/lib/python3.12/site-packages",
+            "/bin/bash",
+            "/sbin/init",
+            "/lib64/ld-linux-x86-64.so.2",
+            "/run/media/person/disk",
+            "/media/person/disk",
+            "/snap/package/current",
+            "/boot/config",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual(
+                    sanitize_value(path).value,
+                    "[OMITTED:absolute-path]",
+                )
+                self.assertTrue(contains_forbidden_content({"path_value": path}))
+
 
 if __name__ == "__main__":
     unittest.main()

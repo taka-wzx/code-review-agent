@@ -3164,6 +3164,22 @@ def repair_cli_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _close_trace_preserving_failure(trace: Trace, exc: BaseException) -> None:
+    """Close mandatory audit evidence without replacing an active failure."""
+
+    try:
+        trace.close(
+            error_type=type(exc).__name__,
+            error_category=error_category_for_exception(exc),
+        )
+    except BaseException as telemetry_exc:
+        add_note = getattr(exc, "add_note", None)
+        if callable(add_note):
+            add_note(
+                "telemetry close failed: " f"{type(telemetry_exc).__name__}"
+            )
+
+
 def _run_repair_contract(path: Path, *, resume: bool) -> RepairRunResult:
     data = _json_file(path)
     contract_hash = hashlib.sha256(
@@ -3386,10 +3402,7 @@ def _run_repair_contract(path: Path, *, resume: bool) -> RepairRunResult:
         )
         result = orchestrator.run()
     except BaseException as exc:
-        trace.close(
-            error_type=type(exc).__name__,
-            error_category=error_category_for_exception(exc),
-        )
+        _close_trace_preserving_failure(trace, exc)
         if backend is not None and expected_original is not None:
             _assert_original_checkout_unchanged(
                 backend, original_checkout, expected_original

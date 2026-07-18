@@ -104,8 +104,7 @@ _SECRET_PATTERNS = (
     ),
 )
 _ABSOLUTE_PATH = re.compile(
-    r"^(?:[A-Za-z]:[\\/]|\\\\|/(?:Users|home|root|etc|var|tmp|mnt|opt|srv|"
-    r"proc|sys|dev)(?:/|$))",
+    r"^(?:[A-Za-z]:[\\/]|\\\\|/)",
     re.IGNORECASE,
 )
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -360,8 +359,21 @@ def contains_forbidden_content(value: Any) -> bool:
         return any(contains_forbidden_content(child) for child in value)
     if isinstance(value, str):
         return bool(
-            _ABSOLUTE_PATH.match(value)
+            _looks_like_absolute_host_path(value)
             or _sensitive_relative_path(value)
             or _contains_secret(value)
         )
     return False
+
+
+def _looks_like_absolute_host_path(value: str) -> bool:
+    """Validate path shape independently from the sanitizer's compiled regex."""
+
+    if value.startswith(("/", "\\\\")):
+        return True
+    return (
+        len(value) >= 3
+        and value[0].isalpha()
+        and value[1] == ":"
+        and value[2] in {"/", "\\"}
+    )

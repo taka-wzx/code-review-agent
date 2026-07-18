@@ -578,6 +578,22 @@ def snapshot_hash(patches=(), *, committed=False):
 
 
 class OrchestratorCase(unittest.TestCase):
+    def test_trace_close_failure_does_not_replace_the_active_failure(self):
+        trace = mock.Mock()
+        trace.close.side_effect = RuntimeError("telemetry detail must stay private")
+        original = ValueError("original failure")
+
+        repair_module._close_trace_preserving_failure(trace, original)
+
+        trace.close.assert_called_once_with(
+            error_type="ValueError",
+            error_category="internal",
+        )
+        self.assertEqual(
+            original.__notes__,
+            ["telemetry close failed: RuntimeError"],
+        )
+
     def make_checkpoint(self, worktree, **overrides):
         values = {
             "run_id": "run-1",

@@ -370,16 +370,26 @@ class Span:
     def __exit__(self, exc_type, exc, traceback) -> Literal[False]:
         del traceback
         try:
-            if self.ended:
-                pass
-            elif exc is not None:
-                self.end(
-                    status="error",
-                    error_type=exc_type.__name__ if exc_type else "Exception",
-                    error_category=error_category_for_exception(exc),
-                )
-            else:
-                self.end(status="ok")
+            try:
+                if self.ended:
+                    pass
+                elif exc is not None:
+                    self.end(
+                        status="error",
+                        error_type=exc_type.__name__ if exc_type else "Exception",
+                        error_category=error_category_for_exception(exc),
+                    )
+                else:
+                    self.end(status="ok")
+            except BaseException as telemetry_exc:
+                if exc is None:
+                    raise
+                add_note = getattr(exc, "add_note", None)
+                if callable(add_note):
+                    add_note(
+                        "telemetry span finalization failed: "
+                        f"{type(telemetry_exc).__name__}"
+                    )
         finally:
             if self._token is not None:
                 self.tracer._current.reset(self._token)
@@ -451,7 +461,7 @@ class Span:
                 category = error_category or "internal"
                 if category not in _ERROR_CATEGORIES:
                     raise TelemetryValidationError("unsupported crag.error.category")
-                self.set_attributes(
+                self._set_terminal_error_attributes(
                     {
                         "error.type": error_type,
                         "crag.error.category": category,
@@ -462,8 +472,128 @@ class Span:
             self._status = status
             self._end_time_ns = self.tracer.clock.time_ns()
             self._end_monotonic_ns = self.tracer.clock.monotonic_ns()
-            record = self._snapshot()
+            validation_error: TelemetryValidationError | None = None
+            try:
+                record = self._snapshot()
+            except TelemetryValidationError as exc:
+                validation_error = exc
+                record = self._fallback_snapshot(exc)
         self.tracer._finish(self, record)
+        if validation_error is not None:
+            raise validation_error
+        return record
+
+    def _set_terminal_error_attributes(self, attributes: Mapping[str, Any]) -> None:
+        """Prioritize required error evidence over caller-supplied attributes."""
+
+        sanitized = sanitize_attributes(attributes)
+        user_attribute_limit = MAX_ATTRIBUTES - _ENVELOPE_ATTRIBUTE_SLOTS
+        new_keys = [key for key in sanitized.value if key not in self._attributes]
+        protected = {
+            "agent.run": {
+                "gen_ai.operation.name",
+                "gen_ai.agent.name",
+                "gen_ai.agent.version",
+            },
+            "llm.request": {
+                "gen_ai.operation.name",
+                "gen_ai.provider.name",
+                "gen_ai.request.model",
+            },
+            "tool.execute": {
+                "gen_ai.operation.name",
+                "gen_ai.tool.name",
+            },
+        }.get(self.operation, set())
+        while len(self._attributes) + len(new_keys) > user_attribute_limit:
+            evicted = next(
+                key for key in reversed(self._attributes) if key not in protected
+            )
+            self._attributes.pop(evicted)
+            self._omitted_count += 1
+            self._truncated = True
+        self._attributes.update(sanitized.value)
+        self._redaction_count += sanitized.redaction_count
+        self._omitted_count += sanitized.omitted_count
+        self._truncated = self._truncated or sanitized.truncated
+
+    def _fallback_snapshot(self, exc: TelemetryValidationError) -> dict[str, Any]:
+        """Build bounded local evidence for an invalid terminal snapshot."""
+
+        self.tracer.telemetry_mode = "degraded"
+        end_time_ns = max(self._end_time_ns or self._start_time_ns, self._start_time_ns)
+        end_monotonic_ns = max(
+            self._end_monotonic_ns or self._start_monotonic_ns,
+            self._start_monotonic_ns,
+        )
+        self._end_time_ns = end_time_ns
+        self._end_monotonic_ns = end_monotonic_ns
+        self._status = "error"
+        attributes: dict[str, Any] = {
+            "error.type": type(exc).__name__,
+            "crag.error.category": "internal",
+            "crag.telemetry.degraded_reason": "span_validation_failed",
+            "crag.telemetry.failed_operation": self.operation,
+            "crag.schema.version": SCHEMA_VERSION,
+            "crag.run.id": self.tracer.run_id,
+            "crag.source.commit": self.tracer.source_commit,
+            "crag.redaction.policy_version": REDACTION_POLICY_VERSION,
+            "crag.redaction.count": self._redaction_count,
+            "crag.redaction.omitted_count": (
+                self._omitted_count + len(self._attributes) + len(self._events)
+            ),
+            "crag.redaction.truncated": True,
+            "crag.telemetry.mode": "degraded",
+        }
+        attributes.update(
+            {
+                "agent.run": {
+                    "gen_ai.operation.name": "invoke_agent",
+                    "gen_ai.agent.name": "code-review-agent",
+                    "gen_ai.agent.version": self.tracer.runtime_version,
+                },
+                "llm.request": {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.provider.name": "unknown",
+                    "gen_ai.request.model": "unknown",
+                },
+                "tool.execute": {
+                    "gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.name": "unknown",
+                },
+            }.get(self.operation, {})
+        )
+        record = {
+            "schema_version": SCHEMA_VERSION,
+            "record_type": "span",
+            "trace_id": self.trace_id,
+            "span_id": self.span_id,
+            "parent_span_id": self.parent_span_id,
+            "run_id": self.tracer.run_id,
+            "name": self.name,
+            "kind": self.kind,
+            "operation": self.operation,
+            "start_time": _utc_text(self._start_time_ns),
+            "end_time": _utc_text(end_time_ns),
+            "duration_ms": (end_monotonic_ns - self._start_monotonic_ns) / 1_000_000,
+            "status": "error",
+            "source_commit": self.tracer.source_commit,
+            "runtime_version": self.tracer.runtime_version,
+            "redaction_policy_version": REDACTION_POLICY_VERSION,
+            "attributes": attributes,
+            "events": [
+                {
+                    "name": "crag.telemetry.span_validation_failed",
+                    "time": _utc_text(end_time_ns),
+                    "attributes": {
+                        "error.type": type(exc).__name__,
+                        "crag.error.category": "internal",
+                    },
+                }
+            ],
+            "links": [],
+        }
+        validate_span_record(record)
         return record
 
     def _snapshot(self) -> dict[str, Any]:

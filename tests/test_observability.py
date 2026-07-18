@@ -172,6 +172,53 @@ class TestCanonicalTracer(unittest.TestCase):
             span.end()
         tracer.close()
 
+    def test_terminal_error_metadata_survives_a_full_attribute_budget(self):
+        exporter = InMemoryExporter()
+        tracer = Tracer(exporter, run_id="run-full-error", source_commit=SOURCE_COMMIT)
+        span = tracer.start_span("full error", operation="agent.stage")
+        for index in range(70):
+            span.set_attribute(f"crag.test.attribute.{index}", index)
+
+        record = span.end(
+            status="error",
+            error_type="SyntheticFailure",
+            error_category="internal",
+        )
+        tracer.close(status="error", error_type="SyntheticFailure")
+
+        self.assertEqual(record["attributes"]["error.type"], "SyntheticFailure")
+        self.assertEqual(record["attributes"]["crag.error.category"], "internal")
+        self.assertTrue(record["attributes"]["crag.redaction.truncated"])
+        validate_trace(exporter.records)
+
+    def test_invalid_snapshot_is_unregistered_and_original_error_survives(self):
+        exporter = InMemoryExporter()
+        tracer = Tracer(exporter, run_id="run-fallback", source_commit=SOURCE_COMMIT)
+        span = tracer.start_span(
+            "chat missing-provider",
+            kind="CLIENT",
+            operation="llm.request",
+            attributes={
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": "model-v1",
+            },
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "original failure"):
+            with span:
+                raise RuntimeError("original failure")
+        tracer.close(status="error", error_type="RuntimeError")
+
+        fallback = next(record for record in exporter.records if record["span_id"] == span.span_id)
+        self.assertEqual(fallback["status"], "error")
+        self.assertEqual(fallback["attributes"]["gen_ai.provider.name"], "unknown")
+        self.assertEqual(
+            fallback["attributes"]["crag.telemetry.degraded_reason"],
+            "span_validation_failed",
+        )
+        self.assertEqual(fallback["attributes"]["crag.telemetry.mode"], "degraded")
+        validate_trace(exporter.records)
+
     def test_unknown_source_commit_is_explicitly_degraded(self):
         exporter = InMemoryExporter()
         tracer = Tracer(exporter, run_id="run-unknown", source_commit="unknown")
