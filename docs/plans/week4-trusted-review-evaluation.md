@@ -516,15 +516,38 @@ and recorded 13 findings in commit
 
 ## Delivery record
 
-This section is filled only after implementation and integration:
-
 - Codex handoff branch/SHA:
+  `codex/week4-trusted-review-evaluation` /
+  `d7aa90ac359432029bf86ba776a443427534eba0`
+- Codex review-fix SHA:
+  `a92817240ace76940e234b3ef369844e3e7e3c30`
 - Claude review branch/SHA:
-- Integration branch/SHA:
-- Changed files:
-- Focused validation:
-- Full offline validation:
-- Claude findings and dispositions:
-- External/network/paid actions performed:
-- Remaining risks:
-- Ownership deviations:
+  `claude/week4-trusted-review-evaluation-review` /
+  `852b253a3fff12da8f2a57f4a36f9578e9fef506`
+- Integration branch/integrated implementation SHA:
+  `integration/week4-trusted-review-evaluation` /
+  `849727556f6d043d2afb0b601e32bf3edbe5b11d`
+- Changed files: 13 paths relative to base—12 Codex-owned implementation,
+  test, schema, plan, and documentation paths plus Claude-owned
+  `docs/reviews/week4-claude.md`.
+- Focused validation: 52 trusted-review tests passed; root evaluation module
+  Ruff and mypy passed; preregistered cohort CLI validation returned
+  `valid: true`.
+- Full offline validation: 403 tests passed with 3 environment skips; total
+  branch coverage 85%; Ruff, mypy for 21 package source files, module entry
+  point, and console entry point passed. The command was run without
+  `--eval-assets` and with this worktree's `src` first on `PYTHONPATH`.
+- Claude findings and dispositions: one P1, three P2, and nine P3 findings
+  were accepted; F-1/F-2/F-4 and all code-level P3 findings were fixed, while
+  F-3 is mitigated by a mandatory pre-run Git freeze attestation and retained
+  as an explicit external audit boundary. The full mapping is recorded above.
+- External/network/paid actions performed: none. No PR data was downloaded,
+  no external evaluation model was called, no paid evaluation was run, and
+  no existing `eval/` or `eval/holdout/` content was read, listed, searched,
+  hashed, or validated.
+- Remaining risks: the real cohort is not materialized; remote candidate
+  enumeration completeness, exclusion attestations, and freeze-commit
+  ordering require independent audit; 30 PRs across three repositories remain
+  a small sample; shared editable environments require an explicit worktree
+  `PYTHONPATH` or reinstall to avoid validating another worktree.
+- Ownership deviations: none.

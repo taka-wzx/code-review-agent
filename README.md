@@ -142,7 +142,7 @@ docker run --rm code-review-agent --help
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **403 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，29.77s） |
+| 单测 + golden 测试 | **403 个测试全部通过，3 个环境跳过**（unittest，零 API 调用，29.28s） |
 | 分支覆盖率 | **总计 85%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
 | mypy | 21 个源文件无问题（`check_untyped_defs` 等严格项开启） |
