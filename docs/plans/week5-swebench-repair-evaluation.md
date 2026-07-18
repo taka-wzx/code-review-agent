@@ -691,3 +691,44 @@ Remaining risks for independent review:
 - the shared virtual environment uses an editable installation, so validation
   explicitly fixed `PYTHONPATH` to this worktree; the installed `crag` smoke
   entry point remains an environment-level check.
+
+## Integration validation record
+
+The Claude report was integrated as local commit
+`90b41eadce0b1e657e4528a453c9313b972c4b80`; the accepted finding fixes and
+contract amendments were committed as
+`6cde33279489d19b29c3700e9061f4da4ccc8ed0`.
+
+Final offline validation ran from
+`E:\shiyan\code_review_agent\traces\worktrees\integration-week5` with
+`PYTHONPATH` explicitly fixed to that worktree's `src`:
+
+- focused Week 5 unittest suite: 80 tests passed;
+- focused Ruff and mypy: passed;
+- committed unmaterialized `validate-plans`: `valid: true`,
+  `materialized: false`, zero selected real tasks, six configurations, and 120
+  planned reporting attempts;
+- synthetic complete-matrix report probe: 120 attempts, primary denominator
+  20, 10,000 Bootstrap replicates using
+  `repository_stratified_task_sha256_v2`;
+- `python scripts\verify.py` without `--eval-assets`: exit 0, 483 tests passed,
+  3 environment skips, 85% total coverage, Ruff passed, 21 source files passed
+  mypy, and both CLI smoke checks passed;
+- `git diff --check`: clean.
+
+No acquisition, real instance, Docker task, external model, paid evaluation,
+dependency install, network operation, or existing `eval/` / `eval/holdout/`
+asset access occurred during review integration.
+
+Remaining execution-time trust boundaries are explicit:
+
+- the future adapter/data controller still supplies eligibility decisions,
+  changed-line counts, telemetry counters, timestamps, and security booleans;
+  this validator proves internal and frozen-plan consistency, not physical
+  truth, so canonical evidence and independent audit remain mandatory;
+- the pre-run freeze commit chronology and absence of matrix-level run-shopping
+  need an external auditor;
+- no real task was downloaded or materialized, so no pass@1, cost, latency, or
+  ablation performance claim exists;
+- four reporting repositories with five tasks each imply wide intervals,
+  especially for p95 metrics.
