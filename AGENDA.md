@@ -107,17 +107,20 @@ Repair 评测：接入 SWE-bench Verified 的 20–50 个任务子集，利用�
 
 ## 第 6 周：安全与生产可观测性
 
-**当前状态（Phase 3 待独立审查）**：Phase 1 已冻结 OWASP 2026 风险映射与
+**当前状态（Phase 3 integration 已验证）**：Phase 1 已冻结 OWASP 2026 风险映射与
 OpenTelemetry core 1.43.0 / GenAI 固定提交；获批的 Phase 2 已实现
 `crag.observability/v1alpha1` canonical trace/span、序列化前脱敏、旧 JSONL
 兼容投影，以及 Review / Verifier / Repair 的 LLM、工具、策略、审批、沙箱、
 checkpoint 和终态埋点。实现与运行说明见
 `docs/security-observability.md`。A3 授权提交之后，Phase 3 已物化并执行冻结的 48 个
 合成身份（36 对抗、12 正常对照），全部使用 effect-recording fakes。默认离线门禁已
-通过（527 tests、3 skips、86% coverage、Ruff、mypy、双 CLI 冒烟）；48/48 用例通过，
-对抗成功、secret disclosure、已执行越权操作和正常对照误拦均为 0，证据完整率为 1。
+通过（530 tests、3 skips、86% coverage、Ruff、mypy、双 CLI 冒烟）；48/48 用例通过，
+对抗成功、secret disclosure、已执行越权操作和正常对照误拦均为 0。Claude 指出的
+“审计事件事后盖章”已改为实际观测事件经 canonical trace 回读验证；报告强制区分
+23 个 product-code 用例（15 对抗、8 对照）和 25 个 fixed-fixture 用例（21 对抗、4 对照）。
 这些不是实模或生产指标。Phase 4--5 仍未授权；没有 Docker、外部模型、付费评测、
-数据下载或既有 eval/holdout 读取。Phase 3 尚待 Claude 独立审查与 integration 整合。
+数据下载或既有 eval/holdout 读取。Phase 3 已完成 Claude 独立审查、findings 处置和
+integration 离线验证，尚未获批合入 master。
 
 目标不是只增加零散回归，而是冻结威胁模型、可观察副作用和成对正常对照，形成可复核的
 离线安全门禁。计划至少包含 48 个全新合成用例：36 个对抗用例和 12 个成对正常对照。

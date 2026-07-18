@@ -154,6 +154,19 @@ Every reported rate carries its numerator, denominator, excluded count, and
 exact case IDs; a zero denominator is JSON `null`. Policy and trace-overhead
 p50/p95 values use a deterministic fake clock.
 
+Audit evidence is not stamped from the expected outcome. Denials, resource
+bounds, cleanup, redaction, exporter degradation, and allowed controls first
+produce observed evidence. Those events are then serialized through the
+canonical tracer and read back; a missing event or lost trace event fails the
+case and the mandatory evidence gate.
+
+The report preregisters two measurement scopes. Twenty-three cases exercise
+product code directly (15 adversarial and 8 controls); the other 25 are fixed
+recording-fixture invariants (21 adversarial and 4 controls). Every result
+names its scope and exercised component, and the report validator rejects a
+changed classification. All 12 controls have a failure-sensitive observation,
+but fixed-fixture controls still do not measure real-model behavior.
+
 The current deterministic result is 48/48 executed and passed: adversarial
 attack success, secret disclosure, executed unauthorized operation, and
 control false-block rates are zero; evidence completeness is one. This is a

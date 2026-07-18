@@ -16,9 +16,34 @@ Current execution status:
 - Phase 2 observability implementation and default offline validation:
   complete; Claude review, P2 remediation, and integration validation complete;
 - Phase 3 synthetic corpus materialization/execution: authorized 2026-07-18;
-  Codex implementation and full offline validation complete on an isolated
-  branch; independent Claude review and integration remain pending;
+  Codex implementation, independent Claude review, findings remediation, and
+  full integration offline validation complete;
 - Docker, external-model, and paid-evaluation phases: not authorized.
+
+Phase 3 independent-review disposition (2026-07-18):
+
+- `F-P1` (P2), resolved: expected outcomes no longer stamp audit events.
+  Observed policy/resource/cleanup/redaction/export/control evidence emits the
+  events; the canonical trace is read back, and either a missing source event
+  or a lost trace event fails the mandatory gate.
+- `F-P2` (P2), resolved by transparent scope rather than overstating the fake
+  boundary: the report preregisters and validates 23 `product-code` cases
+  (15 adversarial, 8 controls) and 25 `fixed-fixture` cases (21 adversarial,
+  4 controls), with exact IDs and exercised components. The headline result
+  remains explicitly a deterministic control-plane regression, not real-model
+  attack resistance.
+- `F-P3` (P3), resolved: all 12 controls now derive `allowed` from a
+  failure-sensitive observation; regression tests force every control through
+  its false-block path.
+- `F-P4` (P3), resolved: corpus materialization/loading and report validation
+  require the exact A3 authorization anchor
+  `96911b174174c46ea5998c3952f73981d1f39395`.
+- `F-P5` (P3), resolved without a dependency addition: tests require the case
+  and report schemas' required/property sets to equal the Python validator
+  field sets, including result and metric definitions.
+- Final integration validation: 530 tests passed, 3 environment skips, 86%
+  coverage, Ruff/mypy/two CLI smokes passed; the 48-case verifier remained
+  valid. No evaluation assets, network, model, Docker, or paid run was used.
 
 Week 6 is successful only when:
 

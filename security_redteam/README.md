@@ -19,6 +19,14 @@ repository's existing evaluation assets.
 - Reports are generated artifacts, not committed results. Every rate includes
   numerator, denominator, excluded count, and exact case IDs. Synthetic
   latency uses a deterministic fake clock and is not a production benchmark.
+- The A3 authorization SHA is an executable invariant: materialization,
+  corpus loading, and report validation reject any other source commit.
+- Reports distinguish 23 `product-code` cases (15 adversarial, 8 controls)
+  from 25 `fixed-fixture` cases (21 adversarial, 4 controls), with exact IDs
+  and components. A changed classification fails validation.
+- Required events arise from observed policy/resource/cleanup/redaction/export
+  evidence, pass through a canonical trace, and are read back before the audit
+  gate can pass. The runner never stamps events from expected outcomes.
 
 ## Commands
 

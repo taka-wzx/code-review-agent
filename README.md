@@ -227,7 +227,8 @@ SWE-bench 任务数为 0；未下载数据、未启动任务 Docker、未调用�
 ### 安全红队与生产可观测性（Week 6）
 
 Week 6 已在第 5 周合入后的 `master` 基线上完成 Phase 1 合同冻结、Phase 2
-可观测性实现和获批的 Phase 3 确定性离线红队套件。当前实现为 Agent Run、阶段、LLM、工具、策略、审批、沙箱、
+可观测性实现和获批的 Phase 3 确定性离线红队套件。当前实现为 Agent Run、阶段、
+LLM、工具、策略、审批、沙箱、
 checkpoint 和终态建立同根 trace/span 层级；Finder/Verifier 并发 lane 保持兄弟关系；
 Prompt、工具参数/结果、异常、stdout/stderr 和路径在序列化及 exporter 之前脱敏。
 本地 JSONL 不覆盖已有审计文件；Repair 在受保护操作前强制初始化独立本地 sink；
@@ -236,11 +237,16 @@ Phase 3 在 A3 授权提交后才物化冻结的 48 个身份（36 对抗、12 �
 effect-recording fake 模型、工具、文件系统、进程、时钟、审批、checkpoint 和 exporter。
 `scripts/verify_security.py` 拒绝缺失、重复、重排、篡改、静默排除或覆盖既有证据；报告中
 每个比例均绑定分子、分母、排除数和精确 case ID。
+Claude 独立审查发现最初的审计事件会被事后统一盖章；integration 已改为由拒绝、资源、
+清理、脱敏、exporter 和正常对照的实际观测产生事件，再写入 canonical trace 并反向核验。
+报告同时预注册并强制区分 23 个 `product-code` 用例（15 对抗、8 对照）与 25 个
+`fixed-fixture` 用例（21 对抗、4 对照），避免把 48 个身份误读为 48 条产品防御。
 
-默认离线门禁现为 527 个测试通过、3 个环境跳过、
+默认离线门禁现为 530 个测试通过、3 个环境跳过、
 总覆盖率 86%、Ruff/mypy/双入口冒烟通过；未使用 `--eval-assets`。
 48/48 合成用例执行通过：对抗成功率、secret disclosure、已执行越权操作率和正常对照
-误拦率均为 0，证据完整率为 1。这里的时延来自确定性 fake clock，不是生产时延。
+误拦率均为 0；由实际事件及 canonical trace 推导的证据/trace 完整率为 1。
+这里的时延来自确定性 fake clock，不是生产时延。
 
 OpenTelemetry core `1.43.0` 与 GenAI 约定冻结提交已绑定在
 `crag.observability/v1alpha1` profile 中；GenAI 字段仍如实标为 Development，

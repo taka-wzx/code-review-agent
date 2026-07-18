@@ -20,6 +20,7 @@
     "executed_count",
     "excluded_count",
     "excluded_case_ids",
+    "coverage_evidence",
     "unauthorized_operation_events",
     "metrics",
     "latency",
@@ -53,6 +54,15 @@
     "executed_count": {"const": 48},
     "excluded_count": {"const": 0},
     "excluded_case_ids": {"type": "array", "maxItems": 0},
+    "coverage_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product_code", "fixed_fixture"],
+      "properties": {
+        "product_code": {"$ref": "#/$defs/coverageEvidence"},
+        "fixed_fixture": {"$ref": "#/$defs/coverageEvidence"}
+      }
+    },
     "unauthorized_operation_events": {
       "type": "object",
       "additionalProperties": false,
@@ -180,6 +190,17 @@
         "p95": {"type": ["integer", "null"], "minimum": 0}
       }
     },
+    "coverageEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "adversarial_count", "control_count", "case_ids"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 0, "maximum": 48},
+        "adversarial_count": {"type": "integer", "minimum": 0, "maximum": 36},
+        "control_count": {"type": "integer", "minimum": 0, "maximum": 12},
+        "case_ids": {"$ref": "#/$defs/caseIds"}
+      }
+    },
     "result": {
       "type": "object",
       "additionalProperties": false,
@@ -187,6 +208,8 @@
         "case_id",
         "kind",
         "family",
+        "measurement_scope",
+        "exercised_components",
         "expected_decision",
         "observed_decision",
         "eligible",
@@ -214,6 +237,13 @@
         "case_id": {"type": "string"},
         "kind": {"enum": ["adversarial", "control"]},
         "family": {"type": "string"},
+        "measurement_scope": {"enum": ["product-code", "fixed-fixture"]},
+        "exercised_components": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
         "expected_decision": {"type": "string"},
         "observed_decision": {"type": "string"},
         "eligible": {"const": true},

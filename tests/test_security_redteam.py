@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import verify_security
 
@@ -41,15 +42,28 @@ class TestFrozenMaterialization(unittest.TestCase):
         )
         self.assertEqual(len({case["materialized_case_sha256"] for case in cases}), 48)
         self.assertEqual(len({case["seed"] for case in cases}), 48)
-        self.assertEqual(len({case["implementation_source_commit"] for case in cases}), 1)
+        self.assertEqual(
+            {case["implementation_source_commit"] for case in cases},
+            {verify_security.A3_SOURCE_COMMIT},
+        )
         self.assertNotIn("W6_CANARY_", CASES.read_text(encoding="utf-8"))
 
     def test_machine_schemas_parse_and_are_closed_objects(self):
-        for path in (CASE_SCHEMA, REPORT_SCHEMA):
-            with self.subTest(path=path.name):
-                schema = verify_security._load_json(path)
-                self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
-                self.assertIs(schema["additionalProperties"], False)
+        case_schema = verify_security._load_json(CASE_SCHEMA)
+        report_schema = verify_security._load_json(REPORT_SCHEMA)
+        for schema in (case_schema, report_schema):
+            self.assertEqual(schema["$schema"], "https://json-schema.org/draft/2020-12/schema")
+            self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(set(case_schema["required"]), verify_security.CASE_FIELDS)
+        self.assertEqual(set(case_schema["properties"]), verify_security.CASE_FIELDS)
+        self.assertEqual(set(report_schema["required"]), verify_security.REPORT_FIELDS)
+        self.assertEqual(set(report_schema["properties"]), verify_security.REPORT_FIELDS)
+        result_schema = report_schema["$defs"]["result"]
+        self.assertEqual(set(result_schema["required"]), verify_security.RESULT_FIELDS)
+        self.assertEqual(set(result_schema["properties"]), verify_security.RESULT_FIELDS)
+        metric_schema = report_schema["properties"]["metrics"]
+        self.assertEqual(set(metric_schema["required"]), verify_security.METRIC_NAMES)
+        self.assertEqual(set(metric_schema["properties"]), verify_security.METRIC_NAMES)
 
     def test_plan_rejects_changed_hash_flag_count_and_matching_edge(self):
         plan = verify_security._load_json(PLAN)
@@ -101,6 +115,15 @@ class TestFrozenMaterialization(unittest.TestCase):
         tampered[0] = json.dumps(record, sort_keys=True, separators=(",", ":"))
         variants.append(tampered)
 
+        wrong_anchor = list(lines)
+        record = json.loads(wrong_anchor[0])
+        record["implementation_source_commit"] = "1" * 40
+        record["materialized_case_sha256"] = verify_security._canonical_hash(
+            record, omit="materialized_case_sha256"
+        )
+        wrong_anchor[0] = json.dumps(record, sort_keys=True, separators=(",", ":"))
+        variants.append(wrong_anchor)
+
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for index, variant in enumerate(variants):
@@ -113,11 +136,19 @@ class TestFrozenMaterialization(unittest.TestCase):
     def test_materializer_refuses_overwrite_and_invalid_source_commit(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "cases.jsonl"
-            verify_security.write_materialized_cases(PLAN, output, "1" * 40)
+            verify_security.write_materialized_cases(
+                PLAN, output, verify_security.A3_SOURCE_COMMIT
+            )
             with self.assertRaises(verify_security.SecurityVerificationError):
-                verify_security.write_materialized_cases(PLAN, output, "1" * 40)
+                verify_security.write_materialized_cases(
+                    PLAN, output, verify_security.A3_SOURCE_COMMIT
+                )
             with self.assertRaises(verify_security.SecurityVerificationError):
                 verify_security.write_materialized_cases(PLAN, Path(tmp) / "bad", "short")
+            with self.assertRaises(verify_security.SecurityVerificationError):
+                verify_security.write_materialized_cases(
+                    PLAN, Path(tmp) / "wrong-anchor", "1" * 40
+                )
 
 
 class TestDeterministicExecution(unittest.TestCase):
@@ -141,6 +172,102 @@ class TestDeterministicExecution(unittest.TestCase):
         self.assertFalse(any(result["unauthorized_executed"] for result in results))
         self.assertTrue(all(result["audit_complete"] for result in results))
         self.assertTrue(all(result["cleanup_complete"] for result in results))
+
+    def test_audit_gate_is_derived_and_fails_when_an_observed_event_is_missing(self):
+        case = next(case for case in self.cases if case["case_id"] == "W6-SE-01")
+        original = verify_security.EffectRecorder.event
+
+        def drop_policy_denied(recorder, name):
+            if name != "security.policy_denied":
+                original(recorder, name)
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            verify_security.EffectRecorder, "event", drop_policy_denied
+        ):
+            result = verify_security.execute_case(case, Path(tmp))
+
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["audit_complete"])
+        self.assertIn("security.policy_denied", result["missing_audit_events"])
+
+    def test_trace_gate_fails_when_canonical_trace_loses_events(self):
+        case = next(case for case in self.cases if case["case_id"] == "W6-PI-01")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            verify_security, "_audit_events_to_trace", return_value=set()
+        ):
+            result = verify_security.execute_case(case, Path(tmp))
+
+        self.assertFalse(result["passed"])
+        self.assertFalse(result["trace_complete"])
+        self.assertEqual(
+            result["missing_audit_events"],
+            ["security.content_inert", "security.case_completed"],
+        )
+
+    def test_every_control_has_a_failure_sensitive_observation(self):
+        controls = {case["case_id"]: case for case in self.cases if case["kind"] == "control"}
+
+        def execute(case_id, patcher):
+            with tempfile.TemporaryDirectory() as tmp, patcher:
+                return verify_security.execute_case(controls[case_id], Path(tmp))
+
+        for case_id in ("W6-CTRL-01", "W6-CTRL-02", "W6-CTRL-03", "W6-CTRL-04"):
+            result = execute(
+                case_id,
+                mock.patch.object(
+                    verify_security.RecordingFakeModel,
+                    "inspect_untrusted",
+                    return_value="blocked synthetic analysis",
+                ),
+            )
+            with self.subTest(case_id=case_id):
+                self.assertEqual(result["observed_decision"], "false_blocked")
+                self.assertFalse(result["passed"])
+
+        for case_id in ("W6-CTRL-05", "W6-CTRL-07", "W6-CTRL-08"):
+            result = execute(
+                case_id,
+                mock.patch.object(verify_security, "read_file", return_value="Error: blocked"),
+            )
+            with self.subTest(case_id=case_id):
+                self.assertEqual(result["observed_decision"], "false_blocked")
+
+        result = execute(
+            "W6-CTRL-06",
+            mock.patch.object(
+                verify_security,
+                "sanitize_value",
+                return_value=mock.Mock(value={}),
+            ),
+        )
+        self.assertEqual(result["observed_decision"], "false_blocked")
+
+        denied = {
+            "decision": "denied",
+            "mutation_requested": False,
+            "output_truncated": True,
+        }
+        for case_id in ("W6-CTRL-09", "W6-CTRL-10", "W6-CTRL-11"):
+            result = execute(
+                case_id,
+                mock.patch.object(
+                    verify_security.RecordingFakeExecutor,
+                    "run",
+                    return_value=denied,
+                ),
+            )
+            with self.subTest(case_id=case_id):
+                self.assertEqual(result["observed_decision"], "false_blocked")
+
+        result = execute(
+            "W6-CTRL-12",
+            mock.patch.object(
+                verify_security,
+                "_trace_payload",
+                return_value=[{"attributes": {}, "events": []}],
+            ),
+        )
+        self.assertEqual(result["observed_decision"], "false_blocked")
 
     def test_denied_sensitive_and_path_cases_never_cross_fake_read_boundary(self):
         results = {result["case_id"]: result for result in self._execute()}
@@ -182,6 +309,22 @@ class TestDeterministicExecution(unittest.TestCase):
         self.assertEqual(report["metrics"]["false_block_rate"]["value"], 0.0)
         self.assertEqual(report["metrics"]["secret_disclosure_rate"]["value"], 0.0)
         self.assertEqual(report["unauthorized_operation_events"]["executed"], 0)
+        self.assertEqual(report["source_commit"], verify_security.A3_SOURCE_COMMIT)
+        self.assertEqual(
+            report["coverage_evidence"]["product_code"],
+            {
+                "count": 23,
+                "adversarial_count": 15,
+                "control_count": 8,
+                "case_ids": sorted(verify_security.PRODUCT_CODE_CASE_IDS),
+            },
+        )
+        self.assertEqual(
+            report["coverage_evidence"]["fixed_fixture"]["adversarial_count"], 21
+        )
+        self.assertEqual(
+            report["coverage_evidence"]["fixed_fixture"]["control_count"], 4
+        )
         self.assertTrue(all(report["acceptance_gate"].values()))
         for metric in report["metrics"].values():
             self.assertEqual(metric["denominator"], len(metric["denominator_case_ids"]))
@@ -227,6 +370,22 @@ class TestDeterministicExecution(unittest.TestCase):
         )
         with self.assertRaises(verify_security.SecurityVerificationError):
             verify_security.validate_report(extra_metric)
+
+        wrong_source = deepcopy(report)
+        wrong_source["source_commit"] = "1" * 40
+        wrong_source["report_sha256"] = verify_security._canonical_hash(
+            wrong_source, omit="report_sha256"
+        )
+        with self.assertRaises(verify_security.SecurityVerificationError):
+            verify_security.validate_report(wrong_source)
+
+        relabeled_scope = deepcopy(report)
+        relabeled_scope["results"][0]["measurement_scope"] = "product-code"
+        relabeled_scope["report_sha256"] = verify_security._canonical_hash(
+            relabeled_scope, omit="report_sha256"
+        )
+        with self.assertRaises(verify_security.SecurityVerificationError):
+            verify_security.validate_report(relabeled_scope)
 
         metric = verify_security._rate_metric([], [], [])
         self.assertIsNone(metric["value"])
