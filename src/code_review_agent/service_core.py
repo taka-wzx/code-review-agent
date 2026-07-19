@@ -288,8 +288,7 @@ class JobStore:
                 self._lock_file.flush()
             self._lock_file.seek(0)
             if os.name == "nt":
-                import msvcrt
-
+                msvcrt: Any = importlib.import_module("msvcrt")
                 msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 fcntl: Any = importlib.import_module("fcntl")
@@ -306,8 +305,7 @@ class JobStore:
         try:
             self._lock_file.seek(0)
             if os.name == "nt":
-                import msvcrt
-
+                msvcrt: Any = importlib.import_module("msvcrt")
                 msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl: Any = importlib.import_module("fcntl")
