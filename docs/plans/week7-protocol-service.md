@@ -236,10 +236,53 @@ checkout; implementation does not inspect its contents.
 
 ## Delivery report
 
-- Summary: pending
-- Changed files: pending
-- Codex handoff commit: pending
-- Claude review commit: pending
-- Integration/master commit: pending
-- Commands and results: pending
-- Known risks or assumptions: pending
+- Summary: FastAPI, GitHub Webhook, MCP stdio/Streamable HTTP, SQLite job
+  persistence, canonical trace resources, documentation, container packaging,
+  and CI smoke coverage are implemented. Claude's four P2 and six P3 findings
+  were dispositioned on the integration branch without changing frozen
+  interfaces 1--12.
+- Changed files after Claude review: `AGENDA.md`, `README.md`,
+  `docs/protocol-service.md`, this plan, `src/code_review_agent/service.py`,
+  `src/code_review_agent/service_core.py`, `tests/test_week7_service.py`, and
+  `tests/test_week7_service_core.py`. Claude's imported report remains
+  unchanged at `docs/reviews/week7-claude.md`.
+- Codex handoff commit: `dbfd3bebfe4fed109b3c7630f1ef1d2e3a8b3c88`.
+- Claude review commit: `231de1d267c7ca714e82bf9bfd92d624dd7322c2`.
+- Integration/master commit: the final commit containing this report; exact SHA
+  is recorded in the Git handoff and push result.
+- Commands and results: Week 7 focused tests 33/33; targeted Ruff clean; mypy
+  clean for 26 source files; `scripts/verify.py` passed 593 tests with 3 skips,
+  86% coverage against the 85% gate, the 48-case offline security summary at
+  zero attack success/false block/secret disclosure, and both legacy CLI
+  smokes; service help passed with both normal and invalid
+  `CRAG_SERVICE_PORT`; MCP help passed; `git diff --check` passed.
+- Known risks or assumptions: the graceful shutdown continues to drain active
+  work and can therefore take up to the existing review soft deadline; the
+  startup sweep remains the recovery mechanism after forced process death.
+  No live GitHub webhook, `gh`, provider/model, or remote OAuth path was
+  exercised. The service Dockerfile was not buildable locally because the
+  workstation Docker daemon was unavailable; the pushed Linux CI image build
+  is the authoritative container check.
+
+## Claude finding disposition
+
+- `W7C-P2-01`: fixed with bounded request streaming and a chunked oversized
+  body regression test; no full pre-auth body buffering remains.
+- `W7C-P2-02`: fixed with a constant-shape FastAPI validation response that
+  never serializes Pydantic's submitted input.
+- `W7C-P2-03`: fixed with a process-lifetime OS lock per state directory,
+  acquired before startup recovery and released after executor drain.
+- `W7C-P2-04`: fixed by serializing acceptance, row creation, and executor
+  submission against shutdown, with transactional compensation if submission
+  still fails.
+- `W7C-P3-01`/`02`: `gh` failures now use `external_command`; stdout is spooled
+  to a temporary file and actively stopped at 512 KiB or 60 seconds.
+- `W7C-P3-03`: synchronous SQLite/filesystem endpoints now use FastAPI's worker
+  thread path; the async webhook offloads its synchronous service submission.
+- `W7C-P3-04`: lifespan shutdown is in `finally`; graceful drain stays aligned
+  with the frozen contract and existing bounded review deadline.
+- `W7C-P3-05`: added missing delivery, Host 421, concurrent delivery,
+  chunked-oversize, and mounted Streamable HTTP official-client tests.
+- `W7C-P3-06`: corrected the Week 7 count to 33 and made help parsing immune to
+  an invalid port environment value while retaining clean argparse errors for
+  an attempted service start.

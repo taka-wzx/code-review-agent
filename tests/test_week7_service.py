@@ -1,15 +1,28 @@
+from contextlib import redirect_stdout
 import hashlib
 import hmac
+import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
+import anyio
 from fastapi.testclient import TestClient
+import httpx
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
 
-from code_review_agent.service import HttpSettings, create_app
-from code_review_agent.service_core import JobStore, RepositoryRegistry, ReviewService
+from code_review_agent.service import MAX_WEBHOOK_BYTES, HttpSettings, build_parser, create_app
+from code_review_agent.service_core import (
+    MAX_DIFF_BYTES,
+    JobStore,
+    RepositoryRegistry,
+    ReviewService,
+)
 
 from tests.test_week7_service_core import DIFF, FakeRunner
 
@@ -25,11 +38,13 @@ class Week7HttpServiceTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         (self.repo / ".git").mkdir()
-        registry = RepositoryRegistry.from_json(
+        self.registry = RepositoryRegistry.from_json(
             json.dumps({"owner/repo": str(self.repo.resolve())})
         )
         self.runner = FakeRunner()
-        self.service = ReviewService(registry, JobStore(self.root / "state"), runner=self.runner)
+        self.service = ReviewService(
+            self.registry, JobStore(self.root / "state"), runner=self.runner
+        )
         settings = HttpSettings(
             service_token=TOKEN,
             webhook_secret=SECRET,
@@ -111,6 +126,19 @@ class Week7HttpServiceTests(unittest.TestCase):
                 self.assertIn(response.status_code, {400, 422})
         self.assertEqual(self.runner.calls, [])
 
+    def test_validation_error_never_echoes_the_submitted_diff(self):
+        marker = "SENSITIVE-DIFF-CONTENT"
+        submitted = marker + "x" * MAX_DIFF_BYTES
+        response = self.client.post(
+            "/v1/reviews/diff",
+            headers=self.auth,
+            json={"repository": "owner/repo", "diff": submitted},
+        )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["error"]["code"], "validation_error")
+        self.assertNotIn(marker, response.text)
+        self.assertLess(len(response.content), 1024)
+
     def test_github_webhook_signature_idempotency_and_ignored_event(self):
         payload = {
             "action": "opened",
@@ -159,6 +187,34 @@ class Week7HttpServiceTests(unittest.TestCase):
         )
         self.assertEqual(malformed_response.status_code, 400)
 
+    def test_webhook_requires_delivery_id_for_pull_requests(self):
+        payload = {
+            "action": "opened",
+            "repository": {"full_name": "owner/repo"},
+            "pull_request": {"number": 8},
+        }
+        body = json.dumps(payload).encode()
+        headers = self.signed_headers(body)
+        headers.pop("X-GitHub-Delivery")
+        response = self.client.post("/webhooks/github", content=body, headers=headers)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.runner.calls, [])
+
+    def test_chunked_oversized_webhook_is_rejected_while_streaming(self):
+        chunks = [b"x" * (MAX_WEBHOOK_BYTES // 2), b"y" * (MAX_WEBHOOK_BYTES // 2 + 1)]
+        headers = {
+            "X-Hub-Signature-256": "sha256=" + "0" * 64,
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "oversized-delivery",
+            "Content-Type": "application/json",
+        }
+        response = self.client.post(
+            "/webhooks/github", content=iter(chunks), headers=headers
+        )
+        self.assertEqual(response.status_code, 413, response.text)
+        self.assertEqual(response.json()["error"]["code"], "payload_too_large")
+        self.assertEqual(self.runner.calls, [])
+
     def test_webhook_rejects_bad_action_delivery_and_repository(self):
         cases = [
             ({"action": "closed", "repository": {"full_name": "owner/repo"}, "pull_request": {"number": 1}}, "d-1"),
@@ -188,6 +244,50 @@ class Week7HttpServiceTests(unittest.TestCase):
         )
         self.assertNotIn(allowed.status_code, {401, 403, 421})
 
+        bad_host = self.client.post(
+            "/mcp/",
+            headers={**self.auth, "Origin": "http://localhost", "Host": "evil.example"},
+            json={},
+        )
+        self.assertEqual(bad_host.status_code, 421)
+
+    def test_official_client_connects_over_mounted_streamable_http(self):
+        runner = FakeRunner()
+        service = ReviewService(
+            self.registry, JobStore(self.root / "mcp-http-state"), runner=runner
+        )
+        settings = HttpSettings(
+            service_token=TOKEN,
+            webhook_secret=SECRET,
+            allowed_origins=frozenset({"http://localhost"}),
+            allowed_hosts=frozenset({"testserver"}),
+        )
+        app = create_app(settings=settings, review_service=service)
+
+        async def exercise():
+            async with app.router.lifespan_context(app):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                    headers={
+                        "Authorization": f"Bearer {TOKEN}",
+                        "Origin": "http://localhost",
+                    },
+                ) as client:
+                    async with streamable_http_client(
+                        "http://testserver/mcp/", http_client=client
+                    ) as (read, write, _):
+                        async with ClientSession(read, write) as session:
+                            await session.initialize()
+                            tools = await session.list_tools()
+                            self.assertEqual(
+                                {tool.name for tool in tools.tools},
+                                {"review_diff", "review_pr", "get_review_status"},
+                            )
+
+        anyio.run(exercise)
+
     def test_http_settings_enforce_secret_lengths_and_origins(self):
         for kwargs in (
             {"service_token": "short", "webhook_secret": SECRET},
@@ -197,6 +297,14 @@ class Week7HttpServiceTests(unittest.TestCase):
         ):
             with self.subTest(kwargs=kwargs), self.assertRaises(Exception):
                 HttpSettings(**kwargs)
+
+    def test_invalid_port_environment_does_not_break_help(self):
+        output = io.StringIO()
+        with patch.dict(os.environ, {"CRAG_SERVICE_PORT": "abc"}):
+            with redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+                build_parser().parse_args(["--help"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn("--port", output.getvalue())
 
 
 if __name__ == "__main__":

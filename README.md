@@ -299,6 +299,8 @@ HTTP `/v1/*` 和 `/mcp` 强制 Bearer；Webhook 在 JSON 解析前按原始 body
 `X-Hub-Signature-256`；MCP HTTP 还由官方 SDK 校验 Host/Origin。`X-GitHub-Delivery`
 是幂等键，重放不会触发第二次 review。MCP 暴露 `review_diff`、`review_pr`、
 `get_review_status`，两类 review/trace Resource 和 `review_change` Prompt。
+Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；每个状态目录由单一
+进程独占，提交落库与 executor 入队相对 shutdown 原子化，避免任务或 delivery ID 搁浅。
 `approve_patch` 有意不暴露：现有 Repair 审批是一次性且绑定精确 checkpoint/candidate，
 在没有远程身份与 pending-operation 持久绑定前，通用审批 API 会削弱该不变量。A2A 也按
 原路线图推迟到单 Agent 服务与 MCP 有运行证据之后。

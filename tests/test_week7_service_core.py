@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from code_review_agent.service_core import (
     DefaultReviewRunner,
+    ExternalCommandError,
     InvalidRequest,
     JobNotFound,
     JobState,
@@ -20,6 +21,7 @@ from code_review_agent.service_core import (
     ReviewRequest,
     ReviewService,
     ServiceClosed,
+    StateDirectoryInUse,
     normalize_pr_ref,
     normalize_repository,
     validate_diff,
@@ -53,6 +55,25 @@ class FakeRunner:
         return {"summary": "ok", "findings": []}
 
 
+class FakeProcess:
+    def __init__(self, output, data: bytes, *, returncode: int = 0, running: bool = False):
+        output.write(data)
+        output.flush()
+        self.returncode = None if running else returncode
+        self.final_returncode = returncode
+        self.killed = False
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = self.final_returncode
+
+    def wait(self):
+        return self.returncode
+
+
 class Week7ServiceCoreTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -63,9 +84,17 @@ class Week7ServiceCoreTests(unittest.TestCase):
         self.registry = RepositoryRegistry.from_json(
             json.dumps({"Owner/Repo": str(self.repo.resolve())})
         )
+        self.stores: list[JobStore] = []
 
     def tearDown(self):
+        for store in reversed(self.stores):
+            store.close()
         self.temp.cleanup()
+
+    def make_store(self, path: Path) -> JobStore:
+        store = JobStore(path)
+        self.stores.append(store)
+        return store
 
     def wait_terminal(self, service: ReviewService, job_id: str):
         deadline = time.monotonic() + 3
@@ -116,7 +145,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
             validate_diff("diff --git a/a b/a\n" + "x" * MAX_DIFF_BYTES)
 
     def test_store_state_machine_and_trace(self):
-        store = JobStore(self.root / "state")
+        store = self.make_store(self.root / "state")
         job_id, duplicate = store.create(
             source_kind="diff",
             repository="owner/repo",
@@ -142,7 +171,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
 
     def test_store_marks_abandoned_work_failed_on_restart(self):
         state = self.root / "state"
-        store = JobStore(state)
+        store = self.make_store(state)
         queued, _ = store.create(
             source_kind="diff", repository="owner/repo", source_ref="inline",
             source_sha256="0" * 64, source_bytes=1,
@@ -152,14 +181,26 @@ class Week7ServiceCoreTests(unittest.TestCase):
             source_sha256="1" * 64, source_bytes=1,
         )
         store.mark_running(running)
-        restarted = JobStore(state)
+        store.close()
+        restarted = self.make_store(state)
         for job_id in (queued, running):
             job = restarted.get(job_id)
             self.assertEqual(job["state"], "failed")
             self.assertEqual(job["error"]["code"], "service_restarted")
 
+    def test_store_lock_prevents_a_second_process_from_sweeping_live_jobs(self):
+        state = self.root / "state"
+        store = self.make_store(state)
+        queued, _ = store.create(
+            source_kind="diff", repository="owner/repo", source_ref="inline",
+            source_sha256="0" * 64, source_bytes=1,
+        )
+        with self.assertRaises(StateDirectoryInUse):
+            JobStore(state)
+        self.assertEqual(store.get(queued)["state"], "queued")
+
     def test_store_idempotent_delivery_and_result_limit(self):
-        store = JobStore(self.root / "state")
+        store = self.make_store(self.root / "state")
         kwargs = dict(
             source_kind="pull_request", repository="owner/repo", source_ref="1",
             source_sha256="0" * 64, source_bytes=0, delivery_id="delivery-1",
@@ -175,7 +216,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
 
     def test_review_service_success_failure_and_duplicate(self):
         runner = FakeRunner()
-        service = ReviewService(self.registry, JobStore(self.root / "state"), runner=runner)
+        service = ReviewService(self.registry, self.make_store(self.root / "state"), runner=runner)
         try:
             submitted = service.submit_diff("owner/repo", DIFF)
             done = self.wait_terminal(service, submitted["review_id"])
@@ -197,7 +238,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
             service.shutdown()
 
         failing = ReviewService(
-            self.registry, JobStore(self.root / "failure"), runner=FakeRunner(fail=True)
+            self.registry, self.make_store(self.root / "failure"), runner=FakeRunner(fail=True)
         )
         try:
             job = failing.submit_diff("owner/repo", DIFF)
@@ -209,7 +250,9 @@ class Week7ServiceCoreTests(unittest.TestCase):
             failing.shutdown()
 
     def test_shutdown_rejects_new_work(self):
-        service = ReviewService(self.registry, JobStore(self.root / "state"), runner=FakeRunner())
+        service = ReviewService(
+            self.registry, self.make_store(self.root / "state"), runner=FakeRunner()
+        )
         service.shutdown()
         with self.assertRaises(ServiceClosed):
             service.submit_diff("owner/repo", DIFF)
@@ -217,15 +260,17 @@ class Week7ServiceCoreTests(unittest.TestCase):
     def test_default_runner_fetches_pr_diff_with_safe_argv(self):
         calls = []
 
-        def command(argv, **kwargs):
+        def process(argv, **kwargs):
             calls.append((argv, kwargs))
-            return subprocess.CompletedProcess(argv, 0, DIFF, "")
+            return FakeProcess(kwargs["stdout"], DIFF.encode())
 
-        runner = DefaultReviewRunner(client_factory=lambda: (object(), "model"), command_runner=command)
+        runner = DefaultReviewRunner(
+            client_factory=lambda: (object(), "model"), process_factory=process
+        )
         request = ReviewRequest("0" * 32, "pull_request", "owner/repo", self.repo, "7")
         self.assertEqual(runner._pr_diff(request), DIFF)
         self.assertEqual(calls[0][0], ["gh", "pr", "diff", "7"])
-        self.assertFalse(calls[0][1]["check"])
+        self.assertEqual(calls[0][1]["stderr"], subprocess.DEVNULL)
 
     def test_default_runner_closes_canonical_trace(self):
         request = ReviewRequest("0" * 32, "diff", "owner/repo", self.repo, "inline", DIFF)
@@ -243,21 +288,94 @@ class Week7ServiceCoreTests(unittest.TestCase):
 
     def test_pr_diff_command_failures_are_bounded(self):
         request = ReviewRequest("0" * 32, "pull_request", "owner/repo", self.repo, "7")
-        for result in (
-            subprocess.CompletedProcess([], 1, "", "SECRET"),
-            subprocess.CompletedProcess([], 0, "", ""),
+        for returncode, data in (
+            (1, b"SECRET"),
+            (0, b""),
         ):
-            runner = DefaultReviewRunner(command_runner=lambda *args, **kwargs: result)
-            with self.subTest(returncode=result.returncode), self.assertRaisesRegex(
-                RuntimeError, "GitHub diff command failed|empty or too large"
+            runner = DefaultReviewRunner(
+                process_factory=lambda *args, _data=data, _code=returncode, **kwargs: FakeProcess(
+                    kwargs["stdout"], _data, returncode=_code
+                )
+            )
+            with self.subTest(returncode=returncode), self.assertRaisesRegex(
+                ExternalCommandError, "GitHub diff command failed|empty or too large"
             ):
                 runner._pr_diff(request)
-        oversized = subprocess.CompletedProcess([], 0, "x" * (MAX_DIFF_BYTES + 1), "")
-        with self.assertRaisesRegex(RuntimeError, "too large"):
-            DefaultReviewRunner(command_runner=lambda *args, **kwargs: oversized)._pr_diff(request)
+        processes = []
+
+        def oversized(*args, **kwargs):
+            process = FakeProcess(kwargs["stdout"], b"x" * (MAX_DIFF_BYTES + 1), running=True)
+            processes.append(process)
+            return process
+
+        with self.assertRaisesRegex(ExternalCommandError, "too large"):
+            DefaultReviewRunner(process_factory=oversized)._pr_diff(request)
+        self.assertTrue(processes[0].killed)
+
+    def test_external_command_failure_has_stable_category(self):
+        def fail(request, trace_path):
+            del request, trace_path
+            raise ExternalCommandError("SECRET command detail")
+
+        service = ReviewService(
+            self.registry, self.make_store(self.root / "external"), runner=fail
+        )
+        try:
+            job = service.submit_diff("owner/repo", DIFF)
+            failed = self.wait_terminal(service, job["review_id"])
+            self.assertEqual(failed["error"]["code"], "external_command")
+            self.assertNotIn("SECRET", json.dumps(failed))
+        finally:
+            service.shutdown()
+
+    def test_failed_executor_submission_rolls_back_job_and_delivery(self):
+        service = ReviewService(
+            self.registry, self.make_store(self.root / "race"), runner=FakeRunner()
+        )
+        try:
+            with patch.object(
+                service._executor,
+                "submit",
+                side_effect=RuntimeError("executor closed"),
+            ), self.assertRaises(ServiceClosed):
+                service.submit_pr("owner/repo", "9", delivery_id="delivery-race")
+            job, duplicate = service.submit_pr(
+                "owner/repo", "9", delivery_id="delivery-race"
+            )
+            self.assertFalse(duplicate)
+            self.wait_terminal(service, job["review_id"])
+        finally:
+            service.shutdown()
+
+    def test_concurrent_delivery_submission_queues_once(self):
+        gate = threading.Event()
+        runner = FakeRunner(block=gate)
+        service = ReviewService(
+            self.registry, self.make_store(self.root / "concurrent"), runner=runner
+        )
+        results = []
+
+        def submit():
+            results.append(
+                service.submit_pr("owner/repo", "10", delivery_id="delivery-concurrent")
+            )
+
+        threads = [threading.Thread(target=submit) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(2)
+        gate.set()
+        try:
+            self.assertEqual(sorted(duplicate for _, duplicate in results), [False, True])
+            self.assertEqual({job["review_id"] for job, _ in results}, {results[0][0]["review_id"]})
+            self.wait_terminal(service, results[0][0]["review_id"])
+            self.assertEqual(len(runner.calls), 1)
+        finally:
+            service.shutdown()
 
     def test_trace_reader_rejects_malformed_and_oversized_content(self):
-        store = JobStore(self.root / "state")
+        store = self.make_store(self.root / "state")
         for index, content in enumerate(("not json\n", "x" * (MAX_TRACE_BYTES + 1))):
             job_id, _ = store.create(
                 source_kind="diff", repository="owner/repo", source_ref="inline",

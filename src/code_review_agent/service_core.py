@@ -7,13 +7,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
+import tempfile
 import threading
+import time
 from typing import Any, Callable, Mapping, Protocol
 import uuid
 
@@ -54,6 +57,14 @@ class JobNotFound(ServiceError):
 
 class ServiceClosed(ServiceError):
     code = "service_closed"
+
+
+class StateDirectoryInUse(ServiceError):
+    code = "state_directory_in_use"
+
+
+class ExternalCommandError(RuntimeError):
+    """A bounded failure from an external command-line dependency."""
 
 
 class JobState(str, Enum):
@@ -170,7 +181,7 @@ def _safe_failure(exc: BaseException) -> str:
         return "timeout"
     if "connection" in name or "apistatus" in name:
         return "provider"
-    if isinstance(exc, (FileNotFoundError, subprocess.SubprocessError)):
+    if isinstance(exc, (ExternalCommandError, FileNotFoundError, subprocess.SubprocessError)):
         return "external_command"
     return "internal"
 
@@ -182,30 +193,44 @@ class DefaultReviewRunner:
         self,
         *,
         client_factory: Callable[[], tuple[Any, str]] = make_client,
-        command_runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        process_factory: Callable[..., Any] = subprocess.Popen,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._client_factory = client_factory
-        self._command_runner = command_runner
+        self._process_factory = process_factory
+        self._clock = clock
+        self._sleep = sleep
 
     def _pr_diff(self, request: ReviewRequest) -> str:
-        try:
-            proc = self._command_runner(
-                ["gh", "pr", "diff", request.source_ref],
-                cwd=request.repo_root,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=60,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise RuntimeError("GitHub diff command failed") from exc
-        if proc.returncode != 0:
-            raise RuntimeError("GitHub diff command failed")
-        diff = proc.stdout
-        if not diff.strip() or len(diff.encode("utf-8")) > MAX_DIFF_BYTES:
-            raise RuntimeError("GitHub diff is empty or too large")
+        with tempfile.TemporaryFile() as output:
+            try:
+                proc = self._process_factory(
+                    ["gh", "pr", "diff", request.source_ref],
+                    cwd=request.repo_root,
+                    stdout=output,
+                    stderr=subprocess.DEVNULL,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise ExternalCommandError("GitHub diff command failed") from exc
+            deadline = self._clock() + 60
+            while proc.poll() is None:
+                if os.fstat(output.fileno()).st_size > MAX_DIFF_BYTES:
+                    proc.kill()
+                    proc.wait()
+                    raise ExternalCommandError("GitHub diff is too large")
+                if self._clock() >= deadline:
+                    proc.kill()
+                    proc.wait()
+                    raise ExternalCommandError("GitHub diff command timed out")
+                self._sleep(0.01)
+            if proc.returncode != 0:
+                raise ExternalCommandError("GitHub diff command failed")
+            output.seek(0)
+            encoded = output.read(MAX_DIFF_BYTES + 1)
+        if not encoded.strip() or len(encoded) > MAX_DIFF_BYTES:
+            raise ExternalCommandError("GitHub diff is empty or too large")
+        diff = encoded.decode("utf-8", errors="replace")
         return diff
 
     def __call__(self, request: ReviewRequest, trace_path: Path) -> dict[str, Any]:
@@ -246,7 +271,49 @@ class JobStore:
             self.state_dir.chmod(0o700)
             self.trace_dir.chmod(0o700)
         self.database = self.state_dir / "reviews.sqlite3"
-        self._initialize()
+        self._lock_file = (self.state_dir / ".service.lock").open("a+b")
+        self._closed = False
+        try:
+            self._acquire_state_lock()
+            self._initialize()
+        except BaseException:
+            self._lock_file.close()
+            raise
+
+    def _acquire_state_lock(self) -> None:
+        try:
+            self._lock_file.seek(0)
+            if self._lock_file.read(1) == b"":
+                self._lock_file.write(b"\0")
+                self._lock_file.flush()
+            self._lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl: Any = importlib.import_module("fcntl")
+                fcntl.flock(
+                    self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
+                )
+        except (OSError, BlockingIOError) as exc:
+            raise StateDirectoryInUse("service state directory is already in use") from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._lock_file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl: Any = importlib.import_module("fcntl")
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            self._lock_file.close()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.database, timeout=10, isolation_level=None)
@@ -348,6 +415,23 @@ class JobStore:
                 conn.rollback()
                 raise
         return job_id, False
+
+    def delete_queued(self, job_id: str) -> None:
+        """Compensate a committed submission that could not reach the executor."""
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute("DELETE FROM deliveries WHERE job_id=?", (_job_id(job_id),))
+                cursor = conn.execute(
+                    "DELETE FROM jobs WHERE id=? AND state=?",
+                    (_job_id(job_id), JobState.QUEUED.value),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("queued review could not be removed")
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
 
     def _transition(self, job_id: str, current: str, target: str, **fields: Any) -> None:
         assignments = ["state=?"] + [f"{name}=?" for name in fields]
@@ -462,14 +546,16 @@ class ReviewService:
         self._lock = threading.Lock()
         self._accepting = True
 
-    def _queue(self, request: ReviewRequest) -> None:
-        with self._lock:
-            if not self._accepting:
-                raise ServiceClosed("review service is shutting down")
-            try:
-                self._executor.submit(self._run, request)
-            except RuntimeError as exc:
-                raise ServiceClosed("review service is shutting down") from exc
+    def _ensure_accepting(self) -> None:
+        if not self._accepting:
+            raise ServiceClosed("review service is shutting down")
+
+    def _queue_locked(self, request: ReviewRequest) -> None:
+        try:
+            self._executor.submit(self._run, request)
+        except RuntimeError as exc:
+            self.store.delete_queued(request.job_id)
+            raise ServiceClosed("review service is shutting down") from exc
 
     def _run(self, request: ReviewRequest) -> None:
         try:
@@ -487,14 +573,16 @@ class ReviewService:
     def submit_diff(self, repository: str, diff: str) -> dict[str, Any]:
         alias, root = self.registry.resolve(repository)
         digest, size = validate_diff(diff)
-        job_id, _ = self.store.create(
-            source_kind="diff",
-            repository=alias,
-            source_ref="inline",
-            source_sha256=digest,
-            source_bytes=size,
-        )
-        self._queue(ReviewRequest(job_id, "diff", alias, root, "inline", diff))
+        with self._lock:
+            self._ensure_accepting()
+            job_id, _ = self.store.create(
+                source_kind="diff",
+                repository=alias,
+                source_ref="inline",
+                source_sha256=digest,
+                source_bytes=size,
+            )
+            self._queue_locked(ReviewRequest(job_id, "diff", alias, root, "inline", diff))
         return self.store.get(job_id)
 
     def submit_pr(
@@ -510,16 +598,18 @@ class ReviewService:
         if delivery_id is not None:
             if not isinstance(delivery_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", delivery_id):
                 raise InvalidRequest("delivery ID is invalid")
-        job_id, duplicate = self.store.create(
-            source_kind="pull_request",
-            repository=alias,
-            source_ref=reference,
-            source_sha256=digest,
-            source_bytes=0,
-            delivery_id=delivery_id,
-        )
-        if not duplicate:
-            self._queue(ReviewRequest(job_id, "pull_request", alias, root, reference))
+        with self._lock:
+            self._ensure_accepting()
+            job_id, duplicate = self.store.create(
+                source_kind="pull_request",
+                repository=alias,
+                source_ref=reference,
+                source_sha256=digest,
+                source_bytes=0,
+                delivery_id=delivery_id,
+            )
+            if not duplicate:
+                self._queue_locked(ReviewRequest(job_id, "pull_request", alias, root, reference))
         return self.store.get(job_id), duplicate
 
     def get(self, job_id: str) -> dict[str, Any]:
@@ -530,8 +620,14 @@ class ReviewService:
 
     def shutdown(self, *, wait: bool = True) -> None:
         with self._lock:
+            if not self._accepting:
+                return
             self._accepting = False
-        self._executor.shutdown(wait=wait, cancel_futures=not wait)
+        try:
+            self._executor.shutdown(wait=wait, cancel_futures=not wait)
+        finally:
+            if wait:
+                self.store.close()
 
 
 def create_review_service_from_env(*, runner: ReviewRunner | None = None) -> ReviewService:

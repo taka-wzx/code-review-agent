@@ -10,9 +10,11 @@ import os
 from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field
+import anyio
 import uvicorn
 
 from code_review_agent.mcp_server import create_mcp
@@ -42,6 +44,10 @@ class PullRequestSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     repository: str = Field(min_length=3, max_length=128)
     pull_request: str = Field(min_length=1, max_length=256)
+
+
+class PayloadTooLarge(ServiceError):
+    code = "payload_too_large"
 
 
 class HttpSettings:
@@ -119,6 +125,15 @@ def _webhook_fields(payload: Any) -> tuple[str, str]:
     return alias, str(number)
 
 
+async def _bounded_body(request: Request, limit: int) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise PayloadTooLarge("request body is too large")
+        body.extend(chunk)
+    return bytes(body)
+
+
 def create_app(
     *,
     settings: HttpSettings | None = None,
@@ -138,9 +153,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         del app
-        async with mcp.session_manager.run():
-            yield
-        service.shutdown()
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            service.shutdown()
 
     app = FastAPI(
         title="code-review-agent service",
@@ -153,13 +170,34 @@ def create_app(
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
         del request
-        status = 404 if isinstance(exc, JobNotFound) else 503 if isinstance(exc, ServiceClosed) else 400
+        status = (
+            404
+            if isinstance(exc, JobNotFound)
+            else 503
+            if isinstance(exc, ServiceClosed)
+            else 413
+            if isinstance(exc, PayloadTooLarge)
+            else 400
+        )
         if exc.code == "service_error":
             status = 401
         return JSONResponse(
             status_code=status,
             content={"schema_version": SCHEMA_VERSION, "error": {"code": exc.code}},
             headers={"WWW-Authenticate": "Bearer"} if status == 401 else None,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        del request, exc
+        return JSONResponse(
+            status_code=422,
+            content={
+                "schema_version": SCHEMA_VERSION,
+                "error": {"code": "validation_error"},
+            },
         )
 
     @app.middleware("http")
@@ -181,20 +219,20 @@ def create_app(
         return {"schema_version": SCHEMA_VERSION, "status": "ok"}
 
     @app.post("/v1/reviews/diff", status_code=202)
-    async def submit_diff(body: DiffSubmission) -> dict[str, Any]:
+    def submit_diff(body: DiffSubmission) -> dict[str, Any]:
         return service.submit_diff(body.repository, body.diff)
 
     @app.post("/v1/reviews/pr", status_code=202)
-    async def submit_pr(body: PullRequestSubmission) -> dict[str, Any]:
+    def submit_pr(body: PullRequestSubmission) -> dict[str, Any]:
         job, duplicate = service.submit_pr(body.repository, body.pull_request)
         return {**job, "duplicate": duplicate}
 
     @app.get("/v1/reviews/{review_id}")
-    async def get_review(review_id: str) -> dict[str, Any]:
+    def get_review(review_id: str) -> dict[str, Any]:
         return service.get(review_id)
 
     @app.get("/v1/reviews/{review_id}/trace", response_class=PlainTextResponse)
-    async def get_trace(review_id: str) -> PlainTextResponse:
+    def get_trace(review_id: str) -> PlainTextResponse:
         return PlainTextResponse(service.get_trace(review_id), media_type="application/x-ndjson")
 
     @app.post("/webhooks/github", status_code=202)
@@ -203,12 +241,10 @@ def create_app(
         if length is not None:
             try:
                 if int(length) > MAX_WEBHOOK_BYTES:
-                    raise InvalidRequest("webhook body is too large")
+                    raise PayloadTooLarge("webhook body is too large")
             except ValueError as exc:
                 raise InvalidRequest("content-length is invalid") from exc
-        body = await request.body()
-        if len(body) > MAX_WEBHOOK_BYTES:
-            raise InvalidRequest("webhook body is too large")
+        body = await _bounded_body(request, MAX_WEBHOOK_BYTES)
         _webhook_signature(body, request.headers.get("x-hub-signature-256", ""), http.webhook_secret)
         event = request.headers.get("x-github-event", "")
         delivery = request.headers.get("x-github-delivery", "")
@@ -222,12 +258,16 @@ def create_app(
                 status_code=202,
                 content={"schema_version": SCHEMA_VERSION, "status": "ignored"},
             )
+        if not delivery:
+            raise InvalidRequest("webhook delivery ID is required")
         try:
             payload = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
         repository, pull_request = _webhook_fields(payload)
-        job, duplicate = service.submit_pr(repository, pull_request, delivery_id=delivery)
+        job, duplicate = await anyio.to_thread.run_sync(
+            lambda: service.submit_pr(repository, pull_request, delivery_id=delivery)
+        )
         return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})
 
     app.mount("/mcp", mcp.streamable_http_app())
@@ -237,15 +277,27 @@ def create_app(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the code-review-agent HTTP/MCP service")
     parser.add_argument("--host", default=os.environ.get("CRAG_SERVICE_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("CRAG_SERVICE_PORT", "8000")))
+    parser.add_argument(
+        "--port",
+        type=_port,
+        default=os.environ.get("CRAG_SERVICE_PORT", "8000"),
+    )
     parser.add_argument("--log-level", choices=["critical", "error", "warning", "info"], default="info")
     return parser
 
 
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    if not 1 <= args.port <= 65535:
-        raise SystemExit("--port must be between 1 and 65535")
     app = create_app()
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 

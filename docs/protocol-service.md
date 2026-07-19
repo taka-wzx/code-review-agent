@@ -15,11 +15,15 @@ mutation authority.
 - MCP Streamable HTTP validates both `Host` and optional `Origin` headers to
   prevent DNS rebinding. The process binds to `127.0.0.1` by default.
 - Inline diffs are limited to 512 KiB, webhook bodies to 1 MiB, persisted
-  results to 2 MiB, and trace responses to 4 MiB. Worker concurrency is 1--8.
+  results to 2 MiB, and trace responses to 4 MiB. Webhook bodies are rejected
+  while streaming, before the service buffers more than 1 MiB. Worker
+  concurrency is 1--8.
 - SQLite stores job metadata, the completed review, and a diff hash/byte count;
   it does not persist the submitted diff or any HTTP/webhook/provider secret.
 - Provider and command failures become stable error categories. Responses do
   not echo exception messages, host paths, command output, diffs, or keys.
+- Pull-request diff stdout is spooled to a temporary file and stopped at the
+  512 KiB/60-second bounds instead of being captured without a memory limit.
 - Each job gets an exclusive canonical Week 6 trace file. Trace resources can
   only be addressed by a valid job ID; callers never provide a trace path.
 
@@ -55,6 +59,12 @@ optional `LLM_MODEL`. The review worker invokes `gh pr diff` for PR jobs, so
 `gh` must be installed and authenticated for those registered checkouts. The
 service image installs `gh` and `git`; inject a scoped `GH_TOKEN` at runtime
 instead of mounting a host credential directory.
+
+Exactly one `crag-service` or `crag-mcp` process may own a given
+`CRAG_STATE_DIR`. The process holds an OS file lock for its lifetime and a
+second process fails before the startup recovery sweep. Use a distinct state
+directory for independent processes; do not point concurrent processes at the
+same SQLite/trace directory.
 
 PowerShell example (generate fresh values; never copy these placeholders):
 
@@ -99,7 +109,10 @@ contains the unchanged Review Agent result; a failure contains only a stable
 error code. `GET /v1/reviews/{review_id}/trace` returns redacted canonical
 JSONL after the job is terminal.
 
-States are monotonic: `queued -> running -> succeeded|failed`. On startup,
+States are monotonic: `queued -> running -> succeeded|failed`. Committing a
+submission and placing it on the executor are serialized against shutdown; a
+failed executor submission removes its queued job and delivery idempotency row.
+On startup,
 abandoned queued/running records become `failed/service_restarted`. This is a
 single-process bounded executor, not a distributed durable queue.
 
@@ -144,9 +157,10 @@ Resources:
 
 Prompt: `review_change(repository, change, focus="correctness")`.
 
-The official SDK in-memory client is used by the offline tests to initialize a
-real MCP session, list all capabilities, call each tool, read both resource
-templates, and retrieve the prompt without network or model access.
+The official SDK clients are used by the offline tests both in memory and over
+the mounted Streamable HTTP ASGI path. They initialize a real MCP session, list
+all capabilities, call each tool, read both resource templates, and retrieve
+the prompt without network or model access.
 
 ## Container
 
