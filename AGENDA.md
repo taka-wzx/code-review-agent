@@ -19,8 +19,12 @@
 - 第 6 周：Phase 1--3 合同、可观测性、离线红队、Claude 审查和 integration 整合已完成；
   Phase 4 的 12 个受限 Docker 探针全部通过且无残留容器，Phase 5 的 24 次 GLM-5.2
   合成攻击/对照探针完成，攻击成功和误拦均为 0，估算成本约 ¥0.13842。Phase 6 独立
-  Claude 终审、唯一 P2 修复及 integration 全量验证已完成；Phase 7 master/push/CI
-  尚待执行。
+  Claude 终审、唯一 P2 修复及 integration 全量验证已完成；已合入并推送 `master`，
+  GitHub CI 到达成功终态。
+- 第 7 周：已冻结 FastAPI / GitHub Webhook / MCP 服务合同并完成 Codex 实现；Bearer、
+  Webhook HMAC、Host/Origin 防 DNS rebinding、注册仓库白名单、SQLite 幂等任务状态和
+  canonical trace 资源已通过 21 个新增离线协议测试及全仓门禁。Claude `fable5` 独立审查、
+  findings 处置、推送和 CI 终态仍待完成。
 
 ## 第 1 周：工程基线与公开交付
 
@@ -180,6 +184,13 @@ MCP Adapter 可暴露：
 - `get_trace`
 
 MCP 的 Tools、Resources、Prompts 与现有自定义工具层对齐。A2A 等单 Agent 和 MCP 完成后再引入，用于暴露可发现、可协作的 Finder、Verifier 或 Repair Agent。
+
+本周改进后的冻结范围：先交付统一异步 Review 任务核心，FastAPI 提供注册仓库限定的
+diff/PR 提交、状态与 trace API，GitHub Webhook 使用 HMAC 和 delivery 幂等；MCP 通过
+官方稳定 1.x SDK 暴露 `review_diff`、`review_pr`、`get_review_status` 三个 Tool、review/
+trace Resource 和复用 Prompt。`get_trace` 按 MCP 语义实现为 Resource。`approve_patch`
+推迟到远程身份与 pending Repair 操作可持久绑定后，避免把现有一次性审批降级为通用布尔
+开关；A2A 继续推迟。完整合同见 `docs/plans/week7-protocol-service.md`。
 
 ## 第 8 周：补齐“算法岗”模型侧证据
 

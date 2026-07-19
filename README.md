@@ -24,6 +24,7 @@
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
 - **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
 - **Canonical trace/span**（`observability.py`、`redaction.py`、`tracelog.py`，Week 6 Phase 2）：每次 Agent Run、阶段、LLM、工具、策略、审批、沙箱、checkpoint 和终态使用同一 `crag.observability/v1alpha1` trace；记录 provider/model、可用 token、整数 micro-USD、时延、工具与 fail-open/degraded 计数；原始 Prompt、diff、工具参数/结果、stdout/stderr、异常消息和主机绝对路径在序列化前统一剔除或脱敏；旧 flat JSONL 读取兼容保留到 0.2.x
+- **HTTP / GitHub Webhook / MCP 服务**（Week 7）：FastAPI 与官方 MCP SDK 共用异步任务核心；Bearer、Webhook HMAC、Host/Origin 防 DNS rebinding、注册仓库白名单、SQLite 幂等状态和 canonical trace 资源形成统一边界
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）
 - **敏感文件防护**：`read_file` 黑名单拦截 `.env*` / `*.pem` / `*.key` / `id_rsa*` / `credentials*` 等；搜索与遍历跳过 vcs/venv/缓存目录；git/gh 子进程 list 形式无 shell 注入，`-` 开头参数注入有校验
@@ -129,6 +130,10 @@ python3 -m venv .venv
 ```bash
 docker build -t code-review-agent .
 docker run --rm code-review-agent --help
+
+# 独立服务镜像（默认只做 help smoke；运行需要显式注入服务配置）
+docker build -f Dockerfile.service -t code-review-agent-service .
+docker run --rm code-review-agent-service --help
 ```
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
@@ -282,6 +287,27 @@ Phase 4 使用本地 content-addressed 镜像串行执行 12 个无网络、只�
 不是一般性的符号链接逃逸证明；运行时锁定的是本地 Docker image config ID，合同中的
 `repository_digest` 不是已向 registry 验证的 manifest digest；结果交叉校验器兼作全清
 验收门，因此诚实记录的失败仍会保留在不可变报告中，但验收命令会非零退出。
+
+### 标准协议与服务化（Week 7）
+
+Week 7 新增 `crag-service`（FastAPI + GitHub Webhook + MCP Streamable HTTP）和
+`crag-mcp`（MCP stdio）。两种协议共用 `ReviewService`：提交只引用管理员预注册的
+`owner/repo`，任务异步经过 `queued -> running -> succeeded|failed`，SQLite 保存幂等
+身份/状态/结果但不保存 inline diff，trace 继续使用 Week 6 的 canonical JSONL。
+
+HTTP `/v1/*` 和 `/mcp` 强制 Bearer；Webhook 在 JSON 解析前按原始 body 校验
+`X-Hub-Signature-256`；MCP HTTP 还由官方 SDK 校验 Host/Origin。`X-GitHub-Delivery`
+是幂等键，重放不会触发第二次 review。MCP 暴露 `review_diff`、`review_pr`、
+`get_review_status`，两类 review/trace Resource 和 `review_change` Prompt。
+`approve_patch` 有意不暴露：现有 Repair 审批是一次性且绑定精确 checkpoint/candidate，
+在没有远程身份与 pending-operation 持久绑定前，通用审批 API 会削弱该不变量。A2A 也按
+原路线图推迟到单 Agent 服务与 MCP 有运行证据之后。
+
+配置、REST/MCP 示例、安全边界、GitHub Webhook 和容器说明见
+[`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
+[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。当前证据是
+注入 fake runner 的离线协议测试；未发送真实 Webhook、未调用模型、未向 GitHub 发帖、
+未执行 Docker 服务探针，因此不声称生产可用性或远程 OAuth 已完成。
 
 ### 历史开发基准
 

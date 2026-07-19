@@ -25,3 +25,6 @@ dist
 eval/results*
 eval/bench_out
 traces
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal

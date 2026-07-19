@@ -1,0 +1,29 @@
+ARG PYTHON_VERSION=3.13
+FROM python:${PYTHON_VERSION}-slim
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CRAG_SERVICE_HOST=0.0.0.0 \
+    CRAG_SERVICE_PORT=8000 \
+    CRAG_STATE_DIR=/state
+
+WORKDIR /app
+
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates gh git \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install . \
+    && useradd --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir /state \
+    && chown appuser:appuser /state
+
+USER appuser
+
+EXPOSE 8000
+ENTRYPOINT ["crag-service"]
+CMD ["--help"]

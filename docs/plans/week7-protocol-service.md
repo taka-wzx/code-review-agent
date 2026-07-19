@@ -61,6 +61,8 @@ Primary references frozen on 2026-07-19:
 - `CRAG_SERVICE_WORKERS`: bounded `1..8`, default `2`.
 - `CRAG_ALLOWED_ORIGINS`: exact HTTP MCP Origin allowlist; localhost origins are
   the secure local default.
+- `CRAG_ALLOWED_HOSTS`: exact MCP Host-header allowlist (with optional `:*` port
+  suffix); loopback hosts are the secure local default.
 
 ### HTTP endpoints
 

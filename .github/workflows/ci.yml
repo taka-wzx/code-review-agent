@@ -53,3 +53,7 @@ jobs:
         run: docker build --tag code-review-agent:ci .
       - name: Start CLI image
         run: docker run --rm code-review-agent:ci --help
+      - name: Build service image
+        run: docker build --file Dockerfile.service --tag code-review-agent-service:ci .
+      - name: Start service image
+        run: docker run --rm code-review-agent-service:ci --help
