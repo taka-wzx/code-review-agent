@@ -192,6 +192,15 @@ trace Resource 和复用 Prompt。`get_trace` 按 MCP 语义实现为 Resource�
 推迟到远程身份与 pending Repair 操作可持久绑定后，避免把现有一次性审批降级为通用布尔
 开关；A2A 继续推迟。完整合同见 `docs/plans/week7-protocol-service.md`。
 
+### 第 7.5 阶段：真实协议链路验证
+
+在不扩展产品接口的前提下，以一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和一次
+`deepseek-v4-pro` 审查验证真实链路。唯一任务成功；官方重投和同 payload 签名重放复用
+同一 review，未增加模型调用；无效 HMAC 返回 401。初次 Webhook 因同步等待 PR diff 超过
+GitHub 10 秒期限，说明生产化前仍需把慢操作移出响应路径，并把重复投递响应缩减为紧凑确认。
+本阶段不包含 Docker/Linux、MCP-over-HTTP、远程 OAuth、审批 API 或 A2A；完整证据见
+`docs/week7-5-live-validation.md`。
+
 ## 第 8 周：补齐“算法岗”模型侧证据
 
 训练一个可控的 Verifier / Reranker，而不是完整 Code LLM。

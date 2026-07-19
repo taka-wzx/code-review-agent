@@ -13,8 +13,7 @@ production readiness.
 - Base branch: `master`
 - Base commit: `dff20d3f49b9c293c0742b8cfcb50f4941b8230a`
 - Task branch: `codex/week7-5-live-validation`
-- Task worktree:
-  `E:\shiyan\code_review_agent\traces\worktrees\codex-week7-5`
+- Task worktree: isolated local worktree (host path intentionally omitted)
 - Target repository: private `taka-wzx/code-review-agent`
 - Target change: a draft PR from the task branch to `master`
 - Provider/model: locally configured `deepseek` / `deepseek-v4-pro`
@@ -123,12 +122,25 @@ absolute paths.
 
 ## Delivery report
 
-- Summary: pending
-- Draft PR: pending
-- Live `gh` result: pending
-- Live model result and cost: pending
-- Webhook delivery/redelivery result: pending
-- Cleanup result: pending
-- Offline commands and results: pending
-- Claude review: pending
-- Remaining risks: pending
+- Summary: the bounded GitHub, Webhook, `gh`, and paid-model paths ran on
+  2026-07-19; full evidence is in `docs/week7-5-live-validation.md`.
+- Draft PR: private draft PR #3 remains open and unmerged.
+- Live `gh` result: authenticated repository access and a non-empty PR diff
+  succeeded with official `gh` 2.96.0.
+- Live model result and cost: one unique job succeeded with
+  `deepseek/deepseek-v4-pro`; the trace-derived price estimate was CNY
+  0.6342652, below the CNY 5.00 cap.
+- Webhook delivery/redelivery result: the first delivery was accepted by the
+  service but exceeded GitHub's 10-second response deadline; official
+  redelivery returned 202 with the original review identity. A signed replay
+  of the same real payload proved `duplicate: true`, while job and provider
+  counts stayed unchanged. Invalid HMAC returned 401.
+- Cleanup result: the temporary hook was deleted; service/tunnel processes and
+  the task-specific temporary directory were removed.
+- Offline commands and results: 33/33 focused tests, targeted Ruff, mypy for
+  26 source files, full `scripts/verify.py` (593 tests, 3 skips, 86% coverage),
+  both service/MCP help smokes, and `git diff --check` passed.
+- Claude review: pending manual handoff.
+- Remaining risks: initial Webhook response latency, GitHub response-body
+  truncation for completed duplicate jobs, and the unverified Docker/Linux,
+  MCP-over-HTTP, live OAuth, A2A, and remote approval paths.

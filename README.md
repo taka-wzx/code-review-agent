@@ -307,9 +307,12 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 
 配置、REST/MCP 示例、安全边界、GitHub Webhook 和容器说明见
 [`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
-[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。当前证据是
-注入 fake runner 的离线协议测试；未发送真实 Webhook、未调用模型、未向 GitHub 发帖、
-未执行 Docker 服务探针，因此不声称生产可用性或远程 OAuth 已完成。
+[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。Week 7.5 又以
+一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和 `deepseek-v4-pro` 完成了有界真实链路：
+唯一任务成功，重投保持同一 review 且未增加模型调用，无效签名返回 401。初次投递也暴露了
+`gh pr diff` 可能超过 GitHub 10 秒响应期限的运行风险；Docker/Linux、MCP-over-HTTP 与远程
+OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
+[`docs/week7-5-live-validation.md`](docs/week7-5-live-validation.md)。
 
 ### 历史开发基准
 
