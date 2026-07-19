@@ -24,7 +24,7 @@
 - 第 7 周：已冻结 FastAPI / GitHub Webhook / MCP 服务合同并完成 Codex 实现；Bearer、
   Webhook HMAC、Host/Origin 防 DNS rebinding、注册仓库白名单、SQLite 幂等任务状态和
   canonical trace 资源已通过 33 个新增离线协议测试及全仓门禁。Claude `fable5` 独立审查提出的
-  4 项 P2 和 6 项 P3 已全部处置；推送和 CI 终态仍待完成。
+  4 项 P2 和 6 项 P3 已全部处置；已合入并推送 `master`，GitHub CI 全部 7 个 job 到达成功终态。
 
 ## 第 1 周：工程基线与公开交付
 

@@ -248,21 +248,26 @@ checkout; implementation does not inspect its contents.
   unchanged at `docs/reviews/week7-claude.md`.
 - Codex handoff commit: `dbfd3bebfe4fed109b3c7630f1ef1d2e3a8b3c88`.
 - Claude review commit: `231de1d267c7ca714e82bf9bfd92d624dd7322c2`.
-- Integration/master commit: the final commit containing this report; exact SHA
-  is recorded in the Git handoff and push result.
+- Integration/master code commit:
+  `b320f560d0957cd77dbbc0d9b69c54778a8c2977`; the later status-only commit
+  records the successful CI result without changing runtime code.
 - Commands and results: Week 7 focused tests 33/33; targeted Ruff clean; mypy
   clean for 26 source files; `scripts/verify.py` passed 593 tests with 3 skips,
   86% coverage against the 85% gate, the 48-case offline security summary at
   zero attack success/false block/secret disclosure, and both legacy CLI
   smokes; service help passed with both normal and invalid
   `CRAG_SERVICE_PORT`; MCP help passed; `git diff --check` passed.
+- GitHub CI: push run `29675713055` completed successfully. Ubuntu Python
+  3.10/3.11/3.12/3.13, Windows Python 3.11, lockfile install, and CLI/service
+  container build-and-help smoke jobs all passed.
 - Known risks or assumptions: the graceful shutdown continues to drain active
   work and can therefore take up to the existing review soft deadline; the
   startup sweep remains the recovery mechanism after forced process death.
-  No live GitHub webhook, `gh`, provider/model, or remote OAuth path was
-  exercised. The service Dockerfile was not buildable locally because the
-  workstation Docker daemon was unavailable; the pushed Linux CI image build
-  is the authoritative container check.
+  No live GitHub webhook, `gh`, provider/model, service health probe, or remote
+  OAuth path was exercised. The service Dockerfile was not buildable locally
+  because the workstation Docker daemon was unavailable; the pushed Linux CI
+  image build and help smoke succeeded and are the authoritative container
+  checks for this delivery.
 
 ## Claude finding disposition
 
