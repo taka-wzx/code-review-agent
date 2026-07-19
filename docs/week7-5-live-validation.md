@@ -61,11 +61,14 @@ The official redelivery response was 30 KB at the service. GitHub retained only
 `duplicate` field. The supplemental signed replay was therefore used to read
 the complete response and prove `duplicate=true`; it did not queue work.
 
-The initial delivery exposes a real operational limitation: PR diff acquisition
-is still on the Webhook response path, so a slow `gh` call can exceed GitHub's
-delivery timeout even though the job is safely accepted and redelivery is
-idempotent. This should be remediated before calling the endpoint production
-ready.
+The initial delivery exposes a real operational latency, but the committed
+evidence does not establish its cause. The handler performs validation and
+uses `submit_pr` to persist and submit executor work before returning 202;
+`gh pr diff` runs later in that executor work, not synchronously in the
+Webhook handler. Tunnel/edge latency, request streaming, host contention, or
+another delay therefore remain possible. End-to-end response-path timings
+must be instrumented and the timeout reproduced before a product remediation
+is selected.
 
 ## Model, cost, and result evidence
 
@@ -109,7 +112,21 @@ CNY 5.00 phase cap. Prices are from the
   trace remained clean, no credential material was involved, and the path was
   removed from the final contract copy. This demonstrates that model output can
   repeat sensitive text supplied as review input; callers must classify input
-  content accordingly.
+  content accordingly. The path remains reachable in the frozen commit and the
+  deliberately open private PR #3 history; no history rewrite was attempted.
+
+## Acceptance disposition
+
+| Frozen acceptance criterion | Disposition |
+| --- | --- |
+| Official `gh` authenticates and returns a non-empty bounded diff | Met; access, byte count, line count, and SHA-256 were recorded without retaining diff content |
+| GitHub records an `opened` delivery with 2xx | Met only through official redelivery of the same delivery GUID; the initial attempt was recorded as 500 after GitHub's 10-second deadline |
+| Exactly one persisted job reaches a truthful terminal state | Met; one job reached `succeeded` |
+| Trace records required aggregate telemetry and remains sanitized | Met for the captured historical trace; no provider billing field was supplied, so cost is explicitly estimated |
+| Redelivery reuses identity and does not add provider work | Met; official redelivery returned the same review identity and the signed replay proved `duplicate=true`; job/span counts stayed unchanged |
+| Invalid-signature public traffic is rejected before work | Met; HTTP 401 and unchanged counts |
+| Hook, service, tunnel, and task temporary data are cleaned up | Met; the draft PR intentionally remains open and unmerged |
+| Week 7 offline regression and smoke gates pass | Met; detailed command results are recorded below |
 
 ## Cleanup and residual risk
 
@@ -121,7 +138,8 @@ unmerged as the authorized durable evidence.
 
 Remaining work is deliberately outside Week 7.5:
 
-- move slow PR-diff acquisition out of the Webhook response deadline;
+- instrument Webhook/tunnel response-path timing and reproduce the initial
+  latency before selecting a product fix;
 - return a compact Webhook acknowledgement instead of embedding a completed
   review on duplicate delivery;
 - build `Dockerfile.service` and verify the locked install on Linux;
@@ -133,7 +151,8 @@ Remaining work is deliberately outside Week 7.5:
 
 ## Offline validation
 
-All required pre-handoff gates passed:
+All required pre-handoff gates passed and the same gates passed again after
+Claude review integration and finding disposition:
 
 - Week 7 focused `unittest`: 33/33 passed.
 - Targeted Ruff: clean.

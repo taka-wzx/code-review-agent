@@ -137,10 +137,19 @@ absolute paths.
   counts stayed unchanged. Invalid HMAC returned 401.
 - Cleanup result: the temporary hook was deleted; service/tunnel processes and
   the task-specific temporary directory were removed.
-- Offline commands and results: 33/33 focused tests, targeted Ruff, mypy for
-  26 source files, full `scripts/verify.py` (593 tests, 3 skips, 86% coverage),
-  both service/MCP help smokes, and `git diff --check` passed.
-- Claude review: pending manual handoff.
-- Remaining risks: initial Webhook response latency, GitHub response-body
-  truncation for completed duplicate jobs, and the unverified Docker/Linux,
-  MCP-over-HTTP, live OAuth, A2A, and remote approval paths.
+- Acceptance disposition: recorded criterion by criterion in
+  `docs/week7-5-live-validation.md`; the 2xx delivery criterion was met only by
+  official redelivery of the same delivery identity, while the initial attempt
+  was recorded as 500 by GitHub.
+- Offline commands and results: pre-handoff and post-review integration runs
+  both passed 33/33 focused tests, targeted Ruff, mypy for 26 source files,
+  full `scripts/verify.py` (593 tests, 3 skips, 86% coverage), both service/MCP
+  help smokes, and `git diff --check`.
+- Claude review: commit `2e762ee6fca196ed79b6668b2c1bb8d0e5af4bca`
+  returned CONDITIONAL PASS (1 P2, 2 P3, no P1). All three findings were
+  accepted and addressed as documentation-only corrections in integration.
+- Remaining risks: initial Webhook response latency with no established root
+  cause, the host path still reachable in the frozen commit/PR history,
+  GitHub response-body truncation for completed duplicate jobs, and the
+  unverified Docker/Linux, MCP-over-HTTP, live OAuth, A2A, and remote approval
+  paths.
