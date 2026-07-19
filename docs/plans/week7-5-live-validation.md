@@ -145,11 +145,15 @@ absolute paths.
   both passed 33/33 focused tests, targeted Ruff, mypy for 26 source files,
   full `scripts/verify.py` (593 tests, 3 skips, 86% coverage), both service/MCP
   help smokes, and `git diff --check`.
+- Post-push CI: run `29678552166` on integration content commit
+  `35d4fb14c7797ad0baabd7098d11d9b7114b0f33` passed all seven jobs, including
+  Ubuntu lockfile installation, Linux CLI/service container build/help smoke,
+  Ubuntu Python 3.10--3.13, and Windows Python 3.11.
 - Claude review: commit `2e762ee6fca196ed79b6668b2c1bb8d0e5af4bca`
   returned CONDITIONAL PASS (1 P2, 2 P3, no P1). All three findings were
   accepted and addressed as documentation-only corrections in integration.
 - Remaining risks: initial Webhook response latency with no established root
   cause, the host path still reachable in the frozen commit/PR history,
   GitHub response-body truncation for completed duplicate jobs, and the
-  unverified Docker/Linux, MCP-over-HTTP, live OAuth, A2A, and remote approval
-  paths.
+  unverified live protocol path inside a container, MCP-over-HTTP, live OAuth,
+  A2A, and remote approval paths.

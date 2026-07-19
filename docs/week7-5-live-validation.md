@@ -12,8 +12,10 @@ redelivery and a signed replay of the same real payload reused the original
 review identity without adding a job or provider request. Invalid HMAC traffic
 was rejected with HTTP 401.
 
-This is operational evidence for one Windows/Python 3.13 run. It is not a
-production-readiness, Linux, container, remote OAuth, or remote MCP claim.
+The live protocol evidence comes from one Windows/Python 3.13 run. Post-push
+CI later added Linux lockfile and container build/help-smoke evidence, but did
+not exercise the live protocol chain inside the container. None of this is a
+production-readiness, remote OAuth, or remote MCP claim.
 
 ## Frozen scope and authority
 
@@ -142,7 +144,8 @@ Remaining work is deliberately outside Week 7.5:
   latency before selecting a product fix;
 - return a compact Webhook acknowledgement instead of embedding a completed
   review on duplicate delivery;
-- build `Dockerfile.service` and verify the locked install on Linux;
+- retain and expand the post-push Linux lock/container smoke, then exercise the
+  authenticated protocol path inside the service container;
 - exercise MCP Streamable HTTP end to end;
 - design and test remote OAuth/identity, approval binding, and later A2A only in
   separately frozen phases;
@@ -166,3 +169,19 @@ Claude review integration and finding disposition:
 
 The run used only offline validation fixtures. No paid evaluation command or
 protected evaluation asset was used.
+
+## Post-push CI evidence
+
+GitHub Actions run
+[`29678552166`](https://github.com/taka-wzx/code-review-agent/actions/runs/29678552166)
+completed on integration content commit
+`35d4fb14c7797ad0baabd7098d11d9b7114b0f33` with all seven jobs successful:
+
+- Ubuntu Python 3.10, 3.11, 3.12, and 3.13 offline validation;
+- Windows Python 3.11 offline validation;
+- Ubuntu lockfile installation; and
+- Linux CLI and service image build plus help smoke.
+
+This CI run occurred after the live probe and Claude review. It closes the
+previous Linux lockfile and image-build uncertainty, while leaving the live
+Webhook/REST/MCP protocol path inside the container unverified.

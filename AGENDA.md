@@ -199,8 +199,9 @@ trace Resource 和复用 Prompt。`get_trace` 按 MCP 语义实现为 Resource�
 同一 review，未增加模型调用；无效 HMAC 返回 401。初次 Webhook 在 GitHub 侧发生 10 秒
 超时，但提交实现已异步入队，现有证据不足以确定真实延迟原因；生产化前应先补充端到端时序
 埋点并复现，再决定修复方案，同时把重复投递响应缩减为紧凑确认。
-本阶段不包含 Docker/Linux、MCP-over-HTTP、远程 OAuth、审批 API 或 A2A；完整证据见
-`docs/week7-5-live-validation.md`。
+真实链路执行本身不包含容器，但推送后的 Ubuntu CI 已通过锁文件安装和 CLI/服务镜像
+build/help smoke；容器内真实协议、MCP-over-HTTP、远程 OAuth、审批 API 或 A2A 仍未验证。
+完整证据见 `docs/week7-5-live-validation.md`。
 
 ## 第 8 周：补齐“算法岗”模型侧证据
 

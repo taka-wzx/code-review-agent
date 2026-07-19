@@ -311,7 +311,8 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和 `deepseek-v4-pro` 完成了有界真实链路：
 唯一任务成功，重投保持同一 review 且未增加模型调用，无效签名返回 401。初次投递也暴露了
 一次 GitHub 侧 10 秒超时，但现有证据不足以确定根因，需先补充端到端时序埋点再设计修复；
-Docker/Linux、MCP-over-HTTP 与远程 OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
+推送后的 CI 已在 Ubuntu 验证锁文件安装及 CLI/服务镜像 build/help smoke，但未在容器中执行
+真实协议链路；MCP-over-HTTP 与远程 OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
 [`docs/week7-5-live-validation.md`](docs/week7-5-live-validation.md)。
 
 ### 历史开发基准
