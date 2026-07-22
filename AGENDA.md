@@ -207,6 +207,24 @@ build/help smoke；容器内真实协议、MCP-over-HTTP、远程 OAuth、审批
 
 训练一个可控的 Verifier / Reranker，而不是完整 Code LLM。
 
+**当前进展（Phase 8C）**：Phase 8A 已冻结候选/证据/工具摘要、仓库级切分、多重哈希、
+指标和两种词法基线；Phase 8B 进一步冻结 9 个公开宽松许可证仓库、29 PR 窗口与确定性
+选择、双人独立标注/仲裁、secret scan、留存和零付费/零加速器上限，并实现来源到 freeze
+manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `trainable=false`，只证明协议
+可复现，不构成模型效果证据。9 仓/29 PR 的真实公开来源快照及 pending Finder 队列已物化
+并哈希冻结，原始对象保持在忽略目录。Phase 8C 已在独立 CPU 环境以精确 safetensors
+快照和锁定依赖完成 Base、全量 SFT、LoRA SFT、LoRA pairwise 的同 manifest 合成烟测，
+`quality_claim_allowed=false`；真实 Finder 候选、两人标注/仲裁、真实跨仓实验、GPU 和 API
+对照仍未完成或未获授权；详见
+`docs/plans/week8-verifier-training.md`、`docs/verifier-training.md` 与
+`docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
+
+**下一步（Phase 8D，离线控制面已实现）**：在不读取原始 diff、不调用 provider 的条件下，
+为 29 个来源生成 fail-closed Finder envelope，并加入诚实零候选回执、双人盲标响应导入、
+第三人仲裁、Finder-bound real freeze 与真实模型 readiness 门禁。真实执行仍等待 provider/
+精确模型、调用/token/费用、raw diff、trace 留存、三位人员身份和稳定本地提交授权；详见
+`docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
+
 数据：
 
 - Finder 生成的候选问题。

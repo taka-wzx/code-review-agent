@@ -1,0 +1,367 @@
+{
+  "algorithm": "base",
+  "config_sha256": "1f59207e9f90b66e5cac9d121a15b82c08e33057b5afabadf7554aeaff55bc0a",
+  "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+  "experiment_id": "week8c-base",
+  "hyperparameters": {
+    "epochs": 0,
+    "learning_rate": 0.0
+  },
+  "input_template_sha256": "6b9a230f7fc52580101fb28d0385420cffed081f50908a97fa4ba6c7a69e6742",
+  "manifest_sha256": "dcbc2f330631f55b33a53f72aeed00747cc893deb9f7a402b7b3a4eef9d38c9f",
+  "model_state_sha256": "aa27463258108708e6274753304e60dafee5484d0e616c0bb5b66faee18fc443",
+  "predictions": [
+    {
+      "candidate_id": "test-drop",
+      "experiment_id": "week8c-base",
+      "latency_ms": 6.777300000976538,
+      "schema_version": 1,
+      "score": 0.5166653990745544
+    },
+    {
+      "candidate_id": "test-keep",
+      "experiment_id": "week8c-base",
+      "latency_ms": 2.5545999997120816,
+      "schema_version": 1,
+      "score": 0.5245157480239868
+    },
+    {
+      "candidate_id": "train-drop",
+      "experiment_id": "week8c-base",
+      "latency_ms": 2.4776000009296695,
+      "schema_version": 1,
+      "score": 0.517884373664856
+    },
+    {
+      "candidate_id": "train-keep",
+      "experiment_id": "week8c-base",
+      "latency_ms": 2.504600000975188,
+      "schema_version": 1,
+      "score": 0.5201179385185242
+    },
+    {
+      "candidate_id": "validation-drop",
+      "experiment_id": "week8c-base",
+      "latency_ms": 2.3801000006642425,
+      "schema_version": 1,
+      "score": 0.5164045691490173
+    },
+    {
+      "candidate_id": "validation-keep",
+      "experiment_id": "week8c-base",
+      "latency_ms": 2.596300000732299,
+      "schema_version": 1,
+      "score": 0.5177128314971924
+    }
+  ],
+  "quality_claim_allowed": false,
+  "resources": {
+    "accelerator_hours": 0,
+    "cpu_seconds_upper_bound": 0.36972800000512507,
+    "cpu_threads": 4,
+    "device": "cpu",
+    "paid_cost_cny": 0,
+    "rss_bytes_after": 363663360,
+    "total_parameters": 4386178,
+    "trainable_parameters": 4386178,
+    "wall_seconds": 0.09243200000128127
+  },
+  "run_at": "2026-07-19T12:00:00Z",
+  "runtime": {
+    "peft": "0.19.1",
+    "python": "3.13.0",
+    "torch": "2.13.0+cpu",
+    "transformers": "5.13.0"
+  },
+  "schema_version": 1,
+  "seed": 20260719,
+  "synthetic_only": true,
+  "test": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.1,
+          "mean_confidence": null,
+          "upper": 0.2
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.2,
+          "mean_confidence": null,
+          "upper": 0.3
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.3,
+          "mean_confidence": null,
+          "upper": 0.4
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.4,
+          "mean_confidence": null,
+          "upper": 0.5
+        },
+        {
+          "count": 2,
+          "keep_rate": 0.5,
+          "lower": 0.5,
+          "mean_confidence": 0.52059057,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.8,
+          "mean_confidence": null,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.02059057
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [],
+    "experiment_id": "week8c-base",
+    "latency_ms": {
+      "count": 2,
+      "max": 6.7773,
+      "mean": 4.66595
+    },
+    "macro": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "micro": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tn": 1,
+      "tp": 1
+    },
+    "per_repository": {
+      "repo-test": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 1
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.52451575
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.5166654
+        }
+      ]
+    },
+    "repositories": [
+      "repo-test"
+    ],
+    "schema_version": 1,
+    "split": "test",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.51771283,
+    "threshold_source": "validation"
+  },
+  "threshold": {
+    "threshold": 0.51771283,
+    "validation_metrics": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tn": 1,
+      "tp": 1
+    }
+  },
+  "validation": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.1,
+          "mean_confidence": null,
+          "upper": 0.2
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.2,
+          "mean_confidence": null,
+          "upper": 0.3
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.3,
+          "mean_confidence": null,
+          "upper": 0.4
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.4,
+          "mean_confidence": null,
+          "upper": 0.5
+        },
+        {
+          "count": 2,
+          "keep_rate": 0.5,
+          "lower": 0.5,
+          "mean_confidence": 0.5170587,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.8,
+          "mean_confidence": null,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.0170587
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [],
+    "experiment_id": "week8c-base",
+    "latency_ms": {
+      "count": 2,
+      "max": 2.5963,
+      "mean": 2.4882
+    },
+    "macro": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "micro": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tn": 1,
+      "tp": 1
+    },
+    "per_repository": {
+      "repo-validation": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 1
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.51771283
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.51640457
+        }
+      ]
+    },
+    "repositories": [
+      "repo-validation"
+    ],
+    "schema_version": 1,
+    "split": "validation",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.51771283,
+    "threshold_source": "validation"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "phase_id": "week8d-real-verifier-evidence-v1",
+  "offline_preparation_only": true,
+  "authorization": {
+    "provider_calls": false,
+    "raw_diff_read": false,
+    "real_model_training": false,
+    "local_commit": false
+  },
+  "finder": {
+    "provider": null,
+    "model": null,
+    "prompt_sha256": null,
+    "temperature": null,
+    "max_calls": 0,
+    "max_input_tokens": 0,
+    "max_output_tokens": 0,
+    "max_cost_cny": 0
+  },
+  "retention": {
+    "raw_trace_days": null
+  },
+  "humans": {
+    "annotator_a": null,
+    "annotator_b": null,
+    "adjudicator": null
+  },
+  "limits": {
+    "selected_prs": 29,
+    "max_candidates_per_pr": 16,
+    "max_candidates": 480,
+    "max_sanitized_bytes": 67108864
+  },
+  "real_model_plan": {
+    "authorized": false,
+    "seeds": [],
+    "test_labels_sealed": true,
+    "primary_metric": "f1",
+    "secondary_metric": "average_precision",
+    "threshold_source": "validation"
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "corpus_id": "week8b-verifier-corpus-v1",
+  "incomplete_gates": [
+    "finder_candidates_missing",
+    "independent_human_annotations_missing"
+  ],
+  "manifest_sha256": "ed0765a341b9f870d68db95a665ecfdde8c94cd7942171fa15f889da892d4b6a",
+  "plan_sha256": "ba07efa6dadb34319462965cc21e2b7f6a9058bcc482b33dde5563da497773bf",
+  "pr_sources": 29,
+  "pr_sources_sha256": "4ce49ebfe68cb2d0ebe125f2cbd68f77ea3222a64449fcabedd3d39d2ec56209",
+  "raw_bytes": 2021424,
+  "raw_limit_bytes": 536870912,
+  "repositories": [
+    {
+      "exclusions": {},
+      "github_total_count": 173,
+      "inspected": 4,
+      "pool_size": 64,
+      "repository_id": "pallets/click",
+      "selected": 4,
+      "selection_log_sha256": "175c34b5e640f4a6704d979bc4016620fc640f9110374c89f3bcc9a9a674edea"
+    },
+    {
+      "exclusions": {
+        "no_python_source_or_test": 2
+      },
+      "github_total_count": 96,
+      "inspected": 6,
+      "pool_size": 64,
+      "repository_id": "Textualize/rich",
+      "selected": 4,
+      "selection_log_sha256": "dd6ac1418656ffe3fbcc0e91f1f3764da48ab1cb1bed991ca272afcde26fdc59"
+    },
+    {
+      "exclusions": {
+        "bot_authored": 3,
+        "no_python_source_or_test": 2
+      },
+      "github_total_count": 986,
+      "inspected": 9,
+      "pool_size": 64,
+      "repository_id": "pytest-dev/pytest",
+      "selected": 4,
+      "selection_log_sha256": "336a742e0eeacb9674269f8923ac155c6a52458994f3f5672e462c37cd39d582"
+    },
+    {
+      "exclusions": {
+        "missing_revision": 11,
+        "no_python_source_or_test": 8
+      },
+      "github_total_count": 1545,
+      "inspected": 23,
+      "pool_size": 64,
+      "repository_id": "django/django",
+      "selected": 4,
+      "selection_log_sha256": "78c058049de06fe4843b9b4bd29b19d3e4dd2cbb98aacd5a2020e0496468ba47"
+    },
+    {
+      "exclusions": {
+        "no_python_source_or_test": 2
+      },
+      "github_total_count": 1179,
+      "inspected": 4,
+      "pool_size": 64,
+      "repository_id": "pydantic/pydantic",
+      "selected": 2,
+      "selection_log_sha256": "8480f5beb90317a0b6a1432b7462ef92c26bf095986161df6078036232215bd9"
+    },
+    {
+      "exclusions": {
+        "no_python_source_or_test": 29
+      },
+      "github_total_count": 1431,
+      "inspected": 31,
+      "pool_size": 64,
+      "repository_id": "fastapi/fastapi",
+      "selected": 2,
+      "selection_log_sha256": "a34af9f1ab1330a89543ac2456a591cd1c5fd535185dbf4bdea0fea19ecff726"
+    },
+    {
+      "exclusions": {
+        "no_python_source_or_test": 3
+      },
+      "github_total_count": 71,
+      "inspected": 6,
+      "pool_size": 64,
+      "repository_id": "pallets/flask",
+      "selected": 3,
+      "selection_log_sha256": "3e7dffd1f140d04fb0433217ea452b1b5f278f9866ca8c79c2242e43e6ca313b"
+    },
+    {
+      "exclusions": {
+        "dependency_only": 1,
+        "no_python_source_or_test": 4
+      },
+      "github_total_count": 53,
+      "inspected": 8,
+      "pool_size": 53,
+      "repository_id": "psf/requests",
+      "selected": 3,
+      "selection_log_sha256": "1a4b419c201958331c7838054f2bdafe32261b68f55c26a55bed425cb6276bc9"
+    },
+    {
+      "exclusions": {},
+      "github_total_count": 118,
+      "inspected": 3,
+      "pool_size": 64,
+      "repository_id": "encode/httpx",
+      "selected": 3,
+      "selection_log_sha256": "1bc1f7e8d2834db1154464eec47444df2ea2653b1bb9f8185f60fc2b141139aa"
+    }
+  ],
+  "schema_version": 1,
+  "snapshot_at": "2026-07-19T06:00:00Z",
+  "trainable": false
+}

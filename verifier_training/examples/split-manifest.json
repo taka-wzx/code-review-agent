@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+  "splits": {
+    "train": ["repo-train"],
+    "validation": ["repo-validation"],
+    "test": ["repo-test"]
+  },
+  "operating_threshold": 0.5,
+  "threshold_source": "validation"
+}

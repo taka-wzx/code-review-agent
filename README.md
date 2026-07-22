@@ -315,6 +315,38 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 真实协议链路；MCP-over-HTTP 与远程 OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
 [`docs/week7-5-live-validation.md`](docs/week7-5-live-validation.md)。
 
+### Verifier 后训练基础（第 8 阶段）
+
+第 8 阶段先建立不依赖外部模型的可复现训练/评测协议：`verifier_training.py` 对 Finder
+候选、正负证据、工具摘要和 keep/drop/uncertain 标签做严格校验，以整仓为单位冻结
+train/validation/test，并用候选、change、pair、内容和完整记录哈希阻断跨 split 泄漏；评测
+固定输出 Precision/Recall/F1、PR/平均精度、ECE、跨仓聚合、时延和错误切片。仓库还提供
+确定性词法 logreg/pairwise 基线，仅用于证明流水线和 artifact 协议。
+
+Phase 8B 已冻结 9 个宽松许可证公开仓库、29 个 PR 的窗口/选择规则、整仓 split、双人独立
+标注与仲裁协议、secret scan/留存规则和零付费/零加速器上限；`verifier_corpus.py` 对来源、
+候选、标注和 freeze manifest 做严格离线校验。真实公开来源快照已完成 9 仓/29 PR，原始
+对象约 1.93 MiB，29 条入选 diff 的高信号 secret finding 均为 0，并已生成逐 PR 哈希绑定的
+`pending` Finder 队列；当前 corpus 示例仍全部是合成 fixture，`trainable=false`。
+
+Phase 8C 又在独立、忽略的 CPU 环境中固定并运行了 Base、全量 SFT、LoRA SFT 和 LoRA
+pairwise 四条路径，使用精确 safetensors 模型快照、锁定依赖、同一合成 test manifest、
+validation-only 阈值和零付费/零加速器资源。它只证明训练、评测与 artifact 链路能离线闭环，
+`quality_claim_allowed=false`，**不代表模型质量、后训练提升或跨仓泛化**。真实 Finder 候选、
+双人独立标注/仲裁与真实仓库实验仍未完成。完整边界与命令见
+[`docs/verifier-training.md`](docs/verifier-training.md) 和
+[`docs/verifier-corpus.md`](docs/verifier-corpus.md)，冻结合同见
+[`docs/plans/week8-verifier-training.md`](docs/plans/week8-verifier-training.md)，Phase 8C 记录见
+[`docs/verifier-transformer.md`](docs/verifier-transformer.md)。
+
+Phase 8D 已开始补齐真实证据链的离线控制面：29 项 Finder envelope 在 provider、预算和原始
+diff 读取授权缺失时全部保持不可执行；新增零候选完成回执，避免为了通过门禁伪造负样本；
+盲标包、完整响应导入、分歧/uncertain 仲裁包、Finder-bound freeze 和真实模型 readiness
+均有哈希校验。当前配置仍是零调用、零 token、零费用、未指定三位人员且不允许真实训练，
+因此没有新增真实候选或人工标签。详见
+[`docs/verifier-real-evidence.md`](docs/verifier-real-evidence.md) 和
+[`docs/plans/week8d-real-verifier-evidence.md`](docs/plans/week8d-real-verifier-evidence.md)。
+
 ### 历史开发基准
 
 - **公开集**：16 diffs / 30 埋点，源自一个真实项目（pingpong tracker）的 bug 蒸馏（dt 感知门、单位/量纲、死旗标、降采样过滤等），含 2 个无埋点陷阱用例（专测误报）与 1 个信息缺失用例（专测"编造 vs 诚实报告"）；ground truth 在 `eval/truth.json`，每个埋点附命中标准，`eval/check_consistency.py` 保证 diff↔fixture↔truth 三方一致
@@ -364,6 +396,20 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
   run-plan、manifest 完整性/客观 size-band 校验、pass@1/资源/失败/越权统计、并发与
   container-hour 审计及仓库分层配对 Bootstrap CI；Claude 的 13 项发现已在 integration
   中逐项处置，真实数据、Docker 与付费运行仍待单独授权
+- **Week 8 Verifier 后训练（Phase 8A）**：冻结候选/证据/工具摘要 JSONL、仓库级切分、
+  内容与记录哈希防泄漏、阈值和 PR/ECE 口径；实现标准库词法 logreg/pairwise 台架与
+  离线测试。当前仅有合成协议 fixture，真实训练语料与模型实验仍待授权
+- **Week 8 Verifier 语料（Phase 8B）**：冻结 9 仓/29 PR 的许可、窗口、确定性选择、
+  secret scan、双标/仲裁、留存和资源上限；实现来源到 `trainable` 门禁的离线编译器。
+  真实公开来源快照和 29 项 pending Finder 队列已物化并哈希冻结；合成闭环保持
+  `trainable=false`，真实 Finder 候选和两人标注仍未完成
+- **Week 8 Verifier 模型烟测（Phase 8C）**：精确固定小型 BERT safetensors 快照、CPython
+  3.13 / PyTorch 2.13 / Transformers 5.13 / PEFT 0.19.1 独立 CPU 环境，以及 Base、全量
+  SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
+  但仅 2 条二分类 test 样本，明确禁止模型质量或后训练提升结论
+- **Week 8 真实证据准备（Phase 8D）**：实现不可执行 Finder envelope、零候选/失败回执、
+  双人盲标导出导入、第三人仲裁、Finder-bound freeze 和真实模型运行阻断；provider、模型、
+  预算、原始 diff 读取、trace 留存、三位人员与本地提交仍待明确授权
 
 ## 已知限制
 
@@ -373,6 +419,10 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 - **Week 5 SWE-bench 集尚未 materialize**：30 个候选槽位和 120-run 消融矩阵只是冻结的
   选择/资源/统计合同；当前没有真实 instance、任务镜像、Agent patch 或官方 evaluator
   结果，不能声称 pass@1 或 Repair 泛化能力
+- **Week 8 仍没有真实模型质量证据**：Phase 8B 已冻结真实公开来源快照和 Finder 队列，
+  Phase 8C 也完成四路合成 CPU 流水线烟测，但可提交的候选/标注仍是合成 fixture；真实
+  Finder 候选、双标/仲裁和跨仓 test 均未完成，不能声称后训练提升。当前记录的训练/推理
+  时延只适用于 2 条合成 test 的本机烟测，不是容量或生产延迟结论
 - **评测规模较小**：16+6 diffs、30+7 埋点、n=3 重复跑无显著性检验；mean [min–max] 是 3 点极差，bug 级 bootstrap CI（W14 v2 recall [0.811, 0.978]）才接近决策级区间
 - **judge 与被测 agent 同模型**：self-preference 偏置已被 GLM 交叉重判实测收窄（100% 一致），但两模型共享盲区无法排除；人工校准只有 W2 的 9 埋点（n=9 无统计意义）
 - **holdout 并非严格 held-out**：自 W8 起被跑过 15+ 次并据结果迭代，实际是第二开发集；用途是回归门不是泛化证明

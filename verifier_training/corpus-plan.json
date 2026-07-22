@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "corpus_id": "week8b-verifier-corpus-v1",
+  "base_commit": "ae4a7ffd307072fa1ddadff4c82a96f9c170d847",
+  "corpus_seed": "f0140063e6bb4998f8fc8611c5762602ac50f346c94560798b5dd07f6c9ffe87",
+  "seed_derivation": "sha256('week8b-verifier-corpus-v1\\n' + base_commit)",
+  "selection_window": {
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2026-01-01T00:00:00Z"
+  },
+  "limits": {
+    "max_prs": 29,
+    "max_candidates_per_pr": 16,
+    "max_candidates": 480,
+    "max_sanitized_bytes": 67108864,
+    "max_raw_bytes": 536870912,
+    "raw_retention_days": 30,
+    "max_paid_model_cny": 0,
+    "max_accelerator_hours": 0
+  },
+  "repositories": [
+    {
+      "repository_id": "pallets/click",
+      "slug": "pallets/click",
+      "split": "train",
+      "target_prs": 4,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "BSD-3-Clause",
+      "license_url": "https://github.com/pallets/click/blob/main/LICENSE.txt",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "Textualize/rich",
+      "slug": "Textualize/rich",
+      "split": "train",
+      "target_prs": 4,
+      "language": "python",
+      "default_branch": "master",
+      "license_spdx": "MIT",
+      "license_url": "https://github.com/Textualize/rich/blob/master/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "pytest-dev/pytest",
+      "slug": "pytest-dev/pytest",
+      "split": "train",
+      "target_prs": 4,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "MIT",
+      "license_url": "https://github.com/pytest-dev/pytest/blob/main/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "django/django",
+      "slug": "django/django",
+      "split": "train",
+      "target_prs": 4,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "BSD-3-Clause",
+      "license_url": "https://github.com/django/django/blob/main/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "pydantic/pydantic",
+      "slug": "pydantic/pydantic",
+      "split": "validation",
+      "target_prs": 2,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "MIT",
+      "license_url": "https://github.com/pydantic/pydantic/blob/main/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "fastapi/fastapi",
+      "slug": "fastapi/fastapi",
+      "split": "validation",
+      "target_prs": 2,
+      "language": "python",
+      "default_branch": "master",
+      "license_spdx": "MIT",
+      "license_url": "https://github.com/fastapi/fastapi/blob/master/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "pallets/flask",
+      "slug": "pallets/flask",
+      "split": "test",
+      "target_prs": 3,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "BSD-3-Clause",
+      "license_url": "https://github.com/pallets/flask/blob/main/LICENSE.txt",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "psf/requests",
+      "slug": "psf/requests",
+      "split": "test",
+      "target_prs": 3,
+      "language": "python",
+      "default_branch": "main",
+      "license_spdx": "Apache-2.0",
+      "license_url": "https://github.com/psf/requests/blob/main/LICENSE",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    },
+    {
+      "repository_id": "encode/httpx",
+      "slug": "encode/httpx",
+      "split": "test",
+      "target_prs": 3,
+      "language": "python",
+      "default_branch": "master",
+      "license_spdx": "BSD-3-Clause",
+      "license_url": "https://github.com/encode/httpx/blob/master/LICENSE.md",
+      "public": true,
+      "verified_at": "2026-07-19T00:00:00Z"
+    }
+  ],
+  "eligibility": {
+    "required_states": ["merged", "non_draft", "code_change", "secret_scan_passed"],
+    "selection_pool_cap_per_repository": 64,
+    "excluded_categories": [
+      "bot_authored",
+      "dependency_only",
+      "documentation_only",
+      "generated_only",
+      "vendored",
+      "security_embargoed",
+      "oversized_diff",
+      "missing_revision",
+      "secret_scan_failed"
+    ],
+    "source_suffixes": [".py", ".pyi"],
+    "test_path_markers": ["test", "tests"],
+    "max_diff_bytes": 524288
+  },
+  "annotation": {
+    "independent_annotators": 2,
+    "adjudicator_required_on_disagreement": true,
+    "labels": ["keep", "drop", "uncertain"],
+    "blind_test_split_until_freeze": true
+  },
+  "retention": {
+    "raw_root": "traces/week8b-corpus",
+    "raw_committed": false,
+    "sanitized_committed": true,
+    "delete_raw_after_days": 30,
+    "attribution_required": true
+  },
+  "authorization": {
+    "authority": "user instruction: proceed with Phase 8B",
+    "authorized_at": "2026-07-19T00:00:00Z",
+    "public_github_read": true,
+    "github_mutation": false,
+    "paid_provider": false,
+    "model_download": false,
+    "dataset_hub_download": false,
+    "accelerator": false,
+    "model_upload": false
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/prediction-v1.json",
+  "title": "Verifier prediction JSONL row",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "experiment_id", "candidate_id", "score", "latency_ms"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "experiment_id": {"$ref": "#/$defs/id"},
+    "candidate_id": {"$ref": "#/$defs/id"},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "latency_ms": {"type": "number", "minimum": 0}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/real-freeze-manifest-v1.json",
+  "title": "Phase 8D Finder-bound real freeze wrapper",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "phase_id", "frozen_at", "finder_runs_sha256",
+    "finder_completed", "finder_completed_zero_candidates", "finder_failed",
+    "corpus_manifest", "trainable", "incomplete_gates", "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "phase_id": {"const": "week8d-real-verifier-evidence-v1"},
+    "frozen_at": {
+      "type": "string", "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "finder_runs_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "finder_completed": {"type": "integer", "minimum": 0, "maximum": 29},
+    "finder_completed_zero_candidates": {"type": "integer", "minimum": 0, "maximum": 29},
+    "finder_failed": {"type": "integer", "minimum": 0, "maximum": 29},
+    "corpus_manifest": {"type": "object"},
+    "trainable": {"type": "boolean"},
+    "incomplete_gates": {"type": "array", "items": {"type": "object"}},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

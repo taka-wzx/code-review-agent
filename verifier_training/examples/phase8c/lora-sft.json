@@ -1,0 +1,392 @@
+{
+  "algorithm": "lora-sft",
+  "config_sha256": "1f59207e9f90b66e5cac9d121a15b82c08e33057b5afabadf7554aeaff55bc0a",
+  "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+  "experiment_id": "week8c-lora-sft",
+  "hyperparameters": {
+    "alpha": 8,
+    "dropout": 0.0,
+    "epochs": 50,
+    "learning_rate": 0.0005,
+    "rank": 4
+  },
+  "input_template_sha256": "6b9a230f7fc52580101fb28d0385420cffed081f50908a97fa4ba6c7a69e6742",
+  "manifest_sha256": "8605b994b5b08c64c1274d2843ce7f301b3237fd65af86933977ea26ecb113ce",
+  "model_state_sha256": "0cab5db654b50f75ed13c8783701740f76ef43818b4f4c14f2bc34015570d5c6",
+  "predictions": [
+    {
+      "candidate_id": "test-drop",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 3.495800001473981,
+      "schema_version": 1,
+      "score": 0.442139208316803
+    },
+    {
+      "candidate_id": "test-keep",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 3.8426999999501277,
+      "schema_version": 1,
+      "score": 0.49627676606178284
+    },
+    {
+      "candidate_id": "train-drop",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 3.2024000011006137,
+      "schema_version": 1,
+      "score": 0.393759161233902
+    },
+    {
+      "candidate_id": "train-keep",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 2.9238999995868653,
+      "schema_version": 1,
+      "score": 0.6193578839302063
+    },
+    {
+      "candidate_id": "validation-drop",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 2.8729999994538957,
+      "schema_version": 1,
+      "score": 0.436581552028656
+    },
+    {
+      "candidate_id": "validation-keep",
+      "experiment_id": "week8c-lora-sft",
+      "latency_ms": 2.697500000067521,
+      "schema_version": 1,
+      "score": 0.5650452971458435
+    }
+  ],
+  "quality_claim_allowed": false,
+  "resources": {
+    "accelerator_hours": 0,
+    "cpu_seconds_upper_bound": 4.363624400000845,
+    "cpu_threads": 4,
+    "device": "cpu",
+    "paid_cost_cny": 0,
+    "rss_bytes_after": 398147584,
+    "total_parameters": 4390532,
+    "trainable_parameters": 4354,
+    "wall_seconds": 1.0909061000002112
+  },
+  "run_at": "2026-07-19T12:00:00Z",
+  "runtime": {
+    "peft": "0.19.1",
+    "python": "3.13.0",
+    "torch": "2.13.0+cpu",
+    "transformers": "5.13.0"
+  },
+  "schema_version": 1,
+  "seed": 20260719,
+  "synthetic_only": true,
+  "test": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.1,
+          "mean_confidence": null,
+          "upper": 0.2
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.2,
+          "mean_confidence": null,
+          "upper": 0.3
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.3,
+          "mean_confidence": null,
+          "upper": 0.4
+        },
+        {
+          "count": 2,
+          "keep_rate": 0.5,
+          "lower": 0.4,
+          "mean_confidence": 0.46920799,
+          "upper": 0.5
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.5,
+          "mean_confidence": null,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.8,
+          "mean_confidence": null,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.03079201
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [
+      {
+        "candidate_id": "test-keep",
+        "evidence_missing": false,
+        "kind": "false_negative",
+        "language": "python",
+        "repository_id": "repo-test",
+        "score": 0.49627677,
+        "severity": "medium",
+        "tool_error": false
+      }
+    ],
+    "experiment_id": "week8c-lora-sft",
+    "latency_ms": {
+      "count": 2,
+      "max": 3.8427,
+      "mean": 3.66925
+    },
+    "macro": {
+      "f1": null,
+      "precision": null,
+      "recall": 0.0
+    },
+    "micro": {
+      "f1": null,
+      "fn": 1,
+      "fp": 0,
+      "precision": null,
+      "recall": 0.0,
+      "tn": 1,
+      "tp": 0
+    },
+    "per_repository": {
+      "repo-test": {
+        "f1": null,
+        "fn": 1,
+        "fp": 0,
+        "precision": null,
+        "recall": 0.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 0
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.49627677
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.44213921
+        }
+      ]
+    },
+    "repositories": [
+      "repo-test"
+    ],
+    "schema_version": 1,
+    "split": "test",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.5650453,
+    "threshold_source": "validation"
+  },
+  "threshold": {
+    "threshold": 0.5650453,
+    "validation_metrics": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tn": 1,
+      "tp": 1
+    }
+  },
+  "validation": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.1,
+          "mean_confidence": null,
+          "upper": 0.2
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.2,
+          "mean_confidence": null,
+          "upper": 0.3
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.3,
+          "mean_confidence": null,
+          "upper": 0.4
+        },
+        {
+          "count": 1,
+          "keep_rate": 0.0,
+          "lower": 0.4,
+          "mean_confidence": 0.43658155,
+          "upper": 0.5
+        },
+        {
+          "count": 1,
+          "keep_rate": 1.0,
+          "lower": 0.5,
+          "mean_confidence": 0.5650453,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.8,
+          "mean_confidence": null,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.43576813
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [
+      {
+        "candidate_id": "validation-keep",
+        "evidence_missing": false,
+        "kind": "false_negative",
+        "language": "python",
+        "repository_id": "repo-validation",
+        "score": 0.5650453,
+        "severity": "high",
+        "tool_error": false
+      }
+    ],
+    "experiment_id": "week8c-lora-sft",
+    "latency_ms": {
+      "count": 2,
+      "max": 2.873,
+      "mean": 2.78525
+    },
+    "macro": {
+      "f1": null,
+      "precision": null,
+      "recall": 0.0
+    },
+    "micro": {
+      "f1": null,
+      "fn": 1,
+      "fp": 0,
+      "precision": null,
+      "recall": 0.0,
+      "tn": 1,
+      "tp": 0
+    },
+    "per_repository": {
+      "repo-validation": {
+        "f1": null,
+        "fn": 1,
+        "fp": 0,
+        "precision": null,
+        "recall": 0.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 0
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.5650453
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.43658155
+        }
+      ]
+    },
+    "repositories": [
+      "repo-validation"
+    ],
+    "schema_version": 1,
+    "split": "validation",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.5650453,
+    "threshold_source": "validation"
+  }
+}
