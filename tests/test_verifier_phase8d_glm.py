@@ -64,7 +64,17 @@ class Phase8DGlmTests(unittest.TestCase):
         )
         cls.recovery = glm.load_recovery_config(TRAINING / "phase8d-r1-config.json")
 
+    def require_retained_raw_objects(self) -> None:
+        missing = [
+            row["diff_object_key"]
+            for row in self.sources
+            if not (RAW_ROOT / row["diff_object_key"]).is_file()
+        ]
+        if missing:
+            self.skipTest("requires operator-retained raw diff objects, which are not committed")
+
     def test_prompt_and_diff_attestation_bind_all_29_objects(self) -> None:
+        self.require_retained_raw_objects()
         self.assertEqual(self.config["finder"]["prompt_sha256"], glm.PROMPT_SHA256)
         result = glm.attest_diff_objects(self.plan, self.sources, self.queue, RAW_ROOT)
         self.assertEqual(result["objects"], 29)
@@ -100,6 +110,7 @@ class Phase8DGlmTests(unittest.TestCase):
         self.assertEqual(ledger.response_metadata[0]["response_model"], "glm-5.2")
 
     def test_fake_full_queue_writes_zero_candidate_receipts_without_network(self) -> None:
+        self.require_retained_raw_objects()
         fake = FakeClient()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -154,6 +165,7 @@ class Phase8DGlmTests(unittest.TestCase):
         )
 
     def test_fake_recovery_supersedes_only_two_failures_without_network(self) -> None:
+        self.require_retained_raw_objects()
         fake = FakeClient()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
