@@ -219,10 +219,10 @@ manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `tra
 `docs/plans/week8-verifier-training.md`、`docs/verifier-training.md` 与
 `docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
 
-**当前步骤（Phase 8D，首次真实 Finder 已完成但未闭门）**：GLM-5.2 对 29 个来源产出 116 条
-净化候选，24 个来源完成、3 个零候选、2 个失败；使用量和估算费用均远低于冻结上限。失败项
-未补跑，盲标包暂不导出。下一步应先冻结两条失败的恢复/不恢复决定，再由两位真实标注员独立
-盲标、第三人处理分歧；real freeze 前继续禁止质量结论与真实训练。详见
+**当前步骤（Phase 8D，Finder 已闭门）**：R1 仅补跑原两条失败且均成功，保留原失败回执并
+生成 supersession audit；29 来源的有效视图为 137 条候选、3 个零候选、0 个失败。下一步导出
+两份盲标包，由两位真实标注员独立判断、第三人处理分歧；real freeze 前继续禁止质量结论与
+真实训练。详见
 `docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
 
 数据：

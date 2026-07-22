@@ -93,6 +93,15 @@ No failed item was retried. These failures keep the real freeze closed, and
 blind packets are intentionally deferred so a later authorized recovery cannot
 silently invalidate completed human work.
 
+Phase 8D-R1 subsequently retried exactly those two failures once. Both recovery
+runs completed and added 21 candidates. The immutable effective view therefore
+contains 26 completed sources, 3 zero-candidate sources, zero failures, and 137
+candidates. R1 used 13 logical calls, 32,779 input tokens, 8,825 output tokens,
+and an estimated CNY 0.509332; combined v1+R1 estimated cost is CNY 8.673152.
+The supersession audit binds both old failure hashes to the new receipts rather
+than rewriting history. Finder is now complete and the next offline action is
+to export the two blinded human packets.
+
 ## Finder receipt contract
 
 A later executor must write one receipt per queue entry. The status rules are:

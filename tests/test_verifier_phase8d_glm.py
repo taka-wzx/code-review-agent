@@ -203,6 +203,50 @@ class Phase8DGlmTests(unittest.TestCase):
                 29,
             )
 
+    def test_committed_r1_recovery_closes_finder_failures_and_preserves_base(self) -> None:
+        recovery_runs_path = REAL / "phase8d-glm52-r1-recovery-runs.jsonl"
+        recovered_candidates_path = REAL / "phase8d-glm52-r1-recovered-candidates.jsonl"
+        effective_runs_path = REAL / "phase8d-glm52-r1-effective-runs.jsonl"
+        effective_candidates_path = REAL / "phase8d-glm52-r1-effective-candidates.jsonl"
+        audit = json.loads((REAL / "phase8d-glm52-r1-audit.json").read_text())
+        recovery_runs = v8d._load_jsonl(recovery_runs_path)
+        effective_runs = v8d._load_jsonl(effective_runs_path)
+        effective_candidates = v8d._load_jsonl(effective_candidates_path)
+        self.assertEqual([row["queue_id"] for row in recovery_runs], glm.R1_QUEUE_IDS)
+        self.assertEqual({row["status"] for row in recovery_runs}, {"completed"})
+        self.assertEqual(sum(row["candidate_count"] for row in recovery_runs), 21)
+        self.assertEqual(
+            len(
+                v8d.validate_finder_runs(
+                    effective_runs,
+                    self.config,
+                    self.plan,
+                    self.queue,
+                    self.sources,
+                    effective_candidates,
+                )
+            ),
+            29,
+        )
+        self.assertEqual(len(effective_candidates), 137)
+        self.assertEqual(audit["effective_failed"], 0)
+        self.assertFalse(audit["human_packets_exported"])
+        self.assertFalse(audit["quality_claim_allowed"])
+        artifact_paths = {
+            "recovery_runs_sha256": recovery_runs_path,
+            "recovered_candidates_sha256": recovered_candidates_path,
+            "effective_runs_sha256": effective_runs_path,
+            "effective_candidates_sha256": effective_candidates_path,
+        }
+        for key, path in artifact_paths.items():
+            self.assertEqual(
+                hashlib.sha256(path.read_bytes()).hexdigest(), audit["artifacts"][key]
+            )
+        self.assertEqual(
+            audit["audit_sha256"],
+            v8d._sha256(v8d._without_hash(audit, "audit_sha256")),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

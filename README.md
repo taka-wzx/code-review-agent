@@ -339,11 +339,11 @@ validation-only 阈值和零付费/零加速器资源。它只证明训练、评
 [`docs/plans/week8-verifier-training.md`](docs/plans/week8-verifier-training.md)，Phase 8C 记录见
 [`docs/verifier-transformer.md`](docs/verifier-transformer.md)。
 
-Phase 8D 已按冻结边界完成首次 GLM-5.2 真实 Finder：29 个来源中 24 个完成、3 个诚实零候选、
-2 个失败，得到 116 条净化候选；603,883/119,027 输入输出 token 的最坏未缓存估算为 CNY
-8.16382。两条失败未补跑，因此 real freeze 仍关闭，盲标包也暂缓导出以免候选集变化污染人工
-工作。三个人员 ID 已冻结，但仍须映射到三位真实人员；尚无人工标签或模型质量结论，真实
-训练继续关闭。详见
+Phase 8D 首次 GLM-5.2 Finder 的两条失败已在 R1 中各补跑一次并成功，原失败回执保留且由
+supersession audit 绑定。有效视图现为 26 个有候选来源、3 个诚实零候选、0 个失败和 137 条
+净化候选；v1+R1 合计 636,662/127,852 输入输出 token，最坏未缓存估算 CNY 8.673152。
+Finder 完整性门已关闭，下一步是导出两份真人盲标包；尚无人工标签或模型质量结论，真实训练
+继续关闭。详见
 [`docs/verifier-real-evidence.md`](docs/verifier-real-evidence.md) 和
 [`docs/plans/week8d-real-verifier-evidence.md`](docs/plans/week8d-real-verifier-evidence.md)。
 
@@ -407,9 +407,9 @@ Phase 8D 已按冻结边界完成首次 GLM-5.2 真实 Finder：29 个来源中 
   3.13 / PyTorch 2.13 / Transformers 5.13 / PEFT 0.19.1 独立 CPU 环境，以及 Base、全量
   SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
   但仅 2 条二分类 test 样本，明确禁止模型质量或后训练提升结论
-- **Week 8 真实证据准备（Phase 8D）**：冻结并执行 GLM-5.2 双温度 Finder；29 个来源得到
-  116 条候选、3 个零候选与 2 个失败。真实回执和候选已净化冻结，但失败恢复、双人盲标、
-  第三人仲裁和真实模型质量验证仍未完成
+- **Week 8 真实证据准备（Phase 8D）**：冻结并执行 GLM-5.2 双温度 Finder；R1 后 29 个
+  来源的有效视图为 137 条候选、3 个零候选、0 个失败。双人盲标、第三人仲裁和真实模型质量
+  验证仍未完成
 
 ## 已知限制
 

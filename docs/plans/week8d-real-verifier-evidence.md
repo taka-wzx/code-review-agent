@@ -241,6 +241,23 @@ command in this phase may read `eval/` or `eval/holdout/`.
 - No human label, adjudication, model training, protected evaluation read,
   merge, or `master` change occurred.
 
+### Phase 8D-R1 result
+
+- The one authorized recovery execution completed both frozen failed sources;
+  both recovery receipts have `completed` status and together add 21 sanitized
+  candidates. The original two failed receipts remain unchanged in the v1
+  artifact and are linked by the R1 supersession audit.
+- The effective view now contains 26 completed sources, 3 honest zero-candidate
+  sources, zero failed sources, and 137 candidates. R1 consumed 13 logical
+  calls, 32,779 input tokens, 8,825 output tokens, and an estimated CNY
+  0.509332. Combined v1+R1 usage is 189 logical calls, 636,662 input tokens,
+  127,852 output tokens, and estimated CNY 8.673152.
+- All 13 successful R1 responses reported `glm-5.2`, and both recovery trace
+  hashes match their receipts. No third source or second recovery attempt ran.
+- The Finder completeness gate is now closed. Human packets remain unexported,
+  so annotation, adjudication, real freeze, model training, and quality claims
+  remain incomplete.
+
 - Implemented the zero-authority config, 29 deterministic non-executable Finder
   envelopes, completed/zero/failed receipt validation, blind independent packet
   export, complete response import, adjudication-only packet export, annotation
