@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "binary_positive_label": "keep",
+  "binary_negative_label": "drop",
+  "audit_only_label": "uncertain",
+  "split_unit": "repository_id",
+  "threshold_selection": [
+    "max_f1",
+    "max_recall",
+    "max_precision",
+    "highest_threshold"
+  ],
+  "pr_auc_interpolation": "average_precision_step",
+  "ece_bins": 10,
+  "limits": {
+    "dataset_bytes": 67108864,
+    "candidate_text_bytes": 8000,
+    "rationale_bytes": 4000,
+    "summary_bytes": 2000,
+    "evidence_items": 8,
+    "tool_summaries": 8
+  }
+}

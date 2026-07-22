@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "run_id": "phase8d-glm52-real-v1",
+  "requested_model": "glm-5.2",
+  "response_models": {
+    "glm-5.2": 175
+  },
+  "started_at": "2026-07-22T03:36:13Z",
+  "finished_at": "2026-07-22T04:37:56Z",
+  "counts": {
+    "queue_records": 29,
+    "completed": 24,
+    "completed_zero_candidates": 3,
+    "failed": 2,
+    "sampling_degraded": 1,
+    "candidates": 116
+  },
+  "usage": {
+    "input_tokens": 603883,
+    "output_tokens": 119027,
+    "estimated_cost_cny": 8.16382,
+    "provider_invoice_reconciled": false
+  },
+  "artifacts": {
+    "finder_runs_sha256": "c86330b926e31eb28bec52003db5532ac0a7e866ed4c3fcac807a0973968ebd2",
+    "candidate_sources_sha256": "4705155295859a671765adb75a7e8edc3445b4ef78c99096c79babd4bdfc36a6",
+    "raw_trace_files": 29,
+    "raw_trace_hash_mismatches": 0
+  },
+  "failed_sources": [
+    {
+      "source_id": "Textualize/rich#3468",
+      "queue_id": "finder-012a2b256fa9b8556da6577e",
+      "error_category": "finder_protocol_error"
+    },
+    {
+      "source_id": "psf/requests#6655",
+      "queue_id": "finder-f7dd7b18cc83b53266eed486",
+      "error_category": "provider_error"
+    }
+  ],
+  "sampling_degraded_sources": [
+    {
+      "source_id": "pytest-dev/pytest#11574",
+      "queue_id": "finder-df9347fb5a23f11076c037e5",
+      "error_category": "provider_error"
+    }
+  ],
+  "finder_complete": false,
+  "human_packets_exported": false,
+  "trainable": false,
+  "quality_claim_allowed": false,
+  "blocked_by": [
+    "finder_failed_sources_present",
+    "human_annotations_missing",
+    "adjudication_missing",
+    "real_model_training_unauthorized"
+  ]
+}

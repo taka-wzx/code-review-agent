@@ -1,0 +1,389 @@
+{
+  "algorithm": "full-sft",
+  "config_sha256": "1f59207e9f90b66e5cac9d121a15b82c08e33057b5afabadf7554aeaff55bc0a",
+  "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+  "experiment_id": "week8c-full-sft",
+  "hyperparameters": {
+    "epochs": 30,
+    "learning_rate": 0.0002
+  },
+  "input_template_sha256": "6b9a230f7fc52580101fb28d0385420cffed081f50908a97fa4ba6c7a69e6742",
+  "manifest_sha256": "8acfc3a25040657a6b5722dbcecfbb79f416e9977830573321181c259d623276",
+  "model_state_sha256": "49057fa31df3080d1b1707dae5d1543c3d9e53ff7545d4aa165486330f6ce2a6",
+  "predictions": [
+    {
+      "candidate_id": "test-drop",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 3.0424999986280454,
+      "schema_version": 1,
+      "score": 0.1777278631925583
+    },
+    {
+      "candidate_id": "test-keep",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 2.5830000013229437,
+      "schema_version": 1,
+      "score": 0.3019351661205292
+    },
+    {
+      "candidate_id": "train-drop",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 2.4733000009291572,
+      "schema_version": 1,
+      "score": 0.10327591001987457
+    },
+    {
+      "candidate_id": "train-keep",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 2.4343999994016485,
+      "schema_version": 1,
+      "score": 0.8879305720329285
+    },
+    {
+      "candidate_id": "validation-drop",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 2.485099999830709,
+      "schema_version": 1,
+      "score": 0.2094808667898178
+    },
+    {
+      "candidate_id": "validation-keep",
+      "experiment_id": "week8c-full-sft",
+      "latency_ms": 2.59369999912451,
+      "schema_version": 1,
+      "score": 0.817258358001709
+    }
+  ],
+  "quality_claim_allowed": false,
+  "resources": {
+    "accelerator_hours": 0,
+    "cpu_seconds_upper_bound": 5.424403200006054,
+    "cpu_threads": 4,
+    "device": "cpu",
+    "paid_cost_cny": 0,
+    "rss_bytes_after": 476942336,
+    "total_parameters": 4386178,
+    "trainable_parameters": 4386178,
+    "wall_seconds": 1.3561008000015136
+  },
+  "run_at": "2026-07-19T12:00:00Z",
+  "runtime": {
+    "peft": "0.19.1",
+    "python": "3.13.0",
+    "torch": "2.13.0+cpu",
+    "transformers": "5.13.0"
+  },
+  "schema_version": 1,
+  "seed": 20260719,
+  "synthetic_only": true,
+  "test": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 1,
+          "keep_rate": 0.0,
+          "lower": 0.1,
+          "mean_confidence": 0.17772786,
+          "upper": 0.2
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.2,
+          "mean_confidence": null,
+          "upper": 0.3
+        },
+        {
+          "count": 1,
+          "keep_rate": 1.0,
+          "lower": 0.3,
+          "mean_confidence": 0.30193517,
+          "upper": 0.4
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.4,
+          "mean_confidence": null,
+          "upper": 0.5
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.5,
+          "mean_confidence": null,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.8,
+          "mean_confidence": null,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.43789635
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [
+      {
+        "candidate_id": "test-keep",
+        "evidence_missing": false,
+        "kind": "false_negative",
+        "language": "python",
+        "repository_id": "repo-test",
+        "score": 0.30193517,
+        "severity": "medium",
+        "tool_error": false
+      }
+    ],
+    "experiment_id": "week8c-full-sft",
+    "latency_ms": {
+      "count": 2,
+      "max": 3.0425,
+      "mean": 2.81275
+    },
+    "macro": {
+      "f1": null,
+      "precision": null,
+      "recall": 0.0
+    },
+    "micro": {
+      "f1": null,
+      "fn": 1,
+      "fp": 0,
+      "precision": null,
+      "recall": 0.0,
+      "tn": 1,
+      "tp": 0
+    },
+    "per_repository": {
+      "repo-test": {
+        "f1": null,
+        "fn": 1,
+        "fp": 0,
+        "precision": null,
+        "recall": 0.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 0
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.30193517
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.17772786
+        }
+      ]
+    },
+    "repositories": [
+      "repo-test"
+    ],
+    "schema_version": 1,
+    "split": "test",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.81725836,
+    "threshold_source": "validation"
+  },
+  "threshold": {
+    "threshold": 0.81725836,
+    "validation_metrics": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tn": 1,
+      "tp": 1
+    }
+  },
+  "validation": {
+    "calibration": {
+      "bins": [
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.0,
+          "mean_confidence": null,
+          "upper": 0.1
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.1,
+          "mean_confidence": null,
+          "upper": 0.2
+        },
+        {
+          "count": 1,
+          "keep_rate": 0.0,
+          "lower": 0.2,
+          "mean_confidence": 0.20948087,
+          "upper": 0.3
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.3,
+          "mean_confidence": null,
+          "upper": 0.4
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.4,
+          "mean_confidence": null,
+          "upper": 0.5
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.5,
+          "mean_confidence": null,
+          "upper": 0.6
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.6,
+          "mean_confidence": null,
+          "upper": 0.7
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.7,
+          "mean_confidence": null,
+          "upper": 0.8
+        },
+        {
+          "count": 1,
+          "keep_rate": 1.0,
+          "lower": 0.8,
+          "mean_confidence": 0.81725836,
+          "upper": 0.9
+        },
+        {
+          "count": 0,
+          "keep_rate": null,
+          "lower": 0.9,
+          "mean_confidence": null,
+          "upper": 1.0
+        }
+      ],
+      "ece": 0.19611125
+    },
+    "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+    "errors": [
+      {
+        "candidate_id": "validation-keep",
+        "evidence_missing": false,
+        "kind": "false_negative",
+        "language": "python",
+        "repository_id": "repo-validation",
+        "score": 0.81725836,
+        "severity": "high",
+        "tool_error": false
+      }
+    ],
+    "experiment_id": "week8c-full-sft",
+    "latency_ms": {
+      "count": 2,
+      "max": 2.5937,
+      "mean": 2.5394
+    },
+    "macro": {
+      "f1": null,
+      "precision": null,
+      "recall": 0.0
+    },
+    "micro": {
+      "f1": null,
+      "fn": 1,
+      "fp": 0,
+      "precision": null,
+      "recall": 0.0,
+      "tn": 1,
+      "tp": 0
+    },
+    "per_repository": {
+      "repo-validation": {
+        "f1": null,
+        "fn": 1,
+        "fp": 0,
+        "precision": null,
+        "recall": 0.0,
+        "support": 2,
+        "tn": 1,
+        "tp": 0
+      }
+    },
+    "pr_curve": {
+      "average_precision": 1.0,
+      "points": [
+        {
+          "precision": 1.0,
+          "recall": 1.0,
+          "threshold": 0.81725836
+        },
+        {
+          "precision": 0.5,
+          "recall": 1.0,
+          "threshold": 0.20948087
+        }
+      ]
+    },
+    "repositories": [
+      "repo-validation"
+    ],
+    "schema_version": 1,
+    "split": "validation",
+    "support": {
+      "binary": 2,
+      "total": 3,
+      "uncertain_excluded": 1
+    },
+    "threshold": 0.81725836,
+    "threshold_source": "validation"
+  }
+}

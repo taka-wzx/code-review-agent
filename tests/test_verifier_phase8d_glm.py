@@ -1,0 +1,347 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import copy
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+import verifier_corpus as vc
+import verifier_phase8d as v8d
+import verifier_phase8d_glm as glm
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TRAINING = ROOT / "verifier_training"
+SNAPSHOT = TRAINING / "corpus-snapshot"
+RAW_ROOT = ROOT / "traces" / "week8b-corpus"
+REAL = TRAINING / "real"
+
+
+def canonical_text_sha256(path: Path) -> str:
+    payload = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(payload).hexdigest()
+
+
+class FakeCompletions:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def create(self, **kwargs: object) -> object:
+        self.requests.append(kwargs)
+        submit = SimpleNamespace(
+            id=f"tool-{len(self.requests)}",
+            function=SimpleNamespace(
+                name="submit_review",
+                arguments=json.dumps({"summary": "No bounded finding.", "findings": []}),
+            ),
+        )
+        return SimpleNamespace(
+            id=f"response-{len(self.requests)}",
+            model="glm-5.2",
+            system_fingerprint="fake-fingerprint",
+            choices=[
+                SimpleNamespace(
+                    finish_reason="tool_calls",
+                    message=SimpleNamespace(content=None, tool_calls=[submit]),
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20),
+        )
+
+
+class FakeClient:
+    def __init__(self) -> None:
+        self.completions = FakeCompletions()
+        self.chat = SimpleNamespace(completions=self.completions)
+
+
+class Phase8DGlmTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.config = v8d.load_config(TRAINING / "phase8d-config.json")
+        cls.plan = vc.load_plan(TRAINING / "corpus-plan.json")
+        cls.sources = vc.load_pr_sources(SNAPSHOT / "pr-sources.jsonl", cls.plan)
+        cls.queue = vc.validate_finder_queue(
+            vc._load_jsonl(SNAPSHOT / "finder-queue.jsonl"), cls.sources
+        )
+        cls.recovery = glm.load_recovery_config(TRAINING / "phase8d-r1-config.json")
+
+    def require_retained_raw_objects(self) -> None:
+        missing = [
+            row["diff_object_key"]
+            for row in self.sources
+            if not (RAW_ROOT / row["diff_object_key"]).is_file()
+        ]
+        if missing:
+            self.skipTest("requires operator-retained raw diff objects, which are not committed")
+
+    def test_prompt_and_diff_attestation_bind_all_29_objects(self) -> None:
+        self.require_retained_raw_objects()
+        self.assertEqual(self.config["finder"]["prompt_sha256"], glm.PROMPT_SHA256)
+        result = glm.attest_diff_objects(self.plan, self.sources, self.queue, RAW_ROOT)
+        self.assertEqual(result["objects"], 29)
+        self.assertEqual(result["total_bytes"], sum(row["diff_bytes"] for row in self.sources))
+        self.assertRegex(result["attestation_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_recovery_config_rejects_any_third_or_reordered_queue(self) -> None:
+        mutated = copy.deepcopy(self.recovery)
+        mutated["queue_ids"] = list(reversed(mutated["queue_ids"]))
+        with self.assertRaisesRegex(glm.Phase8DExecutionError, "two frozen"):
+            glm.validate_recovery_config(mutated)
+
+    def test_canonical_text_hash_ignores_checkout_newlines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lf_path = Path(directory) / "lf.jsonl"
+            crlf_path = Path(directory) / "crlf.jsonl"
+            lf_path.write_bytes(b'{"row":1}\n{"row":2}\n')
+            crlf_path.write_bytes(b'{"row":1}\r\n{"row":2}\r\n')
+            self.assertEqual(canonical_text_sha256(lf_path), canonical_text_sha256(crlf_path))
+
+    def test_budget_proxy_forces_glm_options_and_tracks_response_identity(self) -> None:
+        fake = FakeClient()
+        ledger = glm.BudgetLedger(self.config)
+        client = glm.BudgetedClient(fake, ledger)
+        response = client.chat.completions.create(
+            model="glm-5.2",
+            max_tokens=8000,
+            temperature=0.2,
+            messages=[{"role": "user", "content": "bounded"}],
+            tools=[],
+        )
+        self.assertEqual(response.id, "response-1")
+        request = fake.completions.requests[0]
+        self.assertFalse(request["stream"])
+        self.assertEqual(request["tool_choice"], "auto")
+        self.assertEqual(request["extra_body"]["thinking"], {"type": "disabled"})
+        self.assertEqual(request["extra_body"]["reasoning_effort"], "none")
+        self.assertEqual(ledger.logical_calls, 1)
+        self.assertEqual(ledger.input_tokens, 100)
+        self.assertEqual(ledger.output_tokens, 20)
+        self.assertEqual(ledger.response_metadata[0]["response_model"], "glm-5.2")
+
+    def test_fake_full_queue_writes_zero_candidate_receipts_without_network(self) -> None:
+        self.require_retained_raw_objects()
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = glm.execute_queue(
+                self.config,
+                self.plan,
+                self.sources,
+                self.queue,
+                RAW_ROOT,
+                root / "traces",
+                root / "finder-runs.jsonl",
+                root / "candidate-sources.jsonl",
+                fake,
+            )
+            self.assertEqual(result["receipts"], 29)
+            self.assertEqual(result["completed_zero_candidates"], 29)
+            self.assertEqual(result["failed"], 0)
+            self.assertEqual(result["logical_calls"], 58)
+            self.assertEqual(len(fake.completions.requests), 58)
+            runs = v8d._load_jsonl(root / "finder-runs.jsonl")
+            self.assertEqual({row["synthetic"] for row in runs}, {False})
+            self.assertEqual({row["status"] for row in runs}, {"completed_zero_candidates"})
+            self.assertEqual((root / "candidate-sources.jsonl").read_text(), "")
+            trace = json.loads(next((root / "traces").glob("*.json")).read_text())
+            self.assertEqual(trace["requested_model"], "glm-5.2")
+            self.assertEqual(trace["responses"][0]["system_fingerprint"], "fake-fingerprint")
+
+    def test_committed_real_run_is_hash_bound_and_truthfully_incomplete(self) -> None:
+        runs_path = REAL / "phase8d-glm52-finder-runs.jsonl"
+        candidates_path = REAL / "phase8d-glm52-candidate-sources.jsonl"
+        summary = json.loads((REAL / "phase8d-glm52-summary.json").read_text())
+        runs = v8d._load_jsonl(runs_path)
+        candidates = vc.validate_candidate_sources(
+            v8d._load_jsonl(candidates_path), self.plan, self.sources
+        )
+        validated = v8d.validate_finder_runs(
+            runs, self.config, self.plan, self.queue, self.sources, candidates
+        )
+        self.assertEqual(len(validated), 29)
+        self.assertEqual(len(candidates), 116)
+        self.assertEqual(sum(row["status"] == "failed" for row in validated), 2)
+        self.assertFalse(summary["finder_complete"])
+        self.assertFalse(summary["trainable"])
+        self.assertFalse(summary["quality_claim_allowed"])
+        self.assertEqual(
+            canonical_text_sha256(runs_path),
+            summary["artifacts"]["finder_runs_sha256"],
+        )
+        self.assertEqual(
+            canonical_text_sha256(candidates_path),
+            summary["artifacts"]["candidate_sources_sha256"],
+        )
+
+    def test_fake_recovery_supersedes_only_two_failures_without_network(self) -> None:
+        self.require_retained_raw_objects()
+        fake = FakeClient()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = glm.execute_recovery(
+                self.config,
+                self.recovery,
+                self.plan,
+                self.sources,
+                self.queue,
+                RAW_ROOT,
+                REAL / "phase8d-glm52-finder-runs.jsonl",
+                REAL / "phase8d-glm52-candidate-sources.jsonl",
+                root / "traces",
+                root / "recovery-runs.jsonl",
+                root / "recovered-candidates.jsonl",
+                root / "effective-runs.jsonl",
+                root / "effective-candidates.jsonl",
+                root / "audit.json",
+                fake,
+            )
+            self.assertEqual(result["recovery_runs"], 2)
+            self.assertEqual(result["recovered_candidates"], 0)
+            self.assertEqual(result["effective_failed"], 0)
+            self.assertEqual(result["effective_candidates"], 116)
+            self.assertEqual(result["logical_calls"], 4)
+            recovery_runs = v8d._load_jsonl(root / "recovery-runs.jsonl")
+            self.assertEqual(
+                [row["queue_id"] for row in recovery_runs], glm.R1_QUEUE_IDS
+            )
+            self.assertEqual(
+                {row["status"] for row in recovery_runs},
+                {"completed_zero_candidates"},
+            )
+            effective_runs = v8d._load_jsonl(root / "effective-runs.jsonl")
+            effective_candidates = v8d._load_jsonl(root / "effective-candidates.jsonl")
+            self.assertEqual(
+                len(
+                    v8d.validate_finder_runs(
+                        effective_runs,
+                        self.config,
+                        self.plan,
+                        self.queue,
+                        self.sources,
+                        effective_candidates,
+                    )
+                ),
+                29,
+            )
+
+    def test_committed_r1_recovery_closes_finder_failures_and_preserves_base(self) -> None:
+        recovery_runs_path = REAL / "phase8d-glm52-r1-recovery-runs.jsonl"
+        recovered_candidates_path = REAL / "phase8d-glm52-r1-recovered-candidates.jsonl"
+        effective_runs_path = REAL / "phase8d-glm52-r1-effective-runs.jsonl"
+        effective_candidates_path = REAL / "phase8d-glm52-r1-effective-candidates.jsonl"
+        audit = json.loads((REAL / "phase8d-glm52-r1-audit.json").read_text())
+        recovery_runs = v8d._load_jsonl(recovery_runs_path)
+        effective_runs = v8d._load_jsonl(effective_runs_path)
+        effective_candidates = v8d._load_jsonl(effective_candidates_path)
+        self.assertEqual([row["queue_id"] for row in recovery_runs], glm.R1_QUEUE_IDS)
+        self.assertEqual({row["status"] for row in recovery_runs}, {"completed"})
+        self.assertEqual(sum(row["candidate_count"] for row in recovery_runs), 21)
+        self.assertEqual(
+            len(
+                v8d.validate_finder_runs(
+                    effective_runs,
+                    self.config,
+                    self.plan,
+                    self.queue,
+                    self.sources,
+                    effective_candidates,
+                )
+            ),
+            29,
+        )
+        self.assertEqual(len(effective_candidates), 137)
+        self.assertEqual(audit["effective_failed"], 0)
+        self.assertFalse(audit["human_packets_exported"])
+        self.assertFalse(audit["quality_claim_allowed"])
+        artifact_paths = {
+            "recovery_runs_sha256": recovery_runs_path,
+            "recovered_candidates_sha256": recovered_candidates_path,
+            "effective_runs_sha256": effective_runs_path,
+            "effective_candidates_sha256": effective_candidates_path,
+        }
+        for key, path in artifact_paths.items():
+            self.assertEqual(canonical_text_sha256(path), audit["artifacts"][key])
+        self.assertEqual(
+            audit["audit_sha256"],
+            v8d._sha256(v8d._without_hash(audit, "audit_sha256")),
+        )
+
+    def test_real_blind_packets_accept_only_the_two_frozen_reviewers(self) -> None:
+        candidates = v8d._load_jsonl(REAL / "phase8d-glm52-r1-effective-candidates.jsonl")
+        rubric = hashlib.sha256(
+            (ROOT / "docs" / "verifier-annotation-rubric.md").read_bytes()
+        ).hexdigest()
+        packet_a = v8d.build_independent_packet(
+            candidates,
+            "human-reviewer-a-v1",
+            rubric,
+            101,
+            "2026-07-22T05:00:00Z",
+            synthetic=False,
+        )
+        packet_b = v8d.build_independent_packet(
+            candidates,
+            "human-reviewer-b-v1",
+            rubric,
+            202,
+            "2026-07-22T05:00:00Z",
+            synthetic=False,
+        )
+        v8d.validate_packet(packet_a, candidates)
+        v8d.validate_packet(packet_b, candidates)
+        v8d.validate_independent_packet_pair(packet_a, packet_b)
+        self.assertFalse(packet_a["synthetic"])
+        template = v8d.build_response_template(packet_a, candidates)
+        self.assertEqual(len(template), 137)
+        self.assertEqual(
+            {row["label"] for row in template}
+            | {row["rationale"] for row in template}
+            | {row["created_at"] for row in template},
+            {""},
+        )
+        self.assertNotEqual(
+            [item["candidate_id"] for item in packet_a["items"]],
+            [item["candidate_id"] for item in packet_b["items"]],
+        )
+        with self.assertRaisesRegex(v8d.Phase8DValidationError, "authorized"):
+            v8d.build_independent_packet(
+                candidates,
+                "unassigned-reviewer",
+                rubric,
+                303,
+                "2026-07-22T05:00:00Z",
+                synthetic=False,
+            )
+
+    def test_committed_blind_packets_are_distinct_complete_and_unlabeled(self) -> None:
+        candidates = v8d._load_jsonl(REAL / "phase8d-glm52-r1-effective-candidates.jsonl")
+        packet_a = json.loads((REAL / "phase8d-annotation-packet-a.json").read_text())
+        packet_b = json.loads((REAL / "phase8d-annotation-packet-b.json").read_text())
+        v8d.validate_packet(packet_a, candidates)
+        v8d.validate_packet(packet_b, candidates)
+        v8d.validate_independent_packet_pair(packet_a, packet_b)
+        self.assertEqual(len(packet_a["items"]), 137)
+        self.assertEqual(len(packet_b["items"]), 137)
+        self.assertNotEqual(
+            [item["candidate_id"] for item in packet_a["items"]],
+            [item["candidate_id"] for item in packet_b["items"]],
+        )
+        forbidden = {"split", "label", "score", "prediction", "peer_label"}
+        self.assertFalse(any(forbidden & set(item) for item in packet_a["items"]))
+        self.assertFalse(any(forbidden & set(item) for item in packet_b["items"]))
+        template_a = v8d._load_jsonl(
+            REAL / "phase8d-annotation-response-a-template.jsonl"
+        )
+        template_b = v8d._load_jsonl(
+            REAL / "phase8d-annotation-response-b-template.jsonl"
+        )
+        self.assertEqual(template_a, v8d.build_response_template(packet_a, candidates))
+        self.assertEqual(template_b, v8d.build_response_template(packet_b, candidates))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/split-manifest-v1.json",
+  "title": "Verifier training repository split manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "dataset_sha256", "splits", "operating_threshold",
+    "threshold_source"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "dataset_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "splits": {
+      "type": "object", "additionalProperties": false,
+      "required": ["train", "validation", "test"],
+      "properties": {
+        "train": {"$ref": "#/$defs/repositories"},
+        "validation": {"$ref": "#/$defs/repositories"},
+        "test": {"$ref": "#/$defs/repositories"}
+      }
+    },
+    "operating_threshold": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "threshold_source": {"enum": ["validation", "diagnostic", "unfrozen"]}
+  },
+  "$defs": {
+    "repositories": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {
+        "type": "string", "minLength": 1, "maxLength": 200,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+      }
+    }
+  }
+}

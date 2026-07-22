@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "experiment_family": "week8c-synthetic-transformer-smoke-v1",
+  "seed": 20260719,
+  "model_snapshot": "verifier_training/model-snapshot.json",
+  "runtime_lock": "verifier_training/phase8c-runtime.lock",
+  "model_root": "traces/week8c-runtime/model",
+  "data": "verifier_training/examples/candidates.jsonl",
+  "splits": "verifier_training/examples/split-manifest.json",
+  "dataset_sha256": "4a7f1f4a9c0e6ff52b781ca5a31d30c6af7a484a984c4e695d5962e20344e8e8",
+  "input_template": "finding: {candidate_text} evidence: {evidence} tools: {tools}",
+  "synthetic_only": true,
+  "max_length": 256,
+  "cpu_threads": 4,
+  "max_cpu_seconds": 7200,
+  "max_runtime_bytes": 2147483648,
+  "max_model_bytes": 67108864,
+  "paid_cost_cny": 0,
+  "accelerator_hours": 0,
+  "experiments": {
+    "base": {"epochs": 0, "learning_rate": 0.0},
+    "full-sft": {"epochs": 30, "learning_rate": 0.0002},
+    "lora-sft": {"epochs": 50, "learning_rate": 0.0005, "rank": 4, "alpha": 8, "dropout": 0.0},
+    "lora-pairwise": {"epochs": 80, "learning_rate": 0.0005, "rank": 4, "alpha": 8, "dropout": 0.0}
+  }
+}

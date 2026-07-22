@@ -1,0 +1,39 @@
+{
+  "artifacts": {
+    "effective_candidates_sha256": "e5c35b9b513301dc1d89097fe6eab4b139959d2537d067b133a15f9a026c5fdb",
+    "effective_runs_sha256": "7906753a6774a78125c09468ac1461e7142bff3182b5462d99149f5434260ec7",
+    "recovered_candidates_sha256": "a8494b0aec717969f73a8a7420ed9b8396e5c4230053efecca45a2ea8c4b833a",
+    "recovery_runs_sha256": "e319dff0855fcaae6b53bc4aa9139c2dd0dd0f9d13cdb32d71f693afcd73c1de"
+  },
+  "audit_sha256": "e6982b7c5bb62cff3dbaaa4f502c664485d343abbdcbe52c097519b517b1ce59",
+  "base_candidate_records_sha256": "114190d88a14924872b1b4234e994b8ac84d90d869002cb66705034aafb8fe29",
+  "base_run_records_sha256": "69e652a1d57bf2aa0d0e9c3c505bd15a7c2ddfc9ad5d4bfdf02589e35cf7d1a8",
+  "effective_candidates": 137,
+  "effective_failed": 0,
+  "human_packets_exported": false,
+  "phase_id": "week8d-r1-glm52-recovery-v1",
+  "quality_claim_allowed": false,
+  "schema_version": 1,
+  "supersessions": [
+    {
+      "original_run_sha256": "4ea02fa9391780e0b94b5aabe5cdad9622110ea0e16f5be1b52848f1fc817ed1",
+      "queue_id": "finder-012a2b256fa9b8556da6577e",
+      "recovery_run_sha256": "a623e3570d6debed9ee4730de16d573be5f059276b1f4814e0da1fe748e3d082",
+      "recovery_status": "completed",
+      "source_id": "Textualize/rich#3468"
+    },
+    {
+      "original_run_sha256": "89ae1f3bf805b5880479f8006d9fa51a792cf4ebcec3153d0099f5f247c9bdc1",
+      "queue_id": "finder-f7dd7b18cc83b53266eed486",
+      "recovery_run_sha256": "ead894331d02842570a2bda90091e2a1f36c05ac6992164d0bfd18bdfe6e5e64",
+      "recovery_status": "completed",
+      "source_id": "psf/requests#6655"
+    }
+  ],
+  "usage": {
+    "estimated_cost_cny": 0.509332,
+    "input_tokens": 32779,
+    "logical_calls": 13,
+    "output_tokens": 8825
+  }
+}

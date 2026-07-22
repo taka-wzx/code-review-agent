@@ -1,0 +1,23 @@
+{
+  "dataset_sha256": "fc75a525d6457cc896ae588f470ad9f830872f81aa1a278d3d5e31ac71f3203b",
+  "operating_threshold": null,
+  "schema_version": 1,
+  "splits": {
+    "test": [
+      "encode/httpx",
+      "pallets/flask",
+      "psf/requests"
+    ],
+    "train": [
+      "Textualize/rich",
+      "django/django",
+      "pallets/click",
+      "pytest-dev/pytest"
+    ],
+    "validation": [
+      "fastapi/fastapi",
+      "pydantic/pydantic"
+    ]
+  },
+  "threshold_source": "unfrozen"
+}

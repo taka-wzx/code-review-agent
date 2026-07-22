@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/experiment-v1.json",
+  "title": "Verifier model experiment manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "experiment_id", "variant", "dataset_sha256",
+    "model_id", "model_revision", "tokenizer_revision", "framework",
+    "framework_version", "seed", "hyperparameters", "prompt_sha256",
+    "hardware", "authorization_reference"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "experiment_id": {"$ref": "#/$defs/id"},
+    "variant": {"enum": ["base", "lora_sft", "pairwise_preference", "api_reference"]},
+    "dataset_sha256": {"$ref": "#/$defs/sha256"},
+    "model_id": {"type": "string", "minLength": 1},
+    "model_revision": {"type": "string", "minLength": 1},
+    "tokenizer_revision": {"type": "string", "minLength": 1},
+    "framework": {"type": "string", "minLength": 1},
+    "framework_version": {"type": "string", "minLength": 1},
+    "seed": {"type": "integer", "minimum": 0},
+    "hyperparameters": {"type": "object"},
+    "prompt_sha256": {"$ref": "#/$defs/sha256"},
+    "hardware": {"type": "string", "minLength": 1},
+    "authorization_reference": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

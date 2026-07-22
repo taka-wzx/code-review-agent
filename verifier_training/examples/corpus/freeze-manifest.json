@@ -1,0 +1,73 @@
+{
+  "agreement": {
+    "adjudications": 1,
+    "candidates": 3,
+    "final_uncertain": 0,
+    "independent_agreements": 2,
+    "synthetic_final": 3,
+    "unresolved": 0
+  },
+  "annotations_sha256": "9a01fa694394f6a17c67567327aa4ca75a6d06433042daff13292d1adc64c6f5",
+  "candidate_sources_sha256": "aae101c33dc92163c0aab169c170dfe7bad8091631461104e1a43d8005f521fc",
+  "corpus_id": "week8b-verifier-corpus-v1",
+  "counts": {
+    "annotations": 7,
+    "candidate_sources": 3,
+    "frozen_candidates": 3,
+    "pr_sources": 29
+  },
+  "frozen_at": "2026-07-19T02:00:00Z",
+  "frozen_dataset_sha256": "4478fde3632d922f995c82425f17fcbb43929f3534045a547b1fbe9c4d60f1ed",
+  "incomplete_gates": [
+    {
+      "count": 26,
+      "gate": "selected_pr_without_candidates",
+      "sample_ids": [
+        "Textualize/rich#201",
+        "Textualize/rich#202",
+        "Textualize/rich#203",
+        "Textualize/rich#204",
+        "django/django#401",
+        "django/django#402",
+        "django/django#403",
+        "django/django#404",
+        "encode/httpx#901",
+        "encode/httpx#902"
+      ]
+    },
+    {
+      "count": 3,
+      "gate": "synthetic_records_present",
+      "sample_ids": []
+    },
+    {
+      "count": 6,
+      "gate": "repository_without_resolved_candidates",
+      "sample_ids": [
+        "Textualize/rich",
+        "django/django",
+        "encode/httpx",
+        "fastapi/fastapi",
+        "psf/requests",
+        "pytest-dev/pytest"
+      ]
+    }
+  ],
+  "manifest_sha256": "ed6f76d3f2840770a5a4dbc1a536abb112b6a255b6e89c129ba0d0b0315c3b13",
+  "plan_sha256": "ba07efa6dadb34319462965cc21e2b7f6a9058bcc482b33dde5563da497773bf",
+  "pr_sources_sha256": "4cc38520006d03c057e81c3a09e169ce2f1853429882a379b6df8ee5c37f7ff2",
+  "repositories": {
+    "test": [
+      "pallets/flask"
+    ],
+    "train": [
+      "pallets/click"
+    ],
+    "validation": [
+      "pydantic/pydantic"
+    ]
+  },
+  "schema_version": 1,
+  "split_manifest_sha256": "7e614f70f63d6f49a0364595dbab5fd8f8326c8928601301f5cca27c377c2f99",
+  "trainable": false
+}

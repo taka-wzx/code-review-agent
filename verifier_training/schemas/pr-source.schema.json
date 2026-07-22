@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/pr-source-v1.json",
+  "title": "Phase 8B selected pull-request source",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "source_id", "repository_id", "split", "pr_number",
+    "merged_at", "base_sha", "head_sha", "merge_sha", "changed_files",
+    "additions", "deletions", "selection_rank", "selection_digest",
+    "selection_log_sha256", "eligible_pool_size", "diff_sha256", "diff_bytes",
+    "diff_object_key", "secret_scan_sha256", "secret_scan_findings",
+    "license_spdx", "source_url", "record_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source_id": {"$ref": "#/$defs/id"},
+    "repository_id": {"$ref": "#/$defs/repository"},
+    "split": {"enum": ["train", "validation", "test"]},
+    "pr_number": {"type": "integer", "minimum": 1},
+    "merged_at": {"$ref": "#/$defs/timestamp"},
+    "base_sha": {"$ref": "#/$defs/sha1"},
+    "head_sha": {"$ref": "#/$defs/sha1"},
+    "merge_sha": {"$ref": "#/$defs/sha1"},
+    "changed_files": {"type": "integer", "minimum": 1},
+    "additions": {"type": "integer", "minimum": 0},
+    "deletions": {"type": "integer", "minimum": 0},
+    "selection_rank": {"type": "integer", "minimum": 1},
+    "selection_digest": {"$ref": "#/$defs/sha256"},
+    "selection_log_sha256": {"$ref": "#/$defs/sha256"},
+    "eligible_pool_size": {"type": "integer", "minimum": 1},
+    "diff_sha256": {"$ref": "#/$defs/sha256"},
+    "diff_bytes": {"type": "integer", "minimum": 1, "maximum": 524288},
+    "diff_object_key": {
+      "type": "string",
+      "pattern": "^objects/[0-9a-f]{64}\\.diff$"
+    },
+    "secret_scan_sha256": {"$ref": "#/$defs/sha256"},
+    "secret_scan_findings": {"const": 0},
+    "license_spdx": {"enum": ["MIT", "BSD-3-Clause", "Apache-2.0"]},
+    "source_url": {"type": "string", "pattern": "^https://github\\.com/[^/]+/[^/]+/pull/[1-9][0-9]*$"},
+    "record_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "repository": {
+      "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "timestamp": {
+      "type": "string", "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "sha1": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

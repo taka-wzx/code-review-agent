@@ -192,9 +192,38 @@ trace Resource 和复用 Prompt。`get_trace` 按 MCP 语义实现为 Resource�
 推迟到远程身份与 pending Repair 操作可持久绑定后，避免把现有一次性审批降级为通用布尔
 开关；A2A 继续推迟。完整合同见 `docs/plans/week7-protocol-service.md`。
 
+### 第 7.5 阶段：真实协议链路验证
+
+在不扩展产品接口的前提下，以一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和一次
+`deepseek-v4-pro` 审查验证真实链路。唯一任务成功；官方重投和同 payload 签名重放复用
+同一 review，未增加模型调用；无效 HMAC 返回 401。初次 Webhook 在 GitHub 侧发生 10 秒
+超时，但提交实现已异步入队，现有证据不足以确定真实延迟原因；生产化前应先补充端到端时序
+埋点并复现，再决定修复方案，同时把重复投递响应缩减为紧凑确认。
+真实链路执行本身不包含容器，但推送后的 Ubuntu CI 已通过锁文件安装和 CLI/服务镜像
+build/help smoke；容器内真实协议、MCP-over-HTTP、远程 OAuth、审批 API 或 A2A 仍未验证。
+完整证据见 `docs/week7-5-live-validation.md`。
+
 ## 第 8 周：补齐“算法岗”模型侧证据
 
 训练一个可控的 Verifier / Reranker，而不是完整 Code LLM。
+
+**当前进展（Phase 8C）**：Phase 8A 已冻结候选/证据/工具摘要、仓库级切分、多重哈希、
+指标和两种词法基线；Phase 8B 进一步冻结 9 个公开宽松许可证仓库、29 PR 窗口与确定性
+选择、双人独立标注/仲裁、secret scan、留存和零付费/零加速器上限，并实现来源到 freeze
+manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `trainable=false`，只证明协议
+可复现，不构成模型效果证据。9 仓/29 PR 的真实公开来源快照及 pending Finder 队列已物化
+并哈希冻结，原始对象保持在忽略目录。Phase 8C 已在独立 CPU 环境以精确 safetensors
+快照和锁定依赖完成 Base、全量 SFT、LoRA SFT、LoRA pairwise 的同 manifest 合成烟测，
+`quality_claim_allowed=false`；真实 Finder 候选、两人标注/仲裁、真实跨仓实验、GPU 和 API
+对照仍未完成或未获授权；详见
+`docs/plans/week8-verifier-training.md`、`docs/verifier-training.md` 与
+`docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
+
+**当前步骤（Phase 8D，Finder 已闭门）**：R1 仅补跑原两条失败且均成功，保留原失败回执并
+生成 supersession audit；29 来源的有效视图为 137 条候选、3 个零候选、0 个失败。两份不同
+顺序的 137 项盲标包和空白响应模板已冻结，当前等待两位真实标注员独立完成；其后由第三人
+处理分歧。real freeze 前继续禁止质量结论与真实训练。详见
+`docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
 
 数据：
 

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/corpus-annotation-v1.json",
+  "title": "Phase 8B independent annotation or adjudication",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "annotation_id", "candidate_id",
+    "candidate_source_sha256", "annotator_id", "role", "label",
+    "rationale", "evidence_sha256", "source_annotation_ids",
+    "source_annotation_sha256s", "created_at", "synthetic",
+    "annotation_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "annotation_id": {"$ref": "#/$defs/id"},
+    "candidate_id": {"$ref": "#/$defs/id"},
+    "candidate_source_sha256": {"$ref": "#/$defs/sha256"},
+    "annotator_id": {"$ref": "#/$defs/id"},
+    "role": {"enum": ["annotator", "adjudicator"]},
+    "label": {"enum": ["keep", "drop", "uncertain"]},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "evidence_sha256": {"$ref": "#/$defs/sha256"},
+    "source_annotation_ids": {
+      "type": "array", "maxItems": 2, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    },
+    "source_annotation_sha256s": {
+      "type": "array", "maxItems": 2, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/sha256"}
+    },
+    "created_at": {"$ref": "#/$defs/timestamp"},
+    "synthetic": {"type": "boolean"},
+    "annotation_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {
+      "type": "string", "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    }
+  }
+}

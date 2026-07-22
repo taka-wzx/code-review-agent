@@ -1,0 +1,17 @@
+{
+  "dataset_sha256": "4478fde3632d922f995c82425f17fcbb43929f3534045a547b1fbe9c4d60f1ed",
+  "operating_threshold": null,
+  "schema_version": 1,
+  "splits": {
+    "test": [
+      "pallets/flask"
+    ],
+    "train": [
+      "pallets/click"
+    ],
+    "validation": [
+      "pydantic/pydantic"
+    ]
+  },
+  "threshold_source": "unfrozen"
+}

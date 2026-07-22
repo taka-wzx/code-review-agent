@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "phase_id": "week8d-r1-glm52-recovery-v1",
+  "base_artifacts": {
+    "finder_run_records_sha256": "69e652a1d57bf2aa0d0e9c3c505bd15a7c2ddfc9ad5d4bfdf02589e35cf7d1a8",
+    "candidate_source_records_sha256": "114190d88a14924872b1b4234e994b8ac84d90d869002cb66705034aafb8fe29"
+  },
+  "base_usage": {
+    "logical_calls": 176,
+    "input_tokens": 603883,
+    "output_tokens": 119027,
+    "estimated_cost_cny": 8.16382
+  },
+  "queue_ids": [
+    "finder-012a2b256fa9b8556da6577e",
+    "finder-f7dd7b18cc83b53266eed486"
+  ],
+  "source_ids": [
+    "Textualize/rich#3468",
+    "psf/requests#6655"
+  ],
+  "max_attempts_per_queue": 1,
+  "finder": {
+    "provider": "glm",
+    "model": "glm-5.2",
+    "prompt_sha256": "76ff48a6daaae39f424f0ee7bfc96152d49c0ff0ed2369d52d3035137c8f72d5",
+    "anchor_temperature": 0.2,
+    "sampling_temperature": 0.7,
+    "thinking_type": "disabled",
+    "reasoning_effort": "none",
+    "stream": false,
+    "tool_choice": "auto",
+    "max_calls": 40,
+    "max_http_attempts": 120,
+    "max_input_tokens": 2000000,
+    "max_output_tokens": 200000,
+    "max_cost_cny": 25,
+    "uncached_input_cny_per_million": 8,
+    "cached_input_cny_per_million": 2,
+    "output_cny_per_million": 28
+  },
+  "raw_trace_days": 30,
+  "authorized": true
+}

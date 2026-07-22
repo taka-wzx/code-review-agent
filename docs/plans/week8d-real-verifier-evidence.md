@@ -1,0 +1,369 @@
+# Phase 8D: Real Verifier Evidence Preparation
+
+## Goal
+
+Prepare the real-data Finder, independent annotation, adjudication, freeze, and
+model-run interfaces without making an external model call or claiming that any
+human work has occurred. This phase closes offline protocol gaps exposed after
+the Phase 8C synthetic smoke experiment.
+
+The deliverable is a fail-closed operator workflow. It is not a real corpus,
+human annotation, trained-model result, API comparison, or production rollout.
+
+## Base and current branch
+
+- Phase 8 base commit: `ae4a7ffd307072fa1ddadff4c82a96f9c170d847`
+- Current task branch: `codex/week8-verifier-training`
+- Worktree: the existing isolated Week 8 worktree
+- Stable Phase 8 commit: `c96ef4e8364f4f5c9ce03a04d5d98761db2957f9`
+- Stable GLM amendment commit: `b10a280def80e5c4713918e0706063840a6aa9f5`
+
+The Phase 8A--8D offline preparation is committed at the stable commit above.
+This authorized provider amendment remains on the same isolated task branch.
+
+## Authorization freeze (2026-07-22, GLM amendment)
+
+The user authorized the following exact Finder execution boundary:
+
+- provider `glm`, OpenAI-compatible base URL
+  `https://open.bigmodel.cn/api/paas/v4`, API model ID `glm-5.2`;
+- anchor temperature `0.20`, sampling temperature `0.70`, thinking disabled,
+  reasoning effort `none`, non-streaming responses, and automatic tool choice;
+- at most 580 logical calls, 1,740 theoretical HTTP attempts including the
+  client's two retries, 20,000,000 input tokens, 2,000,000 output tokens, and
+  CNY 250 total cost;
+- read access only to the 29 hash-bound unified-diff objects selected in Phase
+  8B; raw diff and provider trace retention is 30 days;
+- stable IDs `human-reviewer-a-v1`, `human-reviewer-b-v1`, and
+  `human-adjudicator-c-v1`, which must map to three distinct real people;
+- local commits, task-branch push, pull request, merge, and `master` changes.
+
+The API model ID is a service alias, not an immutable weight snapshot. Each
+response must therefore preserve the returned model ID, request ID, UTC time,
+system fingerprint when supplied, and the frozen documentation/input hashes.
+The executor must not run without an explicit environment credential and must
+fail closed before exceeding any ceiling. No credential may enter a trace.
+
+This amendment does **not** authorize real model training, opening protected
+test labels, fabricating human decisions, or claiming model quality. A merge to
+`master` is permitted by the user but remains inappropriate until the three
+real-human decisions and real quality gates are complete.
+
+### Phase 8D-R1 recovery amendment
+
+The user's instruction "authorize Phase 8D-R1, retry only the two failed
+sources once each" authorizes one recovery queue execution for exactly:
+
+- `finder-012a2b256fa9b8556da6577e` (`Textualize/rich#3468`); and
+- `finder-f7dd7b18cc83b53266eed486` (`psf/requests#6655`).
+
+R1 preserves the two original failed receipts and may add one superseding
+receipt per listed queue. It must never rewrite the v1 artifacts or execute any
+other queue. The R1 sub-budget is 40 logical calls, 120 theoretical HTTP
+attempts, 2,000,000 input tokens, 200,000 output tokens, and CNY 25; these are
+sub-ceilings inside, not additions to, the original Phase 8D budget. Request
+identity, temperatures, reasoning controls, raw boundaries, and retention stay
+unchanged. Blind packet export remains blocked until the effective 29-receipt
+view validates with zero failed sources.
+
+### Synthetic dry-run amendment (2026-07-22)
+
+The user replaced the unavailable three-person annotation exercise with a
+synthetic workflow validation. This authorizes an offline, deterministic,
+non-semantic dry run over the 137 sanitized Finder candidates. Synthetic
+decisions must be derived only from salted candidate-ID hashes, must carry
+`synthetic=true`, and must state that they are not quality judgments. They may
+exercise independent import, disagreement/uncertain routing, adjudication,
+merge, freeze, and model-readiness refusal.
+
+This amendment does not authorize an external annotation model call, real
+model training, a quality claim, changing either frozen real-human packet, or
+representing synthetic identities as people. The real-human gate remains open.
+The resulting freeze must remain `trainable=false`, model readiness must remain
+blocked, and the PR may describe only the infrastructure/dry-run deliverable.
+
+## Offline workflow
+
+1. Validate the frozen authorization config.
+2. Validate the 29 immutable Finder queue records and generate deterministic
+   execution envelopes without reading their diff objects.
+3. Import Finder run receipts and candidate records produced by a future,
+   separately authorized executor. A successful run may legitimately contain
+   zero candidates; it receives a completed-zero receipt and must not be turned
+   into a fabricated negative candidate.
+4. Export two blinded independent annotation packets. Packets omit split names,
+   peer labels, model scores, and model predictions.
+5. Import each reviewer's complete response set and compute canonical annotation
+   hashes in tooling rather than asking humans to calculate them.
+6. Export an adjudication packet only for disagreement or any `uncertain` vote;
+   import decisions from a third distinct identity and bind both source hashes.
+7. Merge annotations and build a real freeze wrapper that binds Finder receipts
+   to the existing corpus compiler.
+8. Validate a real-model run plan. Actual training remains disabled until the
+   real freeze is trainable and model-run seeds/resources are separately frozen.
+
+## Frozen invariants
+
+- One Finder receipt binds each of the 29 queue records exactly once.
+- `completed` requires one or more candidate IDs; `completed_zero_candidates`
+  requires none; `failed` requires a bounded error category.
+- Candidates bind the queue source, PR source hash, merge SHA, and diff hash;
+  candidate counts agree with their receipt and remain within 16 per PR / 480
+  total.
+- A completed-zero receipt closes execution completeness without creating a
+  training row.
+- Independent packets use distinct reviewer IDs and never include peer labels.
+- Response import requires exactly one decision for every packet item and no
+  extra candidate IDs.
+- Agreement on a non-uncertain label forbids adjudication. Disagreement or any
+  uncertain vote requires exactly one distinct adjudicator.
+- Real records use `synthetic=false`; synthetic fixtures cannot open the real
+  trainable gate.
+- Whole-repository train/validation/test isolation remains unchanged. Test
+  labels remain sealed from model selection, hyperparameter changes, threshold
+  selection, and error-driven iteration.
+
+## Single Writer ownership
+
+Codex may create or modify only:
+
+- `docs/plans/week8d-real-verifier-evidence.md`
+- `docs/verifier-real-evidence.md`
+- `verifier_phase8d.py`
+- `tests/test_verifier_phase8d.py`
+- `tests/test_verifier_training.py` only to extend the exact schema inventory
+  with the four declared Phase 8D schemas
+- `verifier_training/phase8d-config.json`
+- `verifier_training/schemas/finder-run.schema.json`
+- `verifier_training/schemas/annotation-packet.schema.json`
+- `verifier_training/schemas/annotation-response.schema.json`
+- `verifier_training/schemas/real-freeze-manifest.schema.json`
+- `verifier_training/examples/phase8d/README.md`
+- `verifier_corpus.py` only for the backward-compatible completed-source input
+  used by the Phase 8D real freeze wrapper
+- `tests/test_verifier_corpus.py` only for that compatibility gate
+- `README.md`
+- `AGENDA.md`
+- `verifier_phase8d_glm.py`
+- `tests/test_verifier_phase8d_glm.py`
+- `verifier_training/real/phase8d-glm52-finder-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-candidate-sources.jsonl`
+- `verifier_training/real/phase8d-glm52-summary.json`
+- `verifier_training/phase8d-r1-config.json`
+- `verifier_training/real/phase8d-glm52-r1-recovery-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-recovered-candidates.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-effective-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-effective-candidates.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-audit.json`
+- `docs/verifier-annotation-rubric.md`
+- `verifier_training/real/phase8d-annotation-packet-a.json`
+- `verifier_training/real/phase8d-annotation-packet-b.json`
+- `verifier_training/real/phase8d-annotation-response-a-template.jsonl`
+- `verifier_training/real/phase8d-annotation-response-b-template.jsonl`
+- `verifier_phase8d_simulate.py`
+- `tests/test_verifier_phase8d_simulate.py`
+- `verifier_training/synthetic/phase8d-annotation-packet-a.json`
+- `verifier_training/synthetic/phase8d-annotation-packet-b.json`
+- `verifier_training/synthetic/phase8d-annotation-responses-a.jsonl`
+- `verifier_training/synthetic/phase8d-annotation-responses-b.jsonl`
+- `verifier_training/synthetic/phase8d-annotations-a.jsonl`
+- `verifier_training/synthetic/phase8d-annotations-b.jsonl`
+- `verifier_training/synthetic/phase8d-independent-annotations.jsonl`
+- `verifier_training/synthetic/phase8d-adjudication-packet.json`
+- `verifier_training/synthetic/phase8d-adjudication-responses.jsonl`
+- `verifier_training/synthetic/phase8d-adjudications.jsonl`
+- `verifier_training/synthetic/phase8d-final-annotations.jsonl`
+- `verifier_training/synthetic/phase8d-frozen-candidates.jsonl`
+- `verifier_training/synthetic/phase8d-splits.json`
+- `verifier_training/synthetic/phase8d-freeze-manifest.json`
+- `verifier_training/synthetic/phase8d-simulation-manifest.json`
+
+All other provider adapters, production package files, dependencies, CI, prompts,
+sentinels, protected evaluation assets, raw diff objects, and prior result
+artifacts are read-only.
+
+## Validation
+
+```powershell
+.venv\Scripts\python.exe -m unittest tests.test_verifier_phase8d tests.test_verifier_corpus -v
+.venv\Scripts\python.exe -m unittest tests.test_verifier_phase8d_glm -v
+.venv\Scripts\python.exe -m unittest tests.test_verifier_phase8d_simulate -v
+.venv\Scripts\python.exe -m ruff check verifier_phase8d.py verifier_corpus.py `
+  verifier_phase8d_glm.py tests\test_verifier_phase8d.py `
+  tests\test_verifier_phase8d_glm.py tests\test_verifier_corpus.py
+.venv\Scripts\python.exe verifier_phase8d.py validate-config `
+  --config verifier_training\phase8d-config.json
+.venv\Scripts\python.exe scripts\verify.py
+git diff --check
+```
+
+The protected evaluation consistency command is deliberately omitted. No
+command in this phase may read `eval/` or `eval/holdout/`.
+
+## Acceptance criteria
+
+- The amended config accepts exactly the authorized GLM identity, generation
+  settings, budgets, retained diff boundary, human IDs, and local commit
+  authority, and rejects any expansion or weakening.
+- The provider executor is offline-testable with an injected fake client,
+  verifies every raw object's path, size, and SHA-256 before reading it into a
+  request, and emits no replacement or fabricated run.
+- Finder envelopes and receipts are deterministic, exact-key, hash-bound, and
+  support honest zero-candidate completion.
+- Receipt/candidate reconciliation rejects missing, duplicate, foreign,
+  over-limit, failed-as-complete, or count-mismatched records.
+- Independent packet export is blind and deterministic under a seed.
+- Annotation and adjudication imports enforce exact coverage, distinct human
+  identities, immutable candidate/evidence hashes, and source-hash freshness.
+- Real freeze output binds Finder receipts and cannot report trainable while a
+  run failed, annotations are unresolved, synthetic records remain, or a
+  represented repository is missing.
+- Real model-plan validation refuses to run without a trainable real freeze,
+  sealed test declaration, frozen seeds, and a later model-run authorization.
+- Existing Phase 8A--8C and project validation remain green.
+- The synthetic dry run covers all 137 candidates twice, deterministically
+  produces both agreement and adjudication cases, resolves every synthetic
+  disagreement, and leaves the freeze non-trainable with an explicit
+  `synthetic_records_present` gate.
+- Real-model readiness refuses the synthetic freeze; no simulated metric is
+  reported as model quality and no synthetic artifact is stored under
+  `verifier_training/real/`.
+
+## Remaining external gates
+
+- A `GLM_API_KEY` or `ZHIPUAI_API_KEY` must be supplied by the operator without
+  committing or logging it.
+- The two independent reviewers and the adjudicator must be three real people;
+  their labels cannot be generated by an agent.
+- Real-model training resources/seeds require a separate authorization after a
+  trainable, real-only corpus freeze exists.
+- The synthetic dry run validates mechanics only and does not close any of the
+  three real-human or real-model quality gates.
+
+## Delivery report (2026-07-22)
+
+### GLM amendment
+
+- Froze the exact GLM-5.2 identity, two temperatures, reasoning/thinking
+  controls, logical/HTTP attempt ceilings, token and CNY budgets, 30-day raw
+  retention, three stable human IDs, and local-commit authority.
+- Added an offline-testable provider executor with conservative pre-request
+  budget reservation, exact-path/size/SHA diff attestation, immutable-output
+  refusal, honest diff-only tool responses, deterministic candidate IDs, and
+  response model/request/fingerprint evidence.
+- Attested all 29 retained diff objects (145,838 bytes) with aggregate
+  attestation SHA-256
+  `6d6ca6470d7b345866eb92ec96bdf7af0ffccf65cabaed1664369a98f675fb04`.
+- Focused validation passed 20 tests. Full `scripts/verify.py` passed 635 tests
+  with 3 skips, 86% coverage, Ruff, mypy, CLI smokes, and the 48-case security
+  suite at zero attack success, false block, secret disclosure, or
+  unauthorized execution.
+- The shared venv initially lacked locked FastAPI/MCP dependencies and pointed
+  its editable install at an older worktree. Restoring the locked packages and
+  reinstalling this worktree editable fixed the environment; no dependency or
+  lock file changed.
+- At the amendment commit, no provider call had occurred because neither
+  accepted GLM key environment variable was present. The task branch was
+  pushed and draft PR #4 was opened for review.
+
+### Real Finder run
+
+- After the operator supplied `GLM_API_KEY` to the Codex process, the one
+  authorized queue run executed from `2026-07-22T03:36:13Z` through
+  `2026-07-22T04:37:56Z`. The outer terminal reached its one-hour host timeout
+  near the end, but the original Python process remained alive, finished all
+  29 queue entries, wrote final artifacts, and exited; no replacement run was
+  started.
+- The validated result contains 24 completed sources, 3 honest zero-candidate
+  sources, 2 failed sources, and 116 sanitized candidates. One sampling pass
+  degraded to its anchor result. All 175 successful responses reported model
+  `glm-5.2`, and all 29 raw-trace hashes match their receipts.
+- Returned usage totals 603,883 input tokens and 119,027 output tokens. The
+  frozen worst-uncached pricing estimate is CNY 8.16382; provider invoice
+  reconciliation remains external. All figures are below the authorized
+  ceilings.
+- `Textualize/rich#3468` failed with `finder_protocol_error` and
+  `psf/requests#6655` failed with `provider_error`. They were not retried.
+  Consequently the real freeze remains incomplete, blind human packets are not
+  yet exported, and no quality claim is allowed.
+- No human label, adjudication, model training, protected evaluation read,
+  merge, or `master` change occurred.
+
+### Phase 8D-R1 result
+
+- The one authorized recovery execution completed both frozen failed sources;
+  both recovery receipts have `completed` status and together add 21 sanitized
+  candidates. The original two failed receipts remain unchanged in the v1
+  artifact and are linked by the R1 supersession audit.
+- The effective view now contains 26 completed sources, 3 honest zero-candidate
+  sources, zero failed sources, and 137 candidates. R1 consumed 13 logical
+  calls, 32,779 input tokens, 8,825 output tokens, and an estimated CNY
+  0.509332. Combined v1+R1 usage is 189 logical calls, 636,662 input tokens,
+  127,852 output tokens, and estimated CNY 8.673152.
+- All 13 successful R1 responses reported `glm-5.2`, and both recovery trace
+  hashes match their receipts. No third source or second recovery attempt ran.
+- The Finder completeness gate is now closed. Human packets remain unexported,
+  so annotation, adjudication, real freeze, model training, and quality claims
+  remain incomplete.
+
+### Human annotation packet freeze
+
+- Rubric: `docs/verifier-annotation-rubric.md`, SHA-256
+  `e54eb814406dc3bd85e18a8777fe9b78f1f37d26e0d2721b5558a431951a7210`.
+- Candidate-set SHA-256:
+  `f0e7a861b42fd41f2fd6ca120eb8bde842e8ffa4995951d6c297bed74c15907a`;
+  both packets must cover all 137 effective candidates.
+- Reviewer A is `human-reviewer-a-v1`, with order seed
+  `17283554618344652700`; reviewer B is `human-reviewer-b-v1`, with order
+  seed `18242521656380993050`.
+- Packets are real (`synthetic=false`), use created-at
+  `2026-07-22T05:04:37Z`, and must have different item order but the same
+  candidate-set and rubric hashes.
+- Response templates are intentionally invalid until a real human replaces
+  every blank label, rationale, and timestamp. Agent-generated decisions are
+  forbidden.
+- Packet A is `independent-918266436df4563aa1d6eae6`, with canonical packet
+  hash `e5689305e2682d7dcd57ff131a670656d2976d747e4397a97a5bd674edbeebf6`.
+  Packet B is `independent-8f8b764bf3502ca7406cc2d6`, with canonical
+  packet hash `f5c5ee8b0f4371a09ac42f093fc8969fb3d66fe61df42dc797d6928d2c10ee66`.
+  Their item orders differ and neither contains split, label, score,
+  prediction, or peer-label fields.
+
+- Implemented the zero-authority config, 29 deterministic non-executable Finder
+  envelopes, completed/zero/failed receipt validation, blind independent packet
+  export, complete response import, adjudication-only packet export, annotation
+  merge, Finder-bound real freeze wrapper, and blocked real-model readiness gate.
+- Added an optional completed-source input to the existing corpus compiler.
+  Its default behavior is unchanged; a Phase 8D completed-zero receipt may now
+  close execution completeness without fabricating a candidate.
+- Focused Phase 8A--8D validation passed 39 tests. Targeted Ruff, config CLI,
+  and a real 29-envelope preparation smoke passed with `executable=0`.
+- Full `scripts/verify.py` passed 632 tests with 3 skips, 86% coverage, Ruff,
+  mypy for 26 package files, both CLI smokes, and all 48 security cases at zero
+  attack success, false block, secret disclosure, or unauthorized execution.
+- `git diff --check`, JSON parsing, trailing-whitespace, absolute-host-path, and
+  credential-pattern audits passed. The full suite's generated `%SystemDrive%`
+  cache directory was inspected and removed from the worktree.
+- The first combined focused run exposed only an intentionally exact schema
+  inventory that lacked the four new filenames. Ownership was explicitly
+  expanded, the inventory was updated, and the authoritative rerun passed.
+- No provider/network call, raw diff read, human decision, model training,
+  protected evaluation access, commit, push, merge, or upload occurred.
+
+### Synthetic dry-run result
+
+- Two synthetic independent packets each covered all 137 candidates. Salted
+  candidate-ID hashes produced 67 non-uncertain agreements and 70 disagreement
+  or `uncertain` cases without reading candidate meaning or making a quality
+  judgment.
+- The synthetic adjudicator resolved exactly those 70 cases. The final merged
+  file contains 274 independent annotations plus 70 adjudications and has no
+  unresolved candidate.
+- The freeze contains 137 records and correctly remains `trainable=false` with
+  `synthetic_records_present` count 137. Real-model readiness is false for the
+  non-trainable/incomplete freeze and the still-unfrozen authorization, plan,
+  and seeds.
+- No external model call, human label, training run, metric, protected
+  evaluation read, or real packet/template modification occurred. The result
+  validates workflow mechanics only and does not complete Phase 8 quality
+  evidence.

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/candidate-source-v1.json",
+  "title": "Phase 8B unlabeled candidate source",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "candidate_id", "source_id", "repository_id",
+    "source_revision", "pr_source_sha256", "candidate_text", "evidence",
+    "tool_summaries", "pair_id", "language", "severity", "content_sha256",
+    "candidate_source_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate_id": {"$ref": "#/$defs/id"},
+    "source_id": {"$ref": "#/$defs/id"},
+    "repository_id": {"$ref": "#/$defs/id"},
+    "source_revision": {"$ref": "#/$defs/sha1"},
+    "pr_source_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_text": {"type": "string", "minLength": 1, "maxLength": 8000},
+    "evidence": {
+      "type": "array", "maxItems": 8,
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "tool_summaries": {
+      "type": "array", "maxItems": 8,
+      "items": {"$ref": "#/$defs/tool"}
+    },
+    "pair_id": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "language": {"oneOf": [{"$ref": "#/$defs/id"}, {"type": "null"}]},
+    "severity": {"enum": ["low", "medium", "high", null]},
+    "content_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_source_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha1": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "path", "line", "summary"],
+      "properties": {
+        "kind": {"enum": ["positive", "negative", "missing"]},
+        "path": {"type": "string", "minLength": 1},
+        "line": {"type": ["integer", "null"], "minimum": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "tool": {
+      "type": "object", "additionalProperties": false,
+      "required": ["tool", "status", "summary"],
+      "properties": {
+        "tool": {"$ref": "#/$defs/id"},
+        "status": {"enum": ["ok", "error", "not_run"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    }
+  }
+}

@@ -307,9 +307,47 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 
 配置、REST/MCP 示例、安全边界、GitHub Webhook 和容器说明见
 [`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
-[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。当前证据是
-注入 fake runner 的离线协议测试；未发送真实 Webhook、未调用模型、未向 GitHub 发帖、
-未执行 Docker 服务探针，因此不声称生产可用性或远程 OAuth 已完成。
+[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。Week 7.5 又以
+一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和 `deepseek-v4-pro` 完成了有界真实链路：
+唯一任务成功，重投保持同一 review 且未增加模型调用，无效签名返回 401。初次投递也暴露了
+一次 GitHub 侧 10 秒超时，但现有证据不足以确定根因，需先补充端到端时序埋点再设计修复；
+推送后的 CI 已在 Ubuntu 验证锁文件安装及 CLI/服务镜像 build/help smoke，但未在容器中执行
+真实协议链路；MCP-over-HTTP 与远程 OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
+[`docs/week7-5-live-validation.md`](docs/week7-5-live-validation.md)。
+
+### Verifier 后训练基础（第 8 阶段）
+
+第 8 阶段先建立不依赖外部模型的可复现训练/评测协议：`verifier_training.py` 对 Finder
+候选、正负证据、工具摘要和 keep/drop/uncertain 标签做严格校验，以整仓为单位冻结
+train/validation/test，并用候选、change、pair、内容和完整记录哈希阻断跨 split 泄漏；评测
+固定输出 Precision/Recall/F1、PR/平均精度、ECE、跨仓聚合、时延和错误切片。仓库还提供
+确定性词法 logreg/pairwise 基线，仅用于证明流水线和 artifact 协议。
+
+Phase 8B 已冻结 9 个宽松许可证公开仓库、29 个 PR 的窗口/选择规则、整仓 split、双人独立
+标注与仲裁协议、secret scan/留存规则和零付费/零加速器上限；`verifier_corpus.py` 对来源、
+候选、标注和 freeze manifest 做严格离线校验。真实公开来源快照已完成 9 仓/29 PR，原始
+对象约 1.93 MiB，29 条入选 diff 的高信号 secret finding 均为 0，并已生成逐 PR 哈希绑定的
+`pending` Finder 队列；当前 corpus 示例仍全部是合成 fixture，`trainable=false`。
+
+Phase 8C 又在独立、忽略的 CPU 环境中固定并运行了 Base、全量 SFT、LoRA SFT 和 LoRA
+pairwise 四条路径，使用精确 safetensors 模型快照、锁定依赖、同一合成 test manifest、
+validation-only 阈值和零付费/零加速器资源。它只证明训练、评测与 artifact 链路能离线闭环，
+`quality_claim_allowed=false`，**不代表模型质量、后训练提升或跨仓泛化**。真实 Finder 候选、
+双人独立标注/仲裁与真实仓库实验仍未完成。完整边界与命令见
+[`docs/verifier-training.md`](docs/verifier-training.md) 和
+[`docs/verifier-corpus.md`](docs/verifier-corpus.md)，冻结合同见
+[`docs/plans/week8-verifier-training.md`](docs/plans/week8-verifier-training.md)，Phase 8C 记录见
+[`docs/verifier-transformer.md`](docs/verifier-transformer.md)。
+
+Phase 8D 首次 GLM-5.2 Finder 的两条失败已在 R1 中各补跑一次并成功，原失败回执保留且由
+supersession audit 绑定。有效视图现为 26 个有候选来源、3 个诚实零候选、0 个失败和 137 条
+净化候选；v1+R1 合计 636,662/127,852 输入输出 token，最坏未缓存估算 CNY 8.673152。
+Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标包及空白响应模板已经冻结；尚无
+人工标签或模型质量结论，真实训练继续关闭。另有一套与真实包隔离的确定性 synthetic
+流程演练：A/B 各覆盖 137 条，67 条一致、70 条经模拟仲裁，最终 freeze 因 137 条
+`synthetic_records_present` 保持 `trainable=false`。详见
+[`docs/verifier-real-evidence.md`](docs/verifier-real-evidence.md) 和
+[`docs/plans/week8d-real-verifier-evidence.md`](docs/plans/week8d-real-verifier-evidence.md)。
 
 ### 历史开发基准
 
@@ -360,6 +398,20 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
   run-plan、manifest 完整性/客观 size-band 校验、pass@1/资源/失败/越权统计、并发与
   container-hour 审计及仓库分层配对 Bootstrap CI；Claude 的 13 项发现已在 integration
   中逐项处置，真实数据、Docker 与付费运行仍待单独授权
+- **Week 8 Verifier 后训练（Phase 8A）**：冻结候选/证据/工具摘要 JSONL、仓库级切分、
+  内容与记录哈希防泄漏、阈值和 PR/ECE 口径；实现标准库词法 logreg/pairwise 台架与
+  离线测试。当前仅有合成协议 fixture，真实训练语料与模型实验仍待授权
+- **Week 8 Verifier 语料（Phase 8B）**：冻结 9 仓/29 PR 的许可、窗口、确定性选择、
+  secret scan、双标/仲裁、留存和资源上限；实现来源到 `trainable` 门禁的离线编译器。
+  真实公开来源快照和 29 项 pending Finder 队列已物化并哈希冻结；合成闭环保持
+  `trainable=false`，真实 Finder 候选和两人标注仍未完成
+- **Week 8 Verifier 模型烟测（Phase 8C）**：精确固定小型 BERT safetensors 快照、CPython
+  3.13 / PyTorch 2.13 / Transformers 5.13 / PEFT 0.19.1 独立 CPU 环境，以及 Base、全量
+  SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
+  但仅 2 条二分类 test 样本，明确禁止模型质量或后训练提升结论
+- **Week 8 真实证据准备（Phase 8D）**：冻结并执行 GLM-5.2 双温度 Finder；R1 后 29 个
+  来源的有效视图为 137 条候选、3 个零候选、0 个失败。synthetic 双标/仲裁/freeze 已离线
+  闭环并正确保持非 trainable；双人真人盲标、第三位真人仲裁和真实模型质量验证仍未完成
 
 ## 已知限制
 
@@ -369,6 +421,10 @@ Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；
 - **Week 5 SWE-bench 集尚未 materialize**：30 个候选槽位和 120-run 消融矩阵只是冻结的
   选择/资源/统计合同；当前没有真实 instance、任务镜像、Agent patch 或官方 evaluator
   结果，不能声称 pass@1 或 Repair 泛化能力
+- **Week 8 仍没有真实模型质量证据**：Phase 8B 已冻结真实公开来源快照和 Finder 队列，
+  Phase 8C 也完成四路合成 CPU 流水线烟测，但可提交的候选/标注仍是合成 fixture；真实
+  Finder 候选、双标/仲裁和跨仓 test 均未完成，不能声称后训练提升。当前记录的训练/推理
+  时延只适用于 2 条合成 test 的本机烟测，不是容量或生产延迟结论
 - **评测规模较小**：16+6 diffs、30+7 埋点、n=3 重复跑无显著性检验；mean [min–max] 是 3 点极差，bug 级 bootstrap CI（W14 v2 recall [0.811, 0.978]）才接近决策级区间
 - **judge 与被测 agent 同模型**：self-preference 偏置已被 GLM 交叉重判实测收窄（100% 一致），但两模型共享盲区无法排除；人工校准只有 W2 的 9 埋点（n=9 无统计意义）
 - **holdout 并非严格 held-out**：自 W8 起被跑过 15+ 次并据结果迭代，实际是第二开发集；用途是回归门不是泛化证明

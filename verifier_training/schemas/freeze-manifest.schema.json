@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.local/schemas/verifier-training/freeze-manifest-v1.json",
+  "title": "Phase 8B deterministic corpus freeze manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "corpus_id", "frozen_at", "plan_sha256",
+    "pr_sources_sha256", "candidate_sources_sha256", "annotations_sha256",
+    "frozen_dataset_sha256", "split_manifest_sha256", "counts", "agreement",
+    "repositories", "incomplete_gates", "trainable", "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "corpus_id": {"$ref": "#/$defs/id"},
+    "frozen_at": {"$ref": "#/$defs/timestamp"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "pr_sources_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_sources_sha256": {"$ref": "#/$defs/sha256"},
+    "annotations_sha256": {"$ref": "#/$defs/sha256"},
+    "frozen_dataset_sha256": {"$ref": "#/$defs/sha256"},
+    "split_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "counts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["pr_sources", "candidate_sources", "annotations", "frozen_candidates"],
+      "properties": {
+        "pr_sources": {"type": "integer", "minimum": 0, "maximum": 29},
+        "candidate_sources": {"type": "integer", "minimum": 0, "maximum": 480},
+        "annotations": {"type": "integer", "minimum": 0, "maximum": 1440},
+        "frozen_candidates": {"type": "integer", "minimum": 0, "maximum": 480}
+      }
+    },
+    "agreement": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "candidates", "independent_agreements", "adjudications",
+        "final_uncertain", "synthetic_final", "unresolved"
+      ],
+      "properties": {
+        "candidates": {"type": "integer", "minimum": 0, "maximum": 480},
+        "independent_agreements": {"type": "integer", "minimum": 0, "maximum": 480},
+        "adjudications": {"type": "integer", "minimum": 0, "maximum": 480},
+        "final_uncertain": {"type": "integer", "minimum": 0, "maximum": 480},
+        "synthetic_final": {"type": "integer", "minimum": 0, "maximum": 480},
+        "unresolved": {"type": "integer", "minimum": 0, "maximum": 480}
+      }
+    },
+    "repositories": {
+      "type": "object", "additionalProperties": false,
+      "required": ["train", "validation", "test"],
+      "properties": {
+        "train": {"$ref": "#/$defs/repositories"},
+        "validation": {"$ref": "#/$defs/repositories"},
+        "test": {"$ref": "#/$defs/repositories"}
+      }
+    },
+    "incomplete_gates": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["gate", "count", "sample_ids"],
+        "properties": {
+          "gate": {"$ref": "#/$defs/id"},
+          "count": {"type": "integer", "minimum": 1},
+          "sample_ids": {
+            "type": "array", "maxItems": 10,
+            "items": {"$ref": "#/$defs/id"}
+          }
+        }
+      }
+    },
+    "trainable": {"type": "boolean"},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:/#-]{0,199}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "timestamp": {
+      "type": "string", "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "repositories": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/id"}
+    }
+  }
+}
