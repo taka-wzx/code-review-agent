@@ -15,29 +15,38 @@ human annotation, trained-model result, API comparison, or production rollout.
 - Phase 8 base commit: `ae4a7ffd307072fa1ddadff4c82a96f9c170d847`
 - Current task branch: `codex/week8-verifier-training`
 - Worktree: the existing isolated Week 8 worktree
-- Stable Phase 8 commit: not authorized or created
+- Stable Phase 8 commit: `c96ef4e8364f4f5c9ce03a04d5d98761db2957f9`
 
-The Phase 8A--8C changes remain uncommitted. This continuation therefore stays
-on their current task branch rather than pretending an uncommitted state is a
-stable Phase 8D base.
+The Phase 8A--8D offline preparation is committed at the stable commit above.
+This authorized provider amendment remains on the same isolated task branch.
 
-## Authorization freeze (2026-07-22)
+## Authorization freeze (2026-07-22, GLM amendment)
 
-The user's instruction authorizes only repository-local Phase 8D contracts,
-schemas, examples, validators, deterministic packet generation, and tests.
+The user authorized the following exact Finder execution boundary:
 
-Until a later explicit amendment, all of the following remain unauthorized:
+- provider `glm`, OpenAI-compatible base URL
+  `https://open.bigmodel.cn/api/paas/v4`, API model ID `glm-5.2`;
+- anchor temperature `0.20`, sampling temperature `0.70`, thinking disabled,
+  reasoning effort `none`, non-streaming responses, and automatic tool choice;
+- at most 580 logical calls, 1,740 theoretical HTTP attempts including the
+  client's two retries, 20,000,000 input tokens, 2,000,000 output tokens, and
+  CNY 250 total cost;
+- read access only to the 29 hash-bound unified-diff objects selected in Phase
+  8B; raw diff and provider trace retention is 30 days;
+- stable IDs `human-reviewer-a-v1`, `human-reviewer-b-v1`, and
+  `human-adjudicator-c-v1`, which must map to three distinct real people;
+- local commits, task-branch push, pull request, merge, and `master` changes.
 
-- provider/API calls and network access;
-- reading the retained 29 raw unified diffs;
-- nonzero model-call, token, or monetary budgets;
-- real annotator or adjudicator identity assignment;
-- a raw-trace retention period;
-- real model training or protected test-label opening;
-- a local commit, push, pull request, merge, upload, or production integration.
+The API model ID is a service alias, not an immutable weight snapshot. Each
+response must therefore preserve the returned model ID, request ID, UTC time,
+system fingerprint when supplied, and the frozen documentation/input hashes.
+The executor must not run without an explicit environment credential and must
+fail closed before exceeding any ceiling. No credential may enter a trace.
 
-The machine-readable config must encode those missing decisions as `null`,
-`false`, or zero. Offline tools must reject any expansion.
+This amendment does **not** authorize real model training, opening protected
+test labels, fabricating human decisions, or claiming model quality. A merge to
+`master` is permitted by the user but remains inappropriate until the three
+real-human decisions and real quality gates are complete.
 
 ## Offline workflow
 
@@ -101,8 +110,10 @@ Codex may create or modify only:
 - `tests/test_verifier_corpus.py` only for that compatibility gate
 - `README.md`
 - `AGENDA.md`
+- `verifier_phase8d_glm.py`
+- `tests/test_verifier_phase8d_glm.py`
 
-All provider adapters, production package files, dependencies, CI, prompts,
+All other provider adapters, production package files, dependencies, CI, prompts,
 sentinels, protected evaluation assets, raw diff objects, and prior result
 artifacts are read-only.
 
@@ -110,8 +121,10 @@ artifacts are read-only.
 
 ```powershell
 .venv\Scripts\python.exe -m unittest tests.test_verifier_phase8d tests.test_verifier_corpus -v
+.venv\Scripts\python.exe -m unittest tests.test_verifier_phase8d_glm -v
 .venv\Scripts\python.exe -m ruff check verifier_phase8d.py verifier_corpus.py `
-  tests\test_verifier_phase8d.py tests\test_verifier_corpus.py
+  verifier_phase8d_glm.py tests\test_verifier_phase8d.py `
+  tests\test_verifier_phase8d_glm.py tests\test_verifier_corpus.py
 .venv\Scripts\python.exe verifier_phase8d.py validate-config `
   --config verifier_training\phase8d-config.json
 .venv\Scripts\python.exe scripts\verify.py
@@ -123,8 +136,12 @@ command in this phase may read `eval/` or `eval/holdout/`.
 
 ## Acceptance criteria
 
-- The offline config rejects nonzero provider authority, raw-diff authority,
-  assigned humans, retention, or commit authority.
+- The amended config accepts exactly the authorized GLM identity, generation
+  settings, budgets, retained diff boundary, human IDs, and local commit
+  authority, and rejects any expansion or weakening.
+- The provider executor is offline-testable with an injected fake client,
+  verifies every raw object's path, size, and SHA-256 before reading it into a
+  request, and emits no replacement or fabricated run.
 - Finder envelopes and receipts are deterministic, exact-key, hash-bound, and
   support honest zero-candidate completion.
 - Receipt/candidate reconciliation rejects missing, duplicate, foreign,
@@ -139,14 +156,40 @@ command in this phase may read `eval/` or `eval/holdout/`.
   sealed test declaration, frozen seeds, and a later model-run authorization.
 - Existing Phase 8A--8C and project validation remain green.
 
-## Remaining decisions for the next amendment
+## Remaining external gates
 
-The user must explicitly provide the Finder provider and exact model, maximum
-calls/input tokens/output tokens/cost, raw-diff read authority, raw-trace
-retention, two annotator IDs and a distinct adjudicator ID, and local commit
-authority. No default is inferred for any of them.
+- A `GLM_API_KEY` or `ZHIPUAI_API_KEY` must be supplied by the operator without
+  committing or logging it.
+- The two independent reviewers and the adjudicator must be three real people;
+  their labels cannot be generated by an agent.
+- Real-model training resources/seeds require a separate authorization after a
+  trainable, real-only corpus freeze exists.
 
 ## Delivery report (2026-07-22)
+
+### GLM amendment
+
+- Froze the exact GLM-5.2 identity, two temperatures, reasoning/thinking
+  controls, logical/HTTP attempt ceilings, token and CNY budgets, 30-day raw
+  retention, three stable human IDs, and local-commit authority.
+- Added an offline-testable provider executor with conservative pre-request
+  budget reservation, exact-path/size/SHA diff attestation, immutable-output
+  refusal, honest diff-only tool responses, deterministic candidate IDs, and
+  response model/request/fingerprint evidence.
+- Attested all 29 retained diff objects (145,838 bytes) with aggregate
+  attestation SHA-256
+  `6d6ca6470d7b345866eb92ec96bdf7af0ffccf65cabaed1664369a98f675fb04`.
+- Focused validation passed 20 tests. Full `scripts/verify.py` passed 635 tests
+  with 3 skips, 86% coverage, Ruff, mypy, CLI smokes, and the 48-case security
+  suite at zero attack success, false block, secret disclosure, or
+  unauthorized execution.
+- The shared venv initially lacked locked FastAPI/MCP dependencies and pointed
+  its editable install at an older worktree. Restoring the locked packages and
+  reinstalling this worktree editable fixed the environment; no dependency or
+  lock file changed.
+- No provider call occurred because neither accepted GLM key environment
+  variable is present. No human label, adjudication, model training, protected
+  evaluation read, quality claim, push, PR, merge, or `master` change occurred.
 
 - Implemented the zero-authority config, 29 deterministic non-executable Finder
   envelopes, completed/zero/failed receipt validation, blind independent packet

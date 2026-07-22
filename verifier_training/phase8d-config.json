@@ -1,30 +1,42 @@
 {
   "schema_version": 1,
   "phase_id": "week8d-real-verifier-evidence-v1",
-  "offline_preparation_only": true,
+  "offline_preparation_only": false,
   "authorization": {
-    "provider_calls": false,
-    "raw_diff_read": false,
+    "provider_calls": true,
+    "raw_diff_read": true,
     "real_model_training": false,
-    "local_commit": false
+    "local_commit": true
   },
   "finder": {
-    "provider": null,
-    "model": null,
-    "prompt_sha256": null,
-    "temperature": null,
-    "max_calls": 0,
-    "max_input_tokens": 0,
-    "max_output_tokens": 0,
-    "max_cost_cny": 0
+    "provider": "glm",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-5.2",
+    "model_alias_mutable": true,
+    "prompt_sha256": "76ff48a6daaae39f424f0ee7bfc96152d49c0ff0ed2369d52d3035137c8f72d5",
+    "anchor_temperature": 0.2,
+    "sampling_temperature": 0.7,
+    "thinking_type": "disabled",
+    "reasoning_effort": "none",
+    "stream": false,
+    "tool_choice": "auto",
+    "max_calls": 580,
+    "max_http_attempts": 1740,
+    "max_input_tokens": 20000000,
+    "max_output_tokens": 2000000,
+    "max_cost_cny": 250,
+    "uncached_input_cny_per_million": 8,
+    "cached_input_cny_per_million": 2,
+    "output_cny_per_million": 28
   },
   "retention": {
-    "raw_trace_days": null
+    "raw_diff_days": 30,
+    "raw_trace_days": 30
   },
   "humans": {
-    "annotator_a": null,
-    "annotator_b": null,
-    "adjudicator": null
+    "annotator_a": "human-reviewer-a-v1",
+    "annotator_b": "human-reviewer-b-v1",
+    "adjudicator": "human-adjudicator-c-v1"
   },
   "limits": {
     "selected_prs": 29,

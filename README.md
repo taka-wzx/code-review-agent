@@ -339,11 +339,11 @@ validation-only 阈值和零付费/零加速器资源。它只证明训练、评
 [`docs/plans/week8-verifier-training.md`](docs/plans/week8-verifier-training.md)，Phase 8C 记录见
 [`docs/verifier-transformer.md`](docs/verifier-transformer.md)。
 
-Phase 8D 已开始补齐真实证据链的离线控制面：29 项 Finder envelope 在 provider、预算和原始
-diff 读取授权缺失时全部保持不可执行；新增零候选完成回执，避免为了通过门禁伪造负样本；
-盲标包、完整响应导入、分歧/uncertain 仲裁包、Finder-bound freeze 和真实模型 readiness
-均有哈希校验。当前配置仍是零调用、零 token、零费用、未指定三位人员且不允许真实训练，
-因此没有新增真实候选或人工标签。详见
+Phase 8D 已冻结 GLM-5.2 的真实 Finder 边界：anchor/sampling 温度为 0.20/0.70，最多 580 次
+逻辑调用、20M/2M 输入输出 token、CNY 250，并只允许读取 29 个哈希绑定 diff；输入核验器、
+预算执行器、零候选回执、盲标导入导出、分歧/uncertain 仲裁、Finder-bound freeze 和模型
+readiness 均已实现。三个人员 ID 已冻结，但仍须映射到三位真实人员；尚无真实标签或模型
+质量结论，真实训练继续关闭。详见
 [`docs/verifier-real-evidence.md`](docs/verifier-real-evidence.md) 和
 [`docs/plans/week8d-real-verifier-evidence.md`](docs/plans/week8d-real-verifier-evidence.md)。
 
@@ -407,9 +407,9 @@ diff 读取授权缺失时全部保持不可执行；新增零候选完成回执
   3.13 / PyTorch 2.13 / Transformers 5.13 / PEFT 0.19.1 独立 CPU 环境，以及 Base、全量
   SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
   但仅 2 条二分类 test 样本，明确禁止模型质量或后训练提升结论
-- **Week 8 真实证据准备（Phase 8D）**：实现不可执行 Finder envelope、零候选/失败回执、
-  双人盲标导出导入、第三人仲裁、Finder-bound freeze 和真实模型运行阻断；provider、模型、
-  预算、原始 diff 读取、trace 留存、三位人员与本地提交仍待明确授权
+- **Week 8 真实证据准备（Phase 8D）**：冻结 GLM-5.2、双温度、调用/token/CNY 上限、29 个
+  diff 的只读边界和 30 天留存；实现可离线测试的真实 Finder runner、零候选/失败回执、双人
+  盲标、第三人仲裁、Finder-bound freeze。真实人工标签和真实模型质量验证仍未完成
 
 ## 已知限制
 

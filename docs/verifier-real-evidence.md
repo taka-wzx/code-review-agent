@@ -1,13 +1,14 @@
 # Phase 8D Real Verifier Evidence Preparation
 
-Phase 8D prepares the real Finder and human-label workflow without exercising
-external authority. The active machine config intentionally has zero provider
-budget, no raw-diff read permission, no assigned humans, no trace-retention
-period, no model-training authority, and no commit authority.
+Phase 8D prepares and executes the bounded real Finder and then hands its
+candidate set to three real people. The active config authorizes GLM-5.2,
+reading exactly 29 retained hash-bound diffs, CNY 250, 30-day raw retention,
+and a stable local commit. It does not authorize model training or permit an
+agent to stand in for any human reviewer.
 
 The controlling contract is
 [`docs/plans/week8d-real-verifier-evidence.md`](plans/week8d-real-verifier-evidence.md).
-The offline gate is `verifier_training/phase8d-config.json`.
+The machine gate is `verifier_training/phase8d-config.json`.
 
 ## What is implemented now
 
@@ -26,13 +27,15 @@ The offline gate is `verifier_training/phase8d-config.json`.
 - a real-model readiness gate that remains blocked until the corpus and later
   authorization both close.
 
-It contains no provider client, network request, raw-diff reader, credential
-loader, model trainer, or production integration.
+`verifier_phase8d_glm.py` adds the separately bounded provider adapter. It
+attests every object before use, injects no credential into artifacts, forces
+the frozen GLM request settings, records response identity and pass degradation,
+and refuses replacement artifacts or a budget/path/hash expansion.
 
-## Current blocked Finder preparation
+## Finder input attestation and execution
 
-The following command validates the 29 queue/source bindings and emits only
-non-executable envelopes:
+The following commands validate the executable envelopes and then read/hash all
+29 authorized objects without contacting the provider:
 
 ```powershell
 .venv\Scripts\python.exe verifier_phase8d.py prepare-finder `
@@ -41,16 +44,38 @@ non-executable envelopes:
   --pr-sources verifier_training\corpus-snapshot\pr-sources.jsonl `
   --queue verifier_training\corpus-snapshot\finder-queue.jsonl `
   --out traces\week8d\finder-envelopes.jsonl
+
+.venv\Scripts\python.exe verifier_phase8d_glm.py attest-inputs `
+  --config verifier_training\phase8d-config.json `
+  --plan verifier_training\corpus-plan.json `
+  --pr-sources verifier_training\corpus-snapshot\pr-sources.jsonl `
+  --queue verifier_training\corpus-snapshot\finder-queue.jsonl `
+  --raw-root traces\week8b-corpus
 ```
 
-Every envelope reports these blockers:
+`prepare-finder` still does not open a diff. `attest-inputs` opens only the
+content-addressed objects and reports counts/hashes, never their contents.
 
-- `provider_identity_missing`;
-- `provider_budget_zero`;
-- `raw_diff_read_unauthorized`.
+Set one credential in the current PowerShell process, then invoke the explicit
+runner. Do not put the key on the command line or commit it:
 
-The command does not open the `diff_object_key`. An envelope is provenance for
-future work, not evidence that Finder ran.
+```powershell
+$env:GLM_API_KEY = "<operator-supplied secret>"
+.venv\Scripts\python.exe verifier_phase8d_glm.py run `
+  --config verifier_training\phase8d-config.json `
+  --plan verifier_training\corpus-plan.json `
+  --pr-sources verifier_training\corpus-snapshot\pr-sources.jsonl `
+  --queue verifier_training\corpus-snapshot\finder-queue.jsonl `
+  --raw-root traces\week8b-corpus `
+  --trace-dir traces\week8d\glm-traces `
+  --receipts-out traces\week8d\finder-runs.jsonl `
+  --candidates-out traces\week8d\candidate-sources.jsonl
+```
+
+The model ID is a mutable service alias. Raw traces therefore bind each API
+response's model, request ID, UTC receipt time, optional system fingerprint,
+input hashes, documentation hash, and anchor/sampling status. Delete raw diffs
+and raw traces when their recorded 30-day retention expires.
 
 ## Finder receipt contract
 
@@ -69,9 +94,8 @@ queue, PR source, and diff hashes are part of each immutable receipt.
 Zero-candidate completion closes only the execution-completeness gate. It does
 not create a fabricated drop example. A failed run remains an incomplete gate.
 
-The active validator rejects every non-synthetic receipt because real provider
-authority is still absent. A later contract amendment must change that gate
-before a provider adapter is added.
+The active validator accepts real receipts only when provider, requested model,
+prompt hash, aggregate tokens, and aggregate cost remain inside the amendment.
 
 ## Independent annotation packets
 
@@ -90,9 +114,8 @@ reviewer IDs and preferably different order seeds:
   --out <packet-a.json>
 ```
 
-Repeat for annotator B. Real packet export currently fails closed; the example
-shape is exercised only by synthetic in-memory tests until human identities are
-authorized.
+Repeat with `human-reviewer-b-v1`; annotator A is `human-reviewer-a-v1`.
+An external custodian must confirm those IDs map to two distinct real people.
 
 Packets include candidate text, evidence, bounded tool summaries, repository,
 source ID, and merge revision. They omit explicit split names, peer decisions,
@@ -178,19 +201,20 @@ real freeze, seeds, test-label custodian, compute limits, and quality claim rule
 are frozen would turn an offline preparation task into an unauthorized
 experiment.
 
-## Decisions required for the next amendment
+## Frozen authorization and remaining gate
 
 | Decision | Current value |
 | --- | --- |
-| Finder provider | not assigned |
-| Exact model/snapshot ID | not assigned |
-| Temperature and prompt SHA-256 | not assigned |
-| Maximum calls/input tokens/output tokens/CNY | all zero |
-| Read the 29 retained raw diffs | forbidden |
-| Raw trace retention | not assigned |
-| Annotator A/B IDs | not assigned |
-| Distinct adjudicator ID | not assigned |
-| Stable local Phase 8 commit | forbidden |
+| Finder provider | `glm` |
+| Exact API model ID | `glm-5.2` (mutable service alias) |
+| Temperatures | anchor 0.20 / sampling 0.70 |
+| Maximum calls/input/output/CNY | 580 / 20M / 2M / 250 |
+| Theoretical HTTP attempts | 1,740 including two SDK retries |
+| Read the 29 retained raw diffs | authorized, hash-bound only |
+| Raw diff/trace retention | 30 days |
+| Annotator A/B IDs | `human-reviewer-a-v1` / `human-reviewer-b-v1` |
+| Distinct adjudicator ID | `human-adjudicator-c-v1` |
+| Stable local Phase 8 commit | authorized and created |
 | Real model seeds/resources/run | forbidden |
 
 Actual names need not enter the repository. Stable pseudonymous IDs may be used

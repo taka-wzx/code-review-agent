@@ -1,8 +1,8 @@
-"""Offline-only Phase 8D real Verifier evidence preparation.
+"""Phase 8D real Verifier evidence preparation and evidence validation.
 
-This module has no provider adapter and performs no network or raw-diff I/O.
-It prepares immutable Finder envelopes, validates future receipts, creates
-blinded human packets, imports decisions, and binds a real corpus freeze.
+Provider and raw-diff I/O live in the separately bounded GLM executor.  This
+module validates its authority and receipts, creates blinded human packets,
+imports decisions, and binds a real corpus freeze.
 """
 
 from __future__ import annotations
@@ -226,8 +226,8 @@ def validate_config(raw: Any) -> dict[str, Any]:
     _exact_keys(config, CONFIG_KEYS, "phase8d_config")
     if config["schema_version"] != SCHEMA_VERSION or config["phase_id"] != PHASE_ID:
         _fail("phase8d_config schema or phase ID is not frozen")
-    if config["offline_preparation_only"] is not True:
-        _fail("Phase 8D must remain offline preparation only")
+    if config["offline_preparation_only"] is not False:
+        _fail("Phase 8D GLM amendment must enable the separately bounded executor")
 
     authorization = _expect_dict(config["authorization"], "authorization")
     _exact_keys(
@@ -235,41 +235,80 @@ def validate_config(raw: Any) -> dict[str, Any]:
         {"provider_calls", "raw_diff_read", "real_model_training", "local_commit"},
         "authorization",
     )
-    if any(value is not False for value in authorization.values()):
-        _fail("Phase 8D authority has not been amended beyond offline preparation")
+    if authorization != {
+        "provider_calls": True,
+        "raw_diff_read": True,
+        "real_model_training": False,
+        "local_commit": True,
+    }:
+        _fail("Phase 8D authorization differs from the GLM amendment")
 
     finder = _expect_dict(config["finder"], "finder")
     _exact_keys(
         finder,
         {
             "provider",
+            "base_url",
             "model",
+            "model_alias_mutable",
             "prompt_sha256",
-            "temperature",
+            "anchor_temperature",
+            "sampling_temperature",
+            "thinking_type",
+            "reasoning_effort",
+            "stream",
+            "tool_choice",
             "max_calls",
+            "max_http_attempts",
             "max_input_tokens",
             "max_output_tokens",
             "max_cost_cny",
+            "uncached_input_cny_per_million",
+            "cached_input_cny_per_million",
+            "output_cny_per_million",
         },
         "finder",
     )
-    if any(finder[key] is not None for key in ("provider", "model", "prompt_sha256", "temperature")):
-        _fail("Finder identity and generation settings are not authorized")
-    if any(
-        finder[key] != 0
-        for key in ("max_calls", "max_input_tokens", "max_output_tokens", "max_cost_cny")
-    ):
-        _fail("Finder calls, tokens, and cost must remain zero")
+    expected_finder = {
+        "provider": "glm",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-5.2",
+        "model_alias_mutable": True,
+        "anchor_temperature": 0.2,
+        "sampling_temperature": 0.7,
+        "thinking_type": "disabled",
+        "reasoning_effort": "none",
+        "stream": False,
+        "tool_choice": "auto",
+        "max_calls": 580,
+        "max_http_attempts": 1740,
+        "max_input_tokens": 20_000_000,
+        "max_output_tokens": 2_000_000,
+        "max_cost_cny": 250,
+        "uncached_input_cny_per_million": 8,
+        "cached_input_cny_per_million": 2,
+        "output_cny_per_million": 28,
+    }
+    for key, expected in expected_finder.items():
+        if finder[key] != expected:
+            _fail(f"finder.{key} differs from the authorized GLM value")
+    _sha(finder["prompt_sha256"], "finder.prompt_sha256")
 
     retention = _expect_dict(config["retention"], "retention")
-    _exact_keys(retention, {"raw_trace_days"}, "retention")
-    if retention["raw_trace_days"] is not None:
-        _fail("raw trace retention has not been authorized")
+    _exact_keys(retention, {"raw_diff_days", "raw_trace_days"}, "retention")
+    if retention != {"raw_diff_days": 30, "raw_trace_days": 30}:
+        _fail("raw diff/trace retention must remain exactly 30 days")
 
     humans = _expect_dict(config["humans"], "humans")
     _exact_keys(humans, {"annotator_a", "annotator_b", "adjudicator"}, "humans")
-    if any(value is not None for value in humans.values()):
-        _fail("real human identities have not been assigned")
+    if humans != {
+        "annotator_a": "human-reviewer-a-v1",
+        "annotator_b": "human-reviewer-b-v1",
+        "adjudicator": "human-adjudicator-c-v1",
+    }:
+        _fail("human IDs differ from the authorized three-person assignment")
+    if len(set(humans.values())) != 3:
+        _fail("annotators and adjudicator must be three distinct stable IDs")
 
     limits = _expect_dict(config["limits"], "limits")
     _exact_keys(
@@ -333,12 +372,8 @@ def build_finder_envelopes(
             "diff_sha256": row["diff_sha256"],
             "diff_object_key": row["diff_object_key"],
             "max_candidates": row["max_candidates"],
-            "executable": False,
-            "blocked_by": [
-                "provider_identity_missing",
-                "provider_budget_zero",
-                "raw_diff_read_unauthorized",
-            ],
+            "executable": True,
+            "blocked_by": [],
             "envelope_sha256": "",
         }
         envelopes.append(_with_hash(envelope, "envelope_sha256"))
@@ -434,9 +469,15 @@ def validate_finder_runs(
         _sha(row["trace_sha256"], f"{where}.trace_sha256")
         if not isinstance(row["synthetic"], bool):
             _fail(f"{where}.synthetic must be boolean")
-        if row["synthetic"] is False:
-            _fail("real Finder receipts are forbidden until a provider amendment is recorded")
-        if row["input_tokens"] != 0 or row["output_tokens"] != 0 or row["cost_cny"] != 0:
+        if row["provider"] != config["finder"]["provider"]:
+            _fail(f"{where}.provider differs from the authorized provider")
+        if row["model"] != config["finder"]["model"]:
+            _fail(f"{where}.model differs from the requested API model ID")
+        if row["prompt_sha256"] != config["finder"]["prompt_sha256"]:
+            _fail(f"{where}.prompt_sha256 differs from the frozen Finder prompt")
+        if row["synthetic"] is True and (
+            row["input_tokens"] != 0 or row["output_tokens"] != 0 or row["cost_cny"] != 0
+        ):
             _fail(f"{where} synthetic receipt must have zero tokens and cost")
         if status == "completed" and (count == 0 or row["error_category"] is not None):
             _fail(f"{where} completed status requires candidates and no error")
@@ -456,6 +497,12 @@ def validate_finder_runs(
         rows.append(row)
     if seen_candidate_ids != {row["candidate_id"] for row in candidates}:
         _fail("Finder receipts do not cover the candidate source set exactly")
+    if sum(row["input_tokens"] for row in rows) > config["finder"]["max_input_tokens"]:
+        _fail("Finder receipts exceed the authorized input-token ceiling")
+    if sum(row["output_tokens"] for row in rows) > config["finder"]["max_output_tokens"]:
+        _fail("Finder receipts exceed the authorized output-token ceiling")
+    if sum(row["cost_cny"] for row in rows) > config["finder"]["max_cost_cny"]:
+        _fail("Finder receipts exceed the authorized CNY ceiling")
     return sorted(rows, key=lambda item: item["queue_id"])
 
 
@@ -916,8 +963,8 @@ def _command_validate_config(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "status": "ok",
         "phase_id": config["phase_id"],
-        "offline_preparation_only": True,
-        "provider_calls_authorized": False,
+        "offline_preparation_only": config["offline_preparation_only"],
+        "provider_calls_authorized": config["authorization"]["provider_calls"],
     }
 
 
@@ -925,7 +972,8 @@ def _command_prepare_finder(args: argparse.Namespace) -> dict[str, Any]:
     _, sources, queue = _common_corpus_inputs(args)
     envelopes = build_finder_envelopes(load_config(args.config), queue, sources)
     _write_jsonl(args.out, envelopes)
-    return {"status": "blocked_as_designed", "envelopes": len(envelopes), "executable": 0}
+    executable = sum(row["executable"] is True for row in envelopes)
+    return {"status": "ready", "envelopes": len(envelopes), "executable": executable}
 
 
 def _command_export_independent(args: argparse.Namespace) -> dict[str, Any]:
@@ -946,7 +994,12 @@ def _command_export_independent(args: argparse.Namespace) -> dict[str, Any]:
 
 def _command_validate_finder_runs(args: argparse.Namespace) -> dict[str, Any]:
     plan, sources, queue = _common_corpus_inputs(args)
-    candidates = vc.load_candidate_sources(args.candidate_sources, plan, sources)
+    raw_candidates = _load_jsonl(args.candidate_sources)
+    candidates = (
+        vc.validate_candidate_sources(raw_candidates, plan, sources)
+        if raw_candidates
+        else []
+    )
     runs = validate_finder_runs(
         _load_jsonl(args.finder_runs),
         load_config(args.config),

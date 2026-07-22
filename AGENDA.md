@@ -219,10 +219,10 @@ manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `tra
 `docs/plans/week8-verifier-training.md`、`docs/verifier-training.md` 与
 `docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
 
-**下一步（Phase 8D，离线控制面已实现）**：在不读取原始 diff、不调用 provider 的条件下，
-为 29 个来源生成 fail-closed Finder envelope，并加入诚实零候选回执、双人盲标响应导入、
-第三人仲裁、Finder-bound real freeze 与真实模型 readiness 门禁。真实执行仍等待 provider/
-精确模型、调用/token/费用、raw diff、trace 留存、三位人员身份和稳定本地提交授权；详见
+**当前步骤（Phase 8D，GLM 执行边界已实现）**：已授权并冻结 GLM-5.2、0.20/0.70 双温度、
+580 次逻辑调用、20M/2M token、CNY 250、29 个 hash-bound diff 读取与 30 天留存；执行器先做
+完整输入核验，再输出真实回执/候选和原始响应身份 trace。随后必须由两位真实标注员独立盲标，
+分歧由第三位真实人员仲裁；真实 freeze 形成前继续禁止质量结论与真实训练。详见
 `docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
 
 数据：
