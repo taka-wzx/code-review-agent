@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TRAINING = ROOT / "verifier_training"
 SNAPSHOT = TRAINING / "corpus-snapshot"
 RAW_ROOT = ROOT / "traces" / "week8b-corpus"
+REAL = TRAINING / "real"
 
 
 class FakeCompletions:
@@ -116,6 +118,32 @@ class Phase8DGlmTests(unittest.TestCase):
             trace = json.loads(next((root / "traces").glob("*.json")).read_text())
             self.assertEqual(trace["requested_model"], "glm-5.2")
             self.assertEqual(trace["responses"][0]["system_fingerprint"], "fake-fingerprint")
+
+    def test_committed_real_run_is_hash_bound_and_truthfully_incomplete(self) -> None:
+        runs_path = REAL / "phase8d-glm52-finder-runs.jsonl"
+        candidates_path = REAL / "phase8d-glm52-candidate-sources.jsonl"
+        summary = json.loads((REAL / "phase8d-glm52-summary.json").read_text())
+        runs = v8d._load_jsonl(runs_path)
+        candidates = vc.validate_candidate_sources(
+            v8d._load_jsonl(candidates_path), self.plan, self.sources
+        )
+        validated = v8d.validate_finder_runs(
+            runs, self.config, self.plan, self.queue, self.sources, candidates
+        )
+        self.assertEqual(len(validated), 29)
+        self.assertEqual(len(candidates), 116)
+        self.assertEqual(sum(row["status"] == "failed" for row in validated), 2)
+        self.assertFalse(summary["finder_complete"])
+        self.assertFalse(summary["trainable"])
+        self.assertFalse(summary["quality_claim_allowed"])
+        self.assertEqual(
+            hashlib.sha256(runs_path.read_bytes()).hexdigest(),
+            summary["artifacts"]["finder_runs_sha256"],
+        )
+        self.assertEqual(
+            hashlib.sha256(candidates_path.read_bytes()).hexdigest(),
+            summary["artifacts"]["candidate_sources_sha256"],
+        )
 
 
 if __name__ == "__main__":

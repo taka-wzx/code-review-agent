@@ -77,6 +77,22 @@ response's model, request ID, UTC receipt time, optional system fingerprint,
 input hashes, documentation hash, and anchor/sampling status. Delete raw diffs
 and raw traces when their recorded 30-day retention expires.
 
+## Real GLM-5.2 run result
+
+The first authorized run completed all 29 queue positions on 2026-07-22. Its
+validated sanitized artifacts contain 24 completed PRs, 3 honest zero-candidate
+PRs, 2 failed PRs, and 116 candidates. Returned usage was 603,883 input tokens
+and 119,027 output tokens; the conservative uncached-price estimate is CNY
+8.16382. All 175 successful responses identified themselves as `glm-5.2` and
+all receipt-to-trace SHA-256 bindings matched.
+
+The failures are `Textualize/rich#3468` (`finder_protocol_error`) and
+`psf/requests#6655` (`provider_error`). The sampling pass for
+`pytest-dev/pytest#11574` degraded, so its anchor result is the recorded result.
+No failed item was retried. These failures keep the real freeze closed, and
+blind packets are intentionally deferred so a later authorized recovery cannot
+silently invalidate completed human work.
+
 ## Finder receipt contract
 
 A later executor must write one receipt per queue entry. The status rules are:

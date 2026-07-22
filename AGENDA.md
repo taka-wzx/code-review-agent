@@ -219,10 +219,10 @@ manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `tra
 `docs/plans/week8-verifier-training.md`、`docs/verifier-training.md` 与
 `docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
 
-**当前步骤（Phase 8D，GLM 执行边界已实现）**：已授权并冻结 GLM-5.2、0.20/0.70 双温度、
-580 次逻辑调用、20M/2M token、CNY 250、29 个 hash-bound diff 读取与 30 天留存；执行器先做
-完整输入核验，再输出真实回执/候选和原始响应身份 trace。随后必须由两位真实标注员独立盲标，
-分歧由第三位真实人员仲裁；真实 freeze 形成前继续禁止质量结论与真实训练。详见
+**当前步骤（Phase 8D，首次真实 Finder 已完成但未闭门）**：GLM-5.2 对 29 个来源产出 116 条
+净化候选，24 个来源完成、3 个零候选、2 个失败；使用量和估算费用均远低于冻结上限。失败项
+未补跑，盲标包暂不导出。下一步应先冻结两条失败的恢复/不恢复决定，再由两位真实标注员独立
+盲标、第三人处理分歧；real freeze 前继续禁止质量结论与真实训练。详见
 `docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
 
 数据：

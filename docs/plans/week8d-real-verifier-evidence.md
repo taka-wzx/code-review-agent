@@ -113,6 +113,9 @@ Codex may create or modify only:
 - `AGENDA.md`
 - `verifier_phase8d_glm.py`
 - `tests/test_verifier_phase8d_glm.py`
+- `verifier_training/real/phase8d-glm52-finder-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-candidate-sources.jsonl`
+- `verifier_training/real/phase8d-glm52-summary.json`
 
 All other provider adapters, production package files, dependencies, CI, prompts,
 sentinels, protected evaluation assets, raw diff objects, and prior result
@@ -188,10 +191,32 @@ command in this phase may read `eval/` or `eval/holdout/`.
   its editable install at an older worktree. Restoring the locked packages and
   reinstalling this worktree editable fixed the environment; no dependency or
   lock file changed.
-- No provider call occurred because neither accepted GLM key environment
-  variable is present. No human label, adjudication, model training, protected
-  evaluation read, quality claim, merge, or `master` change occurred. The task
-  branch was pushed and draft PR #4 was opened for review.
+- At the amendment commit, no provider call had occurred because neither
+  accepted GLM key environment variable was present. The task branch was
+  pushed and draft PR #4 was opened for review.
+
+### Real Finder run
+
+- After the operator supplied `GLM_API_KEY` to the Codex process, the one
+  authorized queue run executed from `2026-07-22T03:36:13Z` through
+  `2026-07-22T04:37:56Z`. The outer terminal reached its one-hour host timeout
+  near the end, but the original Python process remained alive, finished all
+  29 queue entries, wrote final artifacts, and exited; no replacement run was
+  started.
+- The validated result contains 24 completed sources, 3 honest zero-candidate
+  sources, 2 failed sources, and 116 sanitized candidates. One sampling pass
+  degraded to its anchor result. All 175 successful responses reported model
+  `glm-5.2`, and all 29 raw-trace hashes match their receipts.
+- Returned usage totals 603,883 input tokens and 119,027 output tokens. The
+  frozen worst-uncached pricing estimate is CNY 8.16382; provider invoice
+  reconciliation remains external. All figures are below the authorized
+  ceilings.
+- `Textualize/rich#3468` failed with `finder_protocol_error` and
+  `psf/requests#6655` failed with `provider_error`. They were not retried.
+  Consequently the real freeze remains incomplete, blind human packets are not
+  yet exported, and no quality claim is allowed.
+- No human label, adjudication, model training, protected evaluation read,
+  merge, or `master` change occurred.
 
 - Implemented the zero-authority config, 29 deterministic non-executable Finder
   envelopes, completed/zero/failed receipt validation, blind independent packet
