@@ -108,8 +108,9 @@ Codex 在本任务中仅拥有以下路径的写权限：
 
 ```powershell
 # 当前代码事实：不得添加 --eval-assets
-$env:PYTHONPATH = "E:\shiyan\code_review_agent-phase9a-product-kpi\src"
-E:\shiyan\code_review_agent\.venv\Scripts\python.exe scripts\verify.py
+$repoRoot = git rev-parse --show-toplevel
+$env:PYTHONPATH = Join-Path $repoRoot "src"
+python scripts\verify.py
 
 # 当前 master CI 事实：只读查询；若 gh 未认证则如实报告，不能猜测
 gh run list --branch master --limit 10
