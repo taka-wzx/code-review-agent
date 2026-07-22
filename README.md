@@ -1,12 +1,42 @@
 # code-review-agent
 
-两阶段（**Finder + Verifier**）LLM 代码审查 Agent：**Finder 负责召回候选缺陷，Verifier 负责证据验证与过滤**，配套一套可复现的离线评测台架。走 OpenAI 兼容接口，provider 无关（目前支持 DeepSeek 与 GLM）。
+面向中小型 Python 团队的 GitHub PR Review Agent。系统自动分析 PR，默认处于 shadow 模式；
+Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。产品通过开发者 accept/reject 反馈，
+衡量审查噪声、人工复核时间、可靠性和成本。
 
-> 定位说明：这是一个个人工程项目，用于系统性地实践 LLM Agent 的工具设计、编排机制与评测方法论。评测数字来自**单项目人工植入缺陷**的基准集，应读作工程迭代信号，而非行业通用 SOTA 或生产效果承诺。项目托管于**私有** GitHub 仓库（未公开），已发布 v0.1.0 Release，Week 5 合入后的最新 master CI 已运行通过；无线上用户、无生产部署。
+> **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、异步
+> job、SQLite 幂等状态与 canonical trace；远程身份/RBAC、维护者审批产品面、反馈采集、指标
+> 聚合和生产部署尚未实现。历史评测主要来自单项目人工植入缺陷、确定性 fakes 或 synthetic
+> 流程，应读作工程证据，不是生产收益。项目位于私有 GitHub 仓库，已发布 v0.1.0。
 
-## 项目定位
+## 产品主线
 
-给它一段 unified diff（文件 / commit / 未提交改动 / GitHub PR），它会：
+四类用户分别是：组织管理员负责仓库接入、shadow/guarded-publish 模式和预算；仓库维护者负责
+批准或拒绝 Finding；Reviewer 使用证据辅助人工审查；普通开发者对已发布 Finding 给出
+accept/reject 反馈。目标业务闭环是：
+
+```text
+PR Webhook → 异步 Review → Finding → Maintainer 审核 → 发布或拒绝
+→ 开发者反馈 → 指标聚合 → 仓库规则/反馈记忆更新
+```
+
+默认 shadow 模式绝不发布 GitHub comment；未来 guarded publish 也必须逐次绑定维护者身份、
+repository/PR/head SHA、Finding 内容哈希和一次性审批。反馈记忆只做仓库级、版本化、可回滚的
+聚合规则，不做用户个人记忆。
+
+- Review 是唯一产品主线；
+- Repair 是后续高风险增强，不进入当前业务闭环；
+- Verifier Training 是研发附录，Phase 8 synthetic 结果不是模型质量或业务收益；
+- 不做聊天机器人，也不为了展示增加多 Agent。
+
+产品陈述、机器可计算 KPI 和目标架构分别见
+[`docs/product-brief.md`](docs/product-brief.md)、
+[`docs/business-metrics.md`](docs/business-metrics.md) 和
+[`docs/production-architecture.md`](docs/production-architecture.md)。
+
+## 当前 Review 能力
+
+给它一段 unified diff（文件 / commit / 未提交改动 / GitHub PR），当前引擎会：
 
 1. **主动检索上下文**：解析 diff，预取项目约定文档、改动文件全文、被 import 的模块定义、改动函数的调用方片段；
 2. **Finder 双跑召回**：temperature=0 锚定跑 + temperature=0.7 采样跑，各自在 agent loop 中按需调用只读工具（`read_file` / `search_repo` / `run_linter`）补充证据，产出候选缺陷；
@@ -138,27 +168,27 @@ docker run --rm code-review-agent-service --help
 
 镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
 
-> **验证状态如实声明**：当前 Windows 工作站已安装 Docker Desktop；Week 6 Phase 4
-> 使用本地已有且按完整 SHA-256 锁定的 Week 3 Repair Python 镜像完成了 12 个隔离探针，
-> 但本节这个应用 `Dockerfile` 本轮没有重新 build。仓库已推送至私有 GitHub 仓库，
-> Week 5 合入后的最新 `master` CI（`.github/workflows/ci.yml`，含
-> `container-smoke` job）已实际运行并通过。
+> **验证状态如实声明**：Phase 9A 没有在本机重新 build 应用镜像。当前 `origin/master`
+> `acc0dcce077113dcbbde2478abd53cbb09a4ef2e` 对应 GitHub Actions run
+> [`29894645345`](https://github.com/taka-wzx/code-review-agent/actions/runs/29894645345)，
+> 其 `container-smoke` 与其余 6 个 job 均成功。该 job 证明 CI 中的镜像 build/help smoke，
+> 不证明容器内真实 Webhook/REST/MCP 链路或生产部署。
 
 ## 测试与质量
 
-以下为 2026-07-18 在本机（Windows 11，Python 3.13 venv）对 Week 5
-最终 integration 实测的结果，非复制而来：
+以下为 2026-07-22 在 Phase 9A worktree 使用 Python 3.13.12 运行
+`scripts/verify.py`（**未带 `--eval-assets`**）的实测结果：
 
 | 检查项 | 结果 |
 | --- | --- |
-| 单测 + golden 测试 | **509 个测试全部通过，3 个环境跳过**（unittest，零 API 调用） |
+| 单测 + golden 测试 | **646 个测试全部通过，6 个环境跳过**（unittest；未调用外部模型） |
 | 分支覆盖率 | **总计 86%**（`src/` 全包，达到 `fail_under=85` 门禁） |
 | Ruff（E/F/W） | 全部通过 |
-| mypy | 23 个源文件无问题（`check_untyped_defs` 等严格项开启） |
+| mypy | 26 个源文件无问题（`check_untyped_defs` 等严格项开启） |
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
-| 评测资产一致性 | **本轮未运行**：Week 5 合同禁止读取现有 `eval/` / `eval/holdout/` |
+| 评测资产一致性 | **本轮未运行**：Phase 9A 明确禁止读取 `eval/` / `eval/holdout/` |
 
-测试策略三层，全部零 API 调用：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖 P0 安全修复、src-layout import 解析、CLI 参数路径、工具协议，以及 Week 2 新增的并发/超时回归（barrier 验证两 lane 真实重叠、截止后零新请求、截止降级/fail-open 语义、并发 trace 行完整性）。CI（GitHub Actions）矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；Week 5 合入后的最新 `master` 已实际运行通过。
+测试策略三层，均不需要外部模型 key：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖安全、Repair、协议服务、Verifier 训练数据合同，以及并发/超时语义。当前 master CI 矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；精确锚点是 `acc0dcce077113dcbbde2478abd53cbb09a4ef2e` / Actions run `29894645345`，7 个 job 全部成功。
 
 ## 评测
 
@@ -327,13 +357,13 @@ Phase 8B 已冻结 9 个宽松许可证公开仓库、29 个 PR 的窗口/选择
 标注与仲裁协议、secret scan/留存规则和零付费/零加速器上限；`verifier_corpus.py` 对来源、
 候选、标注和 freeze manifest 做严格离线校验。真实公开来源快照已完成 9 仓/29 PR，原始
 对象约 1.93 MiB，29 条入选 diff 的高信号 secret finding 均为 0，并已生成逐 PR 哈希绑定的
-`pending` Finder 队列；当前 corpus 示例仍全部是合成 fixture，`trainable=false`。
+`pending` Finder 队列；Phase 8B 当时的 corpus 示例全部是合成 fixture，`trainable=false`。
 
 Phase 8C 又在独立、忽略的 CPU 环境中固定并运行了 Base、全量 SFT、LoRA SFT 和 LoRA
 pairwise 四条路径，使用精确 safetensors 模型快照、锁定依赖、同一合成 test manifest、
 validation-only 阈值和零付费/零加速器资源。它只证明训练、评测与 artifact 链路能离线闭环，
-`quality_claim_allowed=false`，**不代表模型质量、后训练提升或跨仓泛化**。真实 Finder 候选、
-双人独立标注/仲裁与真实仓库实验仍未完成。完整边界与命令见
+`quality_claim_allowed=false`，**不代表模型质量、后训练提升或跨仓泛化**。Phase 8D 后续已
+完成真实 Finder 候选，但双人真人标注/仲裁与真实跨仓模型实验仍未完成。完整边界与命令见
 [`docs/verifier-training.md`](docs/verifier-training.md) 和
 [`docs/verifier-corpus.md`](docs/verifier-corpus.md)，冻结合同见
 [`docs/plans/week8-verifier-training.md`](docs/plans/week8-verifier-training.md)，Phase 8C 记录见
@@ -386,7 +416,7 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 - **W16**：GLM 交叉重判（90/90 一致，收窄 judge 同模型偏置）+ 真实 PR 首次分布外抽查（11 kept ≈ 8 真，抽检零编造）
 - **W17**：哨兵族四（缺失反转）+ 鲁棒性双修（API 异常降级语义、anchor 重试）+ GitHub PR 行内评论载荷/dry-run
 - **Week 1 硬化**：src-layout import 解析修复 + 回归测试、dev extra、覆盖率 85% 门禁、mypy 配置、`scripts/verify.py` 一键验证、Dockerfile + CI 容器冒烟、CI 矩阵扩至 3.13；交付后推送私有 GitHub 仓库，master CI 运行通过，发布 v0.1.0 Release
-- **Week 2 延迟韧性（本轮）**：finder 锚定/采样与 verifier A/B 改为阶段内双线程并行（两阶段仍串联）；全程 300s monotonic 软截止（截止后不发起新请求、单请求 timeout 封顶 min(剩余预算, 120s)）；trace 写入线程安全化并新增并行阶段/截止事件；新增并发与超时回归测试（本地离线验证 190 测试 / 96% 覆盖率，真实 provider 延迟基准未做）
+- **Week 2 延迟韧性**：finder 锚定/采样与 verifier A/B 改为阶段内双线程并行（两阶段仍串联）；全程 300s monotonic 软截止（截止后不发起新请求、单请求 timeout 封顶 min(剩余预算, 120s)）；trace 写入线程安全化并新增并行阶段/截止事件；并发与超时语义已有离线回归测试，真实 provider 延迟基准仍未做
 - **Week 3 Review + Repair Agent**：审批绑定的 PLAN→PATCH→TEST→REFLECT 状态机、Docker
   沙箱、预算/Checkpoint/恢复、两次人工确认；10 个真实 Issue 本地 pilot 和两次受控中断恢复
   已完成，严格 red-to-green 证据仅覆盖其中后 4 个，不能把 10-run pilot 报成 pass@1
@@ -403,8 +433,8 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
   离线测试。当前仅有合成协议 fixture，真实训练语料与模型实验仍待授权
 - **Week 8 Verifier 语料（Phase 8B）**：冻结 9 仓/29 PR 的许可、窗口、确定性选择、
   secret scan、双标/仲裁、留存和资源上限；实现来源到 `trainable` 门禁的离线编译器。
-  真实公开来源快照和 29 项 pending Finder 队列已物化并哈希冻结；合成闭环保持
-  `trainable=false`，真实 Finder 候选和两人标注仍未完成
+  真实公开来源快照和 29 项 pending Finder 队列已物化并哈希冻结；当阶段的合成闭环保持
+  `trainable=false`。后续 Phase 8D 已完成真实 Finder 候选，真人标注仍未完成
 - **Week 8 Verifier 模型烟测（Phase 8C）**：精确固定小型 BERT safetensors 快照、CPython
   3.13 / PyTorch 2.13 / Transformers 5.13 / PEFT 0.19.1 独立 CPU 环境，以及 Base、全量
   SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
@@ -421,10 +451,11 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 - **Week 5 SWE-bench 集尚未 materialize**：30 个候选槽位和 120-run 消融矩阵只是冻结的
   选择/资源/统计合同；当前没有真实 instance、任务镜像、Agent patch 或官方 evaluator
   结果，不能声称 pass@1 或 Repair 泛化能力
-- **Week 8 仍没有真实模型质量证据**：Phase 8B 已冻结真实公开来源快照和 Finder 队列，
-  Phase 8C 也完成四路合成 CPU 流水线烟测，但可提交的候选/标注仍是合成 fixture；真实
-  Finder 候选、双标/仲裁和跨仓 test 均未完成，不能声称后训练提升。当前记录的训练/推理
-  时延只适用于 2 条合成 test 的本机烟测，不是容量或生产延迟结论
+- **Week 8 仍没有真实模型质量证据**：Phase 8D 已把 29 个真实公开来源编译为 137 条净化
+  Finder 候选（另有 3 个诚实零候选来源）并冻结两份真人盲标包，但真人独立标签和仲裁尚未
+  产生。Phase 8C 四路 CPU 训练以及 Phase 8D 双标/仲裁演练使用 synthetic 数据，分别保持
+  `quality_claim_allowed=false` / `trainable=false`；不能声称后训练提升。已记录的训练/推理
+  时延只适用于极小 synthetic smoke，不是容量或生产延迟结论
 - **评测规模较小**：16+6 diffs、30+7 埋点、n=3 重复跑无显著性检验；mean [min–max] 是 3 点极差，bug 级 bootstrap CI（W14 v2 recall [0.811, 0.978]）才接近决策级区间
 - **judge 与被测 agent 同模型**：self-preference 偏置已被 GLM 交叉重判实测收窄（100% 一致），但两模型共享盲区无法排除；人工校准只有 W2 的 9 埋点（n=9 无统计意义）
 - **holdout 并非严格 held-out**：自 W8 起被跑过 15+ 次并据结果迭代，实际是第二开发集；用途是回归门不是泛化证明
@@ -435,8 +466,9 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
 - **应用 Dockerfile 本轮未重新构建**：工作站已有 Docker，Week 6 只复用了按 image SHA-256
   锁定的 Week 3 Repair 镜像完成 12-case smoke；这不能替代当前应用镜像的全新本地 build。
-  仓库为**私有** GitHub 仓库（未公开发布），Week 5 合入后的最新 master CI（含容器冒烟）
-  已运行通过、v0.1.0 Release 已发布——本 README 不含公开 URL 或 CI badge
+  仓库为**私有** GitHub 仓库（未公开发布）；当前 master `acc0dcce077113dcbbde2478abd53cbb09a4ef2e`
+  的 Actions run `29894645345`（含容器冒烟）已运行通过，v0.1.0 Release 已发布——本 README
+  不含公开 CI badge
 - **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
 - **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 
