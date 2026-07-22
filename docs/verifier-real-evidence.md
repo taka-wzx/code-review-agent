@@ -112,6 +112,31 @@ frozen templates in place. Return the two completed JSONL files for strict
 import. No adjudication packet can be generated until both complete response
 sets exist.
 
+## Synthetic workflow validation
+
+Because three distinct people were unavailable, the user authorized a separate
+offline synthetic dry run. `verifier_phase8d_simulate.py` derives deliberately
+non-semantic decisions only from salted candidate-ID hashes. It refuses packets
+with `synthetic=false`, uses identities prefixed with `synthetic-`, records zero
+human annotators and zero external model calls, and states in every rationale
+that no candidate-quality judgment occurred. The frozen real-human packets and
+blank templates above remain unchanged.
+
+The dry run covered all 137 candidates twice. The two synthetic passes agreed
+on 67 and routed 70 disagreements or `uncertain` votes to a synthetic
+adjudication packet. All 70 were resolved, so the workflow-level merge reported
+`ready_to_freeze=true`. The resulting freeze nevertheless reports
+`trainable=false` with `synthetic_records_present` for all 137 records. The
+real-model readiness check remains blocked by the non-trainable freeze,
+incomplete gates, missing training authorization, unfrozen model plan, and
+missing seeds.
+
+Committed outputs live only under `verifier_training/synthetic/`, with
+`phase8d-simulation-manifest.json` binding the packet, response, adjudication,
+final-annotation, and freeze hashes. These artifacts validate mechanics only;
+they are not human evidence, training data, a model metric, or a Phase 8 quality
+claim.
+
 ## Finder receipt contract
 
 A later executor must write one receipt per queue entry. The status rules are:

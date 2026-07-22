@@ -1,0 +1,67 @@
+{
+  "adjudication_candidate_count": 70,
+  "artifacts": {
+    "adjudication_packet": {
+      "path": "verifier_training/synthetic/phase8d-adjudication-packet.json",
+      "sha256": "a1b8477405bb5cf5c1631accc2ab6a7c8aa57c909b52d0bd7291d2a85d105ad6"
+    },
+    "adjudication_responses": {
+      "path": "verifier_training/synthetic/phase8d-adjudication-responses.jsonl",
+      "sha256": "1db2b3ebeb751b27c4b4cd171d6559d165505364e170548e4162e62df3d3d0cf"
+    },
+    "final_annotations": {
+      "path": "verifier_training/synthetic/phase8d-final-annotations.jsonl",
+      "sha256": "c9c60fc4d246fe7b0eef8e1cecb6bb88c5f97fce3af3056ea0625222aa9f188b"
+    },
+    "freeze_manifest": {
+      "path": "verifier_training/synthetic/phase8d-freeze-manifest.json",
+      "sha256": "d6b7623eac06257a36fecb344eada64b91b09c03cd9098c595c029dd063b30ef"
+    },
+    "packet_a": {
+      "path": "verifier_training/synthetic/phase8d-annotation-packet-a.json",
+      "sha256": "89e33eff413272977ed7f3a6962cc98be32835887b77495c8b5c3aacba106586"
+    },
+    "packet_b": {
+      "path": "verifier_training/synthetic/phase8d-annotation-packet-b.json",
+      "sha256": "c4c7a8ce1ad172382146e58ecdb381ff532e74b36d14b1d018f122f065f6fb1c"
+    },
+    "responses_a": {
+      "path": "verifier_training/synthetic/phase8d-annotation-responses-a.jsonl",
+      "sha256": "4412b73b275e9c85d284d9aa387d29ceb2bb309eeb4b797f7c80edc0158578f9"
+    },
+    "responses_b": {
+      "path": "verifier_training/synthetic/phase8d-annotation-responses-b.jsonl",
+      "sha256": "0aa0e54b4229d0e7f3dd168682e7fa4b33ac349c5ece0222b3dc09a1cb16236c"
+    }
+  },
+  "candidate_count": 137,
+  "decision_method": "salted_candidate_id_sha256_non_semantic",
+  "external_model_calls": 0,
+  "final_annotation_count": 344,
+  "freeze_incomplete_gates": [
+    {
+      "count": 137,
+      "gate": "synthetic_records_present",
+      "sample_ids": []
+    }
+  ],
+  "freeze_trainable": false,
+  "generated_at": "2026-07-22T12:06:00Z",
+  "human_annotators": 0,
+  "independent_annotation_count": 274,
+  "manifest_sha256": "d8dcefcebe401cae12fe02bad16bbe3436c35ca91577e8afeeb05271aacffd00",
+  "phase_id": "week8d-synthetic-annotation-dry-run-v1",
+  "quality_claim_allowed": false,
+  "real_human_gate_complete": false,
+  "real_model_readiness": {
+    "blocked_by": [
+      "real_freeze_not_trainable",
+      "real_freeze_has_incomplete_gates",
+      "real_model_training_unauthorized",
+      "real_model_plan_unfrozen",
+      "real_model_seeds_missing"
+    ],
+    "ready": false
+  },
+  "schema_version": 1
+}

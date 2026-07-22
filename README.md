@@ -343,7 +343,9 @@ Phase 8D 首次 GLM-5.2 Finder 的两条失败已在 R1 中各补跑一次并成
 supersession audit 绑定。有效视图现为 26 个有候选来源、3 个诚实零候选、0 个失败和 137 条
 净化候选；v1+R1 合计 636,662/127,852 输入输出 token，最坏未缓存估算 CNY 8.673152。
 Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标包及空白响应模板已经冻结；尚无
-人工标签或模型质量结论，真实训练继续关闭。详见
+人工标签或模型质量结论，真实训练继续关闭。另有一套与真实包隔离的确定性 synthetic
+流程演练：A/B 各覆盖 137 条，67 条一致、70 条经模拟仲裁，最终 freeze 因 137 条
+`synthetic_records_present` 保持 `trainable=false`。详见
 [`docs/verifier-real-evidence.md`](docs/verifier-real-evidence.md) 和
 [`docs/plans/week8d-real-verifier-evidence.md`](docs/plans/week8d-real-verifier-evidence.md)。
 
@@ -408,8 +410,8 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
   SFT、LoRA SFT、LoRA pairwise 四路对照；同一合成测试集上的 artifact/指标/资源均已落盘，
   但仅 2 条二分类 test 样本，明确禁止模型质量或后训练提升结论
 - **Week 8 真实证据准备（Phase 8D）**：冻结并执行 GLM-5.2 双温度 Finder；R1 后 29 个
-  来源的有效视图为 137 条候选、3 个零候选、0 个失败。双人盲标、第三人仲裁和真实模型质量
-  验证仍未完成
+  来源的有效视图为 137 条候选、3 个零候选、0 个失败。synthetic 双标/仲裁/freeze 已离线
+  闭环并正确保持非 trainable；双人真人盲标、第三位真人仲裁和真实模型质量验证仍未完成
 
 ## 已知限制
 

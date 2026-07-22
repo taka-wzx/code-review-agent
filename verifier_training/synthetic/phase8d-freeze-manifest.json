@@ -1,0 +1,69 @@
+{
+  "corpus_manifest": {
+    "agreement": {
+      "adjudications": 70,
+      "candidates": 137,
+      "final_uncertain": 0,
+      "independent_agreements": 67,
+      "synthetic_final": 137,
+      "unresolved": 0
+    },
+    "annotations_sha256": "b8e1dc461754239f944525fb6ce10863b5e5d6339c876307d24e8d3f9408f578",
+    "candidate_sources_sha256": "064fa6014f90a7178338a72b1bfb5b821fbb695d867d3886d404464e4ca5e2f1",
+    "corpus_id": "week8b-verifier-corpus-v1",
+    "counts": {
+      "annotations": 344,
+      "candidate_sources": 137,
+      "frozen_candidates": 137,
+      "pr_sources": 29
+    },
+    "frozen_at": "2026-07-22T12:05:00Z",
+    "frozen_dataset_sha256": "fc75a525d6457cc896ae588f470ad9f830872f81aa1a278d3d5e31ac71f3203b",
+    "incomplete_gates": [
+      {
+        "count": 137,
+        "gate": "synthetic_records_present",
+        "sample_ids": []
+      }
+    ],
+    "manifest_sha256": "bf3954ae6c7c4fd7bb6bec3d16e8998f2c86b30f7626bbe3b72af0850bdc7cb2",
+    "plan_sha256": "ba07efa6dadb34319462965cc21e2b7f6a9058bcc482b33dde5563da497773bf",
+    "pr_sources_sha256": "4ce49ebfe68cb2d0ebe125f2cbd68f77ea3222a64449fcabedd3d39d2ec56209",
+    "repositories": {
+      "test": [
+        "encode/httpx",
+        "pallets/flask",
+        "psf/requests"
+      ],
+      "train": [
+        "Textualize/rich",
+        "django/django",
+        "pallets/click",
+        "pytest-dev/pytest"
+      ],
+      "validation": [
+        "fastapi/fastapi",
+        "pydantic/pydantic"
+      ]
+    },
+    "schema_version": 1,
+    "split_manifest_sha256": "6a806a705b30d9f3f790eed64fbb98c2bc95ac13760e6549ad7fdb95cc468ef4",
+    "trainable": false
+  },
+  "finder_completed": 26,
+  "finder_completed_zero_candidates": 3,
+  "finder_failed": 0,
+  "finder_runs_sha256": "3aeb5d70e734b1e3f68dd54d875a8b11375a9c19fe59e77fc70c9239cc81e92b",
+  "frozen_at": "2026-07-22T12:05:00Z",
+  "incomplete_gates": [
+    {
+      "count": 137,
+      "gate": "synthetic_records_present",
+      "sample_ids": []
+    }
+  ],
+  "manifest_sha256": "fced86becdb4cbd6439c96543ebdab09de5b6719656f26a51c0058b46265eda3",
+  "phase_id": "week8d-real-verifier-evidence-v1",
+  "schema_version": 1,
+  "trainable": false
+}
