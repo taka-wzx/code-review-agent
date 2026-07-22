@@ -7,7 +7,14 @@ mutation authority.
 
 ## Security model
 
-- HTTP `/v1/*` and `/mcp` require `Authorization: Bearer ...`.
+- HTTP `/v1/*` and `/mcp` require an `AuthBackend`-resolved Principal. The default remote
+  backend validates short-lived database API credentials; tests inject deterministic fake
+  principals, and externally verified OIDC/JWT claims can be mapped by
+  `VerifiedOIDCJWTAuthBackend` without coupling authorization to one identity provider.
+- API credential plaintext is returned once at creation. SQLite/Postgres stores only a SHA-256
+  digest of the at-least-256-bit random token, a non-secret prefix, expiry, last-use time, and
+  revocation time. Every request reads current credential state, so revocation takes effect on
+  the next authentication attempt.
 - GitHub webhook requests use `X-Hub-Signature-256` over the exact request body,
   HMAC-SHA256, and constant-time comparison before JSON parsing.
 - Requests name only an `owner/repo` alias registered by the operator. A caller
@@ -18,8 +25,11 @@ mutation authority.
   results to 2 MiB, and trace responses to 4 MiB. Webhook bodies are rejected
   while streaming, before the service buffers more than 1 MiB. Worker
   concurrency is 1--8.
-- SQLite stores job metadata, the completed review, and a diff hash/byte count;
-  it does not persist the submitted diff or any HTTP/webhook/provider secret.
+- Every production business table is organization-scoped. Repository access is checked for job,
+  trace, Finding, feedback, and approval reads/writes; a cross-organization resource ID has the
+  same not-found response as an unknown ID.
+- Postgres is the production database target. SQLite remains a single-process local/test mode.
+  Neither stores the submitted inline diff nor any HTTP/webhook/provider credential.
 - Provider and command failures become stable error categories. Responses do
   not echo exception messages, host paths, command output, diffs, or keys.
 - Pull-request diff stdout is spooled to a temporary file and stopped at the
@@ -27,10 +37,12 @@ mutation authority.
 - Each job gets an exclusive canonical Week 6 trace file. Trace resources can
   only be addressed by a valid job ID; callers never provide a trace path.
 
-The static bearer token is suitable for an operator-controlled local service.
-It is not OAuth. Do not expose the process directly to an untrusted network.
-A remote deployment must terminate TLS and enforce OAuth 2.1/resource-server
-policy in a gateway (or wait for a separately reviewed native OAuth phase).
+The former static bearer token now exists only as an explicit loopback compatibility mode:
+`CRAG_ALLOW_LOCAL_TOKEN=true` plus a sufficiently long `CRAG_SERVICE_TOKEN`. The service refuses
+that mode on a non-loopback bind. It is not OAuth and must not be exposed to an untrusted network.
+A remote deployment must terminate TLS and use database API credentials or an AuthBackend whose
+deployment verifies OIDC/JWT signature, issuer, audience, expiry, and key rotation. Phase 9B does
+not perform discovery or contact an identity provider.
 
 `approve_patch` is intentionally absent. Existing Repair approval is one-use
 and bound to an exact checkpoint, candidate, path set, and state snapshot. A
@@ -44,7 +56,10 @@ the process environment:
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
-| `CRAG_SERVICE_TOKEN` | HTTP | random bearer token, at least 32 UTF-8 bytes |
+| `CRAG_DATABASE_URL` | production | SQLAlchemy URL; use `postgresql+psycopg://...` in production |
+| `CRAG_SERVICE_TOKEN` | local only | random local bearer token, at least 32 UTF-8 bytes |
+| `CRAG_ALLOW_LOCAL_TOKEN` | no | explicit `true` opt-in for loopback static-token compatibility |
+| `CRAG_AUTO_MIGRATE` | no | local/test SQLite empty-database convenience; requires local-token mode |
 | `CRAG_WEBHOOK_SECRET` | webhook | GitHub webhook secret, at least 16 bytes |
 | `CRAG_REPOSITORIES_JSON` | yes | JSON map from `owner/repo` to an absolute existing Git checkout |
 | `CRAG_STATE_DIR` | no | private SQLite/trace directory; defaults to `~/.crag/service` |
@@ -66,9 +81,36 @@ second process fails before the startup recovery sweep. Use a distinct state
 directory for independent processes; do not point concurrent processes at the
 same SQLite/trace directory.
 
+## Database lifecycle
+
+Alembic is the sole schema-version authority. Run migration as a separate deployment step before
+starting any service worker:
+
+```powershell
+$env:CRAG_DATABASE_URL = "postgresql+psycopg://user:password@db/crag"
+crag-db upgrade
+crag-db check
+crag-service
+```
+
+Workers perform a read-only comparison with the exact Alembic head before creating the executor
+or MCP session. They never call `upgrade`, so concurrent workers cannot race to modify schema; an
+unversioned, pending, inaccessible, or failed migration prevents service startup. Revision 0001
+creates the Phase 9B schema. Revision 0002 imports a Week 7 `jobs`/`deliveries` SQLite database into
+an isolated `local-legacy` organization while preserving job IDs, terminal results, and delivery
+idempotency rows. Structural production rollback uses a pre-migration backup rather than a lossy
+downgrade.
+
+SQLite uses foreign keys, WAL, a busy timeout, and the existing state-directory process lock. It
+is not a multi-host production database. A direct `JobStore(state_dir)` may initialize a temporary
+local/test database while holding that lock; `create_review_service_from_env` defaults to revision
+check only. Set `CRAG_AUTO_MIGRATE=true` only for explicit local mode.
+
 PowerShell example (generate fresh values; never copy these placeholders):
 
 ```powershell
+$env:CRAG_ALLOW_LOCAL_TOKEN = "true"
+$env:CRAG_AUTO_MIGRATE = "true"
 $env:CRAG_SERVICE_TOKEN = "replace-with-at-least-32-random-bytes"
 $env:CRAG_WEBHOOK_SECRET = "replace-with-at-least-16-random-bytes"
 $env:CRAG_REPOSITORIES_JSON = '{"owner/repo":"E:\\src\\repo"}'
@@ -116,6 +158,30 @@ On startup,
 abandoned queued/running records become `failed/service_restarted`. This is a
 single-process bounded executor, not a distributed durable queue.
 
+## Identity and management REST API
+
+All paths below require the same authenticated Principal and organization/repository predicates as
+Review reads. `org_admin` may query/manage members, register/query repositories, and update mode,
+budget, and policy; it may query only its own audit events. A user cannot modify its own role.
+
+- `GET /v1/principal`
+- `GET|POST /v1/organizations/{organization_id}/memberships`
+- `PATCH /v1/organizations/{organization_id}/memberships/{membership_id}`
+- `GET|POST /v1/organizations/{organization_id}/repositories`
+- `PATCH /v1/organizations/{organization_id}/repositories/{repository_id}`
+- `POST /v1/credentials` and `DELETE /v1/credentials/{credential_id}`
+- `GET /v1/audit-events?limit=...`
+- `GET /v1/reviews/{review_id}/findings` and `GET /v1/findings/{finding_id}`
+- `POST /v1/findings/{finding_id}/feedback`
+- `POST /v1/findings/{finding_id}/decisions`
+
+Role boundaries are explicit: viewer reads; reviewer submits Review and Finding feedback;
+maintainer also approves/rejects exact Finding versions; org_admin manages the organization but
+does not substitute for a maintainer approval. Audit events contain principal, organization,
+action, resource type/ID, allow/deny/error decision, policy version, UTC time, and request/run
+correlation ID. They never contain a token, Cookie, Authorization header, diff, prompt, exception,
+or host path.
+
 ## GitHub webhook
 
 Configure the GitHub webhook URL as `/webhooks/github`, content type JSON, and
@@ -128,12 +194,16 @@ work. `ping` returns `pong`.
 job with `duplicate: true` and does not queue a second review. The payload's
 `repository.full_name` must match the operator registry.
 
+Webhook HMAC is a system delivery identity, not a user authentication mechanism. Webhook-created
+jobs are attributed to the `github-webhook` system actor and can never call the user Finding
+decision endpoint or create an approval, even if the JSON body includes spoofed approval fields.
+
 See GitHub's authoritative verification procedure:
 <https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries>.
 
 ## MCP
 
-The stdio server is the safest local integration:
+The stdio server is the safest local integration and requires explicit local principal mode:
 
 ```powershell
 .\.venv\Scripts\crag-mcp.exe

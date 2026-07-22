@@ -5,8 +5,9 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 衡量审查噪声、人工复核时间、可靠性和成本。
 
 > **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、异步
-> job、SQLite 幂等状态与 canonical trace；远程身份/RBAC、维护者审批产品面、反馈采集、指标
-> 聚合和生产部署尚未实现。历史评测主要来自单项目人工植入缺陷、确定性 fakes 或 synthetic
+> job、组织/用户/RBAC、仓库隔离、API token 摘要、Finding 审批/反馈基础、Alembic migration 与
+> canonical trace；真实 OAuth/OIDC 验签服务、完整审批 UI、真实 GitHub guarded publish、指标
+> 聚合和生产部署仍未实现。历史评测主要来自单项目人工植入缺陷、确定性 fakes 或 synthetic
 > 流程，应读作工程证据，不是生产收益。项目位于私有 GitHub 仓库，已发布 v0.1.0。
 
 ## 产品主线
@@ -54,7 +55,7 @@ repository/PR/head SHA、Finding 内容哈希和一次性审批。反馈记忆�
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
 - **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
 - **Canonical trace/span**（`observability.py`、`redaction.py`、`tracelog.py`，Week 6 Phase 2）：每次 Agent Run、阶段、LLM、工具、策略、审批、沙箱、checkpoint 和终态使用同一 `crag.observability/v1alpha1` trace；记录 provider/model、可用 token、整数 micro-USD、时延、工具与 fail-open/degraded 计数；原始 Prompt、diff、工具参数/结果、stdout/stderr、异常消息和主机绝对路径在序列化前统一剔除或脱敏；旧 flat JSONL 读取兼容保留到 0.2.x
-- **HTTP / GitHub Webhook / MCP 服务**（Week 7）：FastAPI 与官方 MCP SDK 共用异步任务核心；Bearer、Webhook HMAC、Host/Origin 防 DNS rebinding、注册仓库白名单、SQLite 幂等状态和 canonical trace 资源形成统一边界
+- **HTTP / GitHub Webhook / MCP 服务**（Week 7 + Phase 9B）：FastAPI 与官方 MCP SDK 共用异步任务核心；可替换 AuthBackend、短期 API token 摘要、组织/仓库 RBAC、Webhook HMAC、Host/Origin 防 DNS rebinding、版本化数据库和 canonical trace 资源形成统一边界
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）
 - **敏感文件防护**：`read_file` 黑名单拦截 `.env*` / `*.pem` / `*.key` / `id_rsa*` / `credentials*` 等；搜索与遍历跳过 vcs/venv/缓存目录；git/gh 子进程 list 形式无 shell 注入，`-` 开头参数注入有校验
@@ -166,7 +167,41 @@ docker build -f Dockerfile.service -t code-review-agent-service .
 docker run --rm code-review-agent-service --help
 ```
 
-镜像基于 `python:3.13-slim`，只 COPY `pyproject.toml`/`README.md`/`LICENSE`/`src`，`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root 用户启动 `crag` CLI。
+镜像基于 `python:3.13-slim`，只 COPY 打包元数据、`src` 与 Alembic migration 资源，
+`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root
+用户启动 `crag` CLI。
+
+## Phase 9B 身份、RBAC 与数据库
+
+服务端生产数据现以 organization 为租户根，包含 users、memberships、repositories、
+repository access、review jobs、Finding、feedback、approval、audit、webhook delivery 和
+provider usage 等正式表。四个角色的权限不是简单的超级用户层级：viewer 只读；reviewer 可提交
+Review/feedback；maintainer 可对获权仓库批准或拒绝 Finding；org_admin 管理成员、仓库、预算、
+策略和审计，但不能代替 maintainer 审批具体 Finding。REST 与 MCP 使用同一授权函数，跨组织
+资源 ID 按不存在处理。
+
+生产数据库推荐 Postgres（Psycopg 3），SQLite 只用于本地开发和单机测试。Alembic 是唯一 schema
+版本来源，migration 必须作为独立部署步骤先运行；service worker 只检查当前 revision，未到 head
+时拒绝启动，绝不在多 worker startup 中执行 DDL：
+
+```powershell
+$env:CRAG_DATABASE_URL = "postgresql+psycopg://user:password@db/crag"
+crag-db upgrade
+crag-db check
+crag-service
+```
+
+本地 SQLite 可省略 `CRAG_DATABASE_URL`，但仍应先执行 `crag-db upgrade`。若保留 Phase 9B 的
+local-development static token 兼容入口，必须同时显式设置 `CRAG_ALLOW_LOCAL_TOKEN=true` 和
+`CRAG_SERVICE_TOKEN`，只允许绑定 `127.0.0.1`、`localhost` 或 `::1`；只有本地/测试空库可再
+显式设置 `CRAG_AUTO_MIGRATE=true`。默认远程 bearer 由数据库中的短期 API credential 验证，
+token 明文只在创建响应出现一次，数据库仅保存 SHA-256 摘要、prefix、有效期和吊销时间。
+
+Phase 9B 没有实现真实 OAuth flow 或联网 JWKS discovery。生产 OIDC/JWT 通过可替换
+`VerifiedOIDCJWTAuthBackend` 接入，部署方必须在映射 Principal 前完成 signature、issuer、
+audience、expiry 和 key rotation 验证。完整 API、配置、安全和迁移说明见
+[`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
+[`docs/plans/phase9b-identity-rbac.md`](docs/plans/phase9b-identity-rbac.md)。
 
 > **验证状态如实声明**：Phase 9A 没有在本机重新 build 应用镜像。当前 `origin/master`
 > `acc0dcce077113dcbbde2478abd53cbb09a4ef2e` 对应 GitHub Actions run

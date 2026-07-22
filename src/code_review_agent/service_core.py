@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -12,15 +11,29 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
 import subprocess
 import tempfile
 import threading
 import time
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Iterable, Mapping, Protocol
 import uuid
 
 from code_review_agent.agent import run_review
+from code_review_agent.database import (
+    Database,
+    MigrationRequired,
+    new_id,
+    require_schema_head,
+    sqlite_database_url,
+    upgrade_database,
+)
+from code_review_agent.identity import (
+    Permission,
+    PermissionDenied,
+    Principal,
+    Role,
+    current_correlation_id,
+)
 from code_review_agent.llm import make_client
 from code_review_agent.tracelog import Trace, tev
 
@@ -53,6 +66,10 @@ class InvalidRequest(ServiceError):
 
 class JobNotFound(ServiceError):
     code = "job_not_found"
+
+
+class AuthorizationDenied(ServiceError):
+    code = "authorization_denied"
 
 
 class ServiceClosed(ServiceError):
@@ -165,6 +182,9 @@ class ReviewRequest:
     repo_root: Path
     source_ref: str
     diff: str | None = None
+    organization_id: str = ""
+    repository_id: str = ""
+    principal_id: str = ""
 
 
 class ReviewRunner(Protocol):
@@ -241,6 +261,9 @@ class DefaultReviewRunner:
                 "crag.service.schema": SCHEMA_VERSION,
                 "crag.service.source": request.source_kind,
                 "crag.service.repository": request.repository,
+                "crag.service.organization_id": request.organization_id,
+                "crag.service.repository_id": request.repository_id,
+                "crag.service.principal_id": request.principal_id,
             },
         )
         error: tuple[str, str] | None = None
@@ -260,9 +283,15 @@ class DefaultReviewRunner:
 
 
 class JobStore:
-    """Small SQLite state machine; connections are short-lived and thread-safe."""
+    """Versioned tenant-aware job state with a local trace directory."""
 
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(
+        self,
+        state_dir: Path,
+        *,
+        database_url: str | None = None,
+        auto_migrate: bool = True,
+    ) -> None:
         self.state_dir = Path(state_dir).resolve()
         self.trace_dir = self.state_dir / "traces"
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -270,15 +299,34 @@ class JobStore:
         if os.name != "nt":
             self.state_dir.chmod(0o700)
             self.trace_dir.chmod(0o700)
-        self.database = self.state_dir / "reviews.sqlite3"
+        self.database_path = self.state_dir / "reviews.sqlite3"
+        self.database_url = database_url or sqlite_database_url(self.database_path)
         self._lock_file = (self.state_dir / ".service.lock").open("a+b")
         self._closed = False
+        self._local_principal: Principal | None = None
         try:
             self._acquire_state_lock()
-            self._initialize()
+            if auto_migrate:
+                if not self.database_url.startswith("sqlite"):
+                    raise MigrationRequired("automatic migration is only allowed for local SQLite")
+                upgrade_database(self.database_url)
+            else:
+                require_schema_head(self.database_url)
+            self.database = Database(self.database_url, check_schema=False)
+            self._recover_abandoned()
+            if auto_migrate:
+                self._local_principal = self.database.bootstrap_local(())
         except BaseException:
             self._lock_file.close()
             raise
+
+    @property
+    def local_principal(self) -> Principal | None:
+        return self._local_principal
+
+    def bootstrap_local(self, repository_aliases: Iterable[str]) -> Principal:
+        self._local_principal = self.database.bootstrap_local(repository_aliases)
+        return self._local_principal
 
     def _acquire_state_lock(self) -> None:
         try:
@@ -292,9 +340,7 @@ class JobStore:
                 msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
             else:
                 fcntl: Any = importlib.import_module("fcntl")
-                fcntl.flock(
-                    self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB
-                )
+                fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (OSError, BlockingIOError) as exc:
             raise StateDirectoryInUse("service state directory is already in use") from exc
 
@@ -303,6 +349,7 @@ class JobStore:
             return
         self._closed = True
         try:
+            self.database.close()
             self._lock_file.seek(0)
             if os.name == "nt":
                 msvcrt: Any = importlib.import_module("msvcrt")
@@ -313,59 +360,36 @@ class JobStore:
         finally:
             self._lock_file.close()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.database, timeout=10, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
-        return conn
+    def _recover_abandoned(self) -> None:
+        from sqlalchemy import text
 
-    @contextmanager
-    def _connection(self):
-        conn = self._connect()
-        try:
-            yield conn
-        finally:
-            conn.close()
-
-    def _initialize(self) -> None:
-        with self._connection() as conn:
-            conn.executescript(
-                """
-                PRAGMA journal_mode=WAL;
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY,
-                    source_kind TEXT NOT NULL,
-                    repository TEXT NOT NULL,
-                    source_ref TEXT NOT NULL,
-                    source_sha256 TEXT NOT NULL,
-                    source_bytes INTEGER NOT NULL,
-                    state TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    started_at TEXT,
-                    completed_at TEXT,
-                    review_json TEXT,
-                    error_code TEXT
-                );
-                CREATE TABLE IF NOT EXISTS deliveries (
-                    delivery_id TEXT PRIMARY KEY,
-                    job_id TEXT NOT NULL REFERENCES jobs(id),
-                    event TEXT NOT NULL,
-                    received_at TEXT NOT NULL
-                );
-                """
-            )
-            conn.execute(
-                "UPDATE jobs SET state=?, completed_at=?, error_code=? "
-                "WHERE state IN (?, ?)",
-                (
-                    JobState.FAILED.value,
-                    _now(),
-                    "service_restarted",
-                    JobState.QUEUED.value,
-                    JobState.RUNNING.value,
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE review_jobs SET state=:failed, completed_at=:completed, "
+                    "error_code=:error WHERE state IN (:queued, :running)"
                 ),
+                {
+                    "failed": JobState.FAILED.value,
+                    "completed": _now(),
+                    "error": "service_restarted",
+                    "queued": JobState.QUEUED.value,
+                    "running": JobState.RUNNING.value,
+                },
             )
+
+    def _local_repository(self, repository: str) -> tuple[Principal, Mapping[str, Any]]:
+        principal = self._local_principal
+        if principal is None:
+            raise AuthorizationDenied("authenticated principal is required")
+        record = self.database.authorized_repository(principal, repository)
+        if record is None and self.database_url.startswith("sqlite"):
+            self._local_principal = self.database.bootstrap_local((repository,))
+            principal = self._local_principal
+            record = self.database.authorized_repository(principal, repository)
+        if record is None:
+            raise InvalidRequest("repository is not registered")
+        return principal, record
 
     def create(
         self,
@@ -377,69 +401,116 @@ class JobStore:
         source_bytes: int,
         delivery_id: str | None = None,
         event: str = "pull_request",
+        organization_id: str | None = None,
+        repository_id: str | None = None,
+        submitted_by: str | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[str, bool]:
+        from sqlalchemy import text
+
+        if organization_id is None or repository_id is None or submitted_by is None:
+            principal, record = self._local_repository(repository)
+            organization_id = principal.organization_id
+            repository_id = str(record["id"])
+            submitted_by = principal.user_id
         job_id = uuid.uuid4().hex
         created = _now()
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                if delivery_id is not None:
-                    row = conn.execute(
-                        "SELECT job_id FROM deliveries WHERE delivery_id=?", (delivery_id,)
-                    ).fetchone()
-                    if row is not None:
-                        conn.commit()
-                        return str(row["job_id"]), True
-                conn.execute(
-                    "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)",
-                    (
-                        job_id,
-                        source_kind,
-                        repository,
-                        source_ref,
-                        source_sha256,
-                        source_bytes,
-                        JobState.QUEUED.value,
-                        created,
+        correlation_id = correlation_id or job_id
+        with self.database.engine.begin() as connection:
+            if delivery_id is not None:
+                row = connection.execute(
+                    text(
+                        "SELECT review_job_id FROM webhook_deliveries "
+                        "WHERE delivery_id=:delivery"
                     ),
+                    {"delivery": delivery_id},
+                ).first()
+                if row is not None:
+                    return str(row._mapping["review_job_id"]), True
+            connection.execute(
+                text(
+                    "INSERT INTO review_jobs "
+                    "(id, organization_id, repository_id, submitted_by, correlation_id, "
+                    "source_kind, repository_alias, source_ref, source_sha256, source_bytes, "
+                    "state, created_at, started_at, completed_at, review_json, error_code) "
+                    "VALUES (:id, :org, :repo, :actor, :correlation, :kind, :alias, :ref, "
+                    ":sha, :bytes, :state, :created, NULL, NULL, NULL, NULL)"
+                ),
+                {
+                    "id": job_id,
+                    "org": organization_id,
+                    "repo": repository_id,
+                    "actor": submitted_by,
+                    "correlation": correlation_id,
+                    "kind": source_kind,
+                    "alias": repository,
+                    "ref": source_ref,
+                    "sha": source_sha256,
+                    "bytes": source_bytes,
+                    "state": JobState.QUEUED.value,
+                    "created": created,
+                },
+            )
+            if delivery_id is not None:
+                connection.execute(
+                    text(
+                        "INSERT INTO webhook_deliveries "
+                        "(id, organization_id, repository_id, review_job_id, delivery_id, "
+                        "event, received_at) VALUES (:id, :org, :repo, :job, :delivery, "
+                        ":event, :received)"
+                    ),
+                    {
+                        "id": new_id(),
+                        "org": organization_id,
+                        "repo": repository_id,
+                        "job": job_id,
+                        "delivery": delivery_id,
+                        "event": event,
+                        "received": created,
+                    },
                 )
-                if delivery_id is not None:
-                    conn.execute(
-                        "INSERT INTO deliveries VALUES (?, ?, ?, ?)",
-                        (delivery_id, job_id, event, created),
-                    )
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
         return job_id, False
 
     def delete_queued(self, job_id: str) -> None:
         """Compensate a committed submission that could not reach the executor."""
-        with self._connection() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            try:
-                conn.execute("DELETE FROM deliveries WHERE job_id=?", (_job_id(job_id),))
-                cursor = conn.execute(
-                    "DELETE FROM jobs WHERE id=? AND state=?",
-                    (_job_id(job_id), JobState.QUEUED.value),
-                )
-                if cursor.rowcount != 1:
-                    raise RuntimeError("queued review could not be removed")
-                conn.commit()
-            except BaseException:
-                conn.rollback()
-                raise
+        from sqlalchemy import text
+
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                text("DELETE FROM webhook_deliveries WHERE review_job_id=:job"),
+                {"job": _job_id(job_id)},
+            )
+            result = connection.execute(
+                text("DELETE FROM review_jobs WHERE id=:id AND state=:state"),
+                {"id": _job_id(job_id), "state": JobState.QUEUED.value},
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("queued review could not be removed")
 
     def _transition(self, job_id: str, current: str, target: str, **fields: Any) -> None:
-        assignments = ["state=?"] + [f"{name}=?" for name in fields]
-        values = [target, *fields.values(), _job_id(job_id), current]
-        with self._connection() as conn:
-            cursor = conn.execute(
-                f"UPDATE jobs SET {', '.join(assignments)} WHERE id=? AND state=?",
+        from sqlalchemy import text
+
+        allowed = {"started_at", "completed_at", "review_json", "error_code"}
+        if not set(fields).issubset(allowed):
+            raise RuntimeError("invalid review state field")
+        assignments = ["state=:target"]
+        values: dict[str, Any] = {
+            "target": target,
+            "id": _job_id(job_id),
+            "current": current,
+        }
+        for name, value in fields.items():
+            assignments.append(f"{name}=:{name}")
+            values[name] = value
+        with self.database.engine.begin() as connection:
+            result = connection.execute(
+                text(
+                    f"UPDATE review_jobs SET {', '.join(assignments)} "
+                    "WHERE id=:id AND state=:current"
+                ),
                 values,
             )
-            if cursor.rowcount != 1:
+            if result.rowcount != 1:
                 raise RuntimeError(f"invalid review state transition {current} -> {target}")
 
     def mark_running(self, job_id: str) -> None:
@@ -451,18 +522,67 @@ class JobStore:
         )
 
     def succeed(self, job_id: str, review: Mapping[str, Any]) -> None:
+        from sqlalchemy import text
+
         encoded = json.dumps(review, ensure_ascii=False, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > MAX_RESULT_BYTES:
             self.fail(job_id, "result_too_large")
             return
-        self._transition(
-            job_id,
-            JobState.RUNNING.value,
-            JobState.SUCCEEDED.value,
-            completed_at=_now(),
-            review_json=encoded,
-            error_code=None,
-        )
+        with self.database.engine.begin() as connection:
+            job = connection.execute(
+                text(
+                    "SELECT organization_id, repository_id FROM review_jobs "
+                    "WHERE id=:id AND state=:state"
+                ),
+                {"id": _job_id(job_id), "state": JobState.RUNNING.value},
+            ).first()
+            if job is None:
+                raise RuntimeError("invalid review state transition running -> succeeded")
+            result = connection.execute(
+                text(
+                    "UPDATE review_jobs SET state=:target, completed_at=:completed, "
+                    "review_json=:review, error_code=NULL WHERE id=:id AND state=:current"
+                ),
+                {
+                    "target": JobState.SUCCEEDED.value,
+                    "completed": _now(),
+                    "review": encoded,
+                    "id": _job_id(job_id),
+                    "current": JobState.RUNNING.value,
+                },
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("invalid review state transition running -> succeeded")
+            for finding in review.get("findings", []):
+                if not isinstance(finding, Mapping):
+                    continue
+                payload = json.dumps(finding, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                fingerprint = str(finding.get("fingerprint") or content_hash)
+                connection.execute(
+                    text(
+                        "INSERT INTO findings "
+                        "(id, organization_id, repository_id, review_job_id, fingerprint, "
+                        "content_sha256, path, line, severity, category, status, payload_json, "
+                        "created_at) VALUES (:id, :org, :repo, :job, :fingerprint, :content, "
+                        ":path, :line, :severity, :category, 'pending_approval', :payload, "
+                        ":created)"
+                    ),
+                    {
+                        "id": new_id(),
+                        "org": job._mapping["organization_id"],
+                        "repo": job._mapping["repository_id"],
+                        "job": job_id,
+                        "fingerprint": fingerprint[:128],
+                        "content": content_hash,
+                        "path": finding.get("path") or finding.get("file"),
+                        "line": finding.get("line"),
+                        "severity": finding.get("severity"),
+                        "category": finding.get("category"),
+                        "payload": payload,
+                        "created": _now(),
+                    },
+                )
 
     def fail(self, job_id: str, error_code: str) -> None:
         self._transition(
@@ -474,17 +594,40 @@ class JobStore:
             review_json=None,
         )
 
-    def get(self, job_id: str) -> dict[str, Any]:
-        with self._connection() as conn:
-            row = conn.execute("SELECT * FROM jobs WHERE id=?", (_job_id(job_id),)).fetchone()
+    def _row(self, job_id: str, principal: Principal | None = None) -> Mapping[str, Any]:
+        from sqlalchemy import text
+
+        parameters: dict[str, Any] = {"id": _job_id(job_id)}
+        organization_clause = ""
+        if principal is not None:
+            organization_clause = " AND organization_id=:org"
+            parameters["org"] = principal.organization_id
+        with self.database.engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT * FROM review_jobs WHERE id=:id" + organization_clause),
+                parameters,
+            ).first()
         if row is None:
             raise JobNotFound("review job was not found")
+        item = row._mapping
+        if principal is not None:
+            repository = self.database.authorized_repository(
+                principal, str(item["repository_id"])
+            )
+            if repository is None:
+                raise JobNotFound("review job was not found")
+        return dict(item)
+
+    def get(self, job_id: str, principal: Principal | None = None) -> dict[str, Any]:
+        row = self._row(job_id, principal)
         result: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "review_id": row["id"],
+            "organization_id": row["organization_id"],
+            "repository_id": row["repository_id"],
             "source": {
                 "kind": row["source_kind"],
-                "repository": row["repository"],
+                "repository": row["repository_alias"],
                 "reference": row["source_ref"],
                 "sha256": row["source_sha256"],
                 "bytes": row["source_bytes"],
@@ -500,30 +643,30 @@ class JobStore:
             result["error"] = {"code": row["error_code"]}
         return result
 
-    def trace_path(self, job_id: str) -> Path:
-        self.get(job_id)
+    def trace_path(self, job_id: str, principal: Principal | None = None) -> Path:
+        self._row(job_id, principal)
         return self.trace_dir / f"{_job_id(job_id)}.jsonl"
 
-    def read_trace(self, job_id: str) -> str:
-        job = self.get(job_id)
+    def read_trace(self, job_id: str, principal: Principal | None = None) -> str:
+        job = self.get(job_id, principal)
         if job["state"] in {JobState.QUEUED.value, JobState.RUNNING.value}:
             raise InvalidRequest("trace is not available until the review is terminal")
-        path = self.trace_path(job_id)
+        path = self.trace_path(job_id, principal)
         try:
             size = path.stat().st_size
         except OSError as exc:
             raise InvalidRequest("trace is unavailable") from exc
         if size > MAX_TRACE_BYTES:
             raise InvalidRequest("trace exceeds the service response limit")
-        text = path.read_text(encoding="utf-8")
-        for line in text.splitlines():
+        trace_text = path.read_text(encoding="utf-8")
+        for line in trace_text.splitlines():
             try:
                 record = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise InvalidRequest("trace is malformed") from exc
             if not isinstance(record, dict):
                 raise InvalidRequest("trace is malformed")
-        return text
+        return trace_text
 
 
 class ReviewService:
@@ -534,15 +677,85 @@ class ReviewService:
         *,
         runner: ReviewRunner | None = None,
         workers: int = 2,
+        local_mode: bool = True,
     ) -> None:
         if isinstance(workers, bool) or not 1 <= workers <= 8:
             raise ValueError("workers must be between 1 and 8")
         self.registry = registry
         self.store = store
         self.runner = runner or DefaultReviewRunner()
+        self.local_mode = local_mode
+        if local_mode:
+            self.store.bootstrap_local(self.registry.paths.keys())
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="crag-review")
         self._lock = threading.Lock()
         self._accepting = True
+
+    def _principal(self, principal: Principal | None) -> Principal:
+        resolved = principal or self.store.local_principal
+        if resolved is None:
+            raise AuthorizationDenied("authenticated principal is required")
+        return resolved
+
+    def _audit(
+        self,
+        principal: Principal,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        decision: str,
+        *,
+        repository_id: str | None = None,
+        reason_code: str | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        self.store.database.audit(
+            principal=principal,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            decision=decision,
+            repository_id=repository_id,
+            reason_code=reason_code,
+            correlation_id=correlation_id or current_correlation_id(uuid.uuid4().hex),
+        )
+
+    def _require(self, principal: Principal, permission: Permission, action: str) -> None:
+        try:
+            principal.require(permission)
+        except PermissionDenied as exc:
+            self._audit(
+                principal,
+                action,
+                "organization",
+                principal.organization_id,
+                "deny",
+                reason_code="role_denied",
+            )
+            raise AuthorizationDenied("operation is not permitted") from exc
+
+    def _repository(
+        self,
+        principal: Principal,
+        repository: str,
+        permission: Permission,
+        action: str,
+    ) -> tuple[str, Path, Mapping[str, Any]]:
+        self._require(principal, permission, action)
+        alias = normalize_repository(repository)
+        record = self.store.database.authorized_repository(principal, alias)
+        if record is None:
+            self._audit(
+                principal,
+                action,
+                "repository",
+                alias,
+                "deny",
+                reason_code="not_found",
+            )
+            raise InvalidRequest("repository is not registered")
+        _, root = self.registry.resolve(alias)
+        return alias, root, record
 
     def _ensure_accepting(self) -> None:
         if not self._accepting:
@@ -568,9 +781,21 @@ class ReviewService:
             except BaseException:
                 pass
 
-    def submit_diff(self, repository: str, diff: str) -> dict[str, Any]:
-        alias, root = self.registry.resolve(repository)
+    def submit_diff(
+        self,
+        repository: str,
+        diff: str,
+        *,
+        principal: Principal | None = None,
+        correlation_id: str | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_accepting()
+        actor = self._principal(principal)
+        alias, root, repository_record = self._repository(
+            actor, repository, Permission.SUBMIT_REVIEW, "review.submit"
+        )
         digest, size = validate_diff(diff)
+        correlation = correlation_id or uuid.uuid4().hex
         with self._lock:
             self._ensure_accepting()
             job_id, _ = self.store.create(
@@ -579,9 +804,34 @@ class ReviewService:
                 source_ref="inline",
                 source_sha256=digest,
                 source_bytes=size,
+                organization_id=actor.organization_id,
+                repository_id=str(repository_record["id"]),
+                submitted_by=actor.user_id,
+                correlation_id=correlation,
             )
-            self._queue_locked(ReviewRequest(job_id, "diff", alias, root, "inline", diff))
-        return self.store.get(job_id)
+            self._queue_locked(
+                ReviewRequest(
+                    job_id,
+                    "diff",
+                    alias,
+                    root,
+                    "inline",
+                    diff,
+                    actor.organization_id,
+                    str(repository_record["id"]),
+                    actor.principal_id,
+                )
+            )
+        self._audit(
+            actor,
+            "review.submit",
+            "review_job",
+            job_id,
+            "allow",
+            repository_id=str(repository_record["id"]),
+            correlation_id=correlation,
+        )
+        return self.store.get(job_id, actor)
 
     def submit_pr(
         self,
@@ -589,13 +839,20 @@ class ReviewService:
         pull_request: str | int,
         *,
         delivery_id: str | None = None,
+        principal: Principal | None = None,
+        correlation_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
-        alias, root = self.registry.resolve(repository)
+        self._ensure_accepting()
+        actor = self._principal(principal)
+        alias, root, repository_record = self._repository(
+            actor, repository, Permission.SUBMIT_REVIEW, "review.submit"
+        )
         reference = normalize_pr_ref(alias, pull_request)
         digest = hashlib.sha256(f"{alias}\0{reference}".encode()).hexdigest()
         if delivery_id is not None:
             if not isinstance(delivery_id, str) or not re.fullmatch(r"[A-Za-z0-9-]{1,128}", delivery_id):
                 raise InvalidRequest("delivery ID is invalid")
+        correlation = correlation_id or uuid.uuid4().hex
         with self._lock:
             self._ensure_accepting()
             job_id, duplicate = self.store.create(
@@ -605,16 +862,428 @@ class ReviewService:
                 source_sha256=digest,
                 source_bytes=0,
                 delivery_id=delivery_id,
+                organization_id=actor.organization_id,
+                repository_id=str(repository_record["id"]),
+                submitted_by=actor.user_id,
+                correlation_id=correlation,
             )
             if not duplicate:
-                self._queue_locked(ReviewRequest(job_id, "pull_request", alias, root, reference))
+                self._queue_locked(
+                    ReviewRequest(
+                        job_id,
+                        "pull_request",
+                        alias,
+                        root,
+                        reference,
+                        organization_id=actor.organization_id,
+                        repository_id=str(repository_record["id"]),
+                        principal_id=actor.principal_id,
+                    )
+                )
+        self._audit(
+            actor,
+            "review.submit",
+            "review_job",
+            job_id,
+            "allow",
+            repository_id=str(repository_record["id"]),
+            correlation_id=correlation,
+        )
+        return self.store.get(job_id, actor), duplicate
+
+    def submit_webhook_pr(
+        self,
+        repository: str,
+        pull_request: str | int,
+        *,
+        delivery_id: str,
+        correlation_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        self._ensure_accepting()
+        alias, root = self.registry.resolve(repository)
+        repository_record = self.store.database.repository_for_webhook(alias)
+        if repository_record is None:
+            raise InvalidRequest("repository is not registered")
+        reference = normalize_pr_ref(alias, pull_request)
+        digest = hashlib.sha256(f"{alias}\0{reference}".encode()).hexdigest()
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", delivery_id):
+            raise InvalidRequest("delivery ID is invalid")
+        correlation = correlation_id or uuid.uuid4().hex
+        with self._lock:
+            self._ensure_accepting()
+            job_id, duplicate = self.store.create(
+                source_kind="pull_request",
+                repository=alias,
+                source_ref=reference,
+                source_sha256=digest,
+                source_bytes=0,
+                delivery_id=delivery_id,
+                organization_id=str(repository_record["organization_id"]),
+                repository_id=str(repository_record["id"]),
+                submitted_by="github-webhook",
+                correlation_id=correlation,
+            )
+            if not duplicate:
+                self._queue_locked(
+                    ReviewRequest(
+                        job_id,
+                        "pull_request",
+                        alias,
+                        root,
+                        reference,
+                        organization_id=str(repository_record["organization_id"]),
+                        repository_id=str(repository_record["id"]),
+                        principal_id="github-webhook",
+                    )
+                )
+        webhook_principal = Principal(
+            principal_id="github-webhook",
+            user_id="github-webhook",
+            organization_id=str(repository_record["organization_id"]),
+            role=Role.VIEWER,
+            auth_method="webhook_hmac",
+        )
+        self._audit(
+            webhook_principal,
+            "webhook.review.submit",
+            "review_job",
+            job_id,
+            "allow",
+            repository_id=str(repository_record["id"]),
+            correlation_id=correlation,
+        )
         return self.store.get(job_id), duplicate
 
-    def get(self, job_id: str) -> dict[str, Any]:
-        return self.store.get(job_id)
+    def get(
+        self, job_id: str, *, principal: Principal | None = None
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "review.read")
+        job = self.store.get(job_id, actor)
+        self._audit(
+            actor,
+            "review.read",
+            "review_job",
+            job_id,
+            "allow",
+            repository_id=str(job["repository_id"]),
+        )
+        return job
 
-    def get_trace(self, job_id: str) -> str:
-        return self.store.read_trace(job_id)
+    def get_trace(self, job_id: str, *, principal: Principal | None = None) -> str:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "trace.read")
+        trace = self.store.read_trace(job_id, actor)
+        job = self.store.get(job_id, actor)
+        self._audit(
+            actor,
+            "trace.read",
+            "review_trace",
+            job_id,
+            "allow",
+            repository_id=str(job["repository_id"]),
+        )
+        return trace
+
+    @staticmethod
+    def _finding_response(record: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(record)
+        payload = result.pop("payload_json", None)
+        if isinstance(payload, str):
+            result["finding"] = json.loads(payload)
+        return result
+
+    def list_findings(
+        self, job_id: str, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "finding.list")
+        job = self.store.get(job_id, actor)
+        records = self.store.database.findings_for_review(actor, job_id)
+        self._audit(
+            actor,
+            "finding.list",
+            "review_job",
+            job_id,
+            "allow",
+            repository_id=str(job["repository_id"]),
+        )
+        return [self._finding_response(record) for record in records]
+
+    def get_finding(
+        self, finding_id: str, *, principal: Principal | None = None
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "finding.read")
+        record = self.store.database.finding_detail(actor, finding_id)
+        if record is None:
+            raise JobNotFound("finding was not found")
+        self._audit(
+            actor,
+            "finding.read",
+            "finding",
+            finding_id,
+            "allow",
+            repository_id=str(record["repository_id"]),
+        )
+        return self._finding_response(record)
+
+    def principal_record(self, principal: Principal | None = None) -> dict[str, Any]:
+        actor = self._principal(principal)
+        return {
+            "principal_id": actor.principal_id,
+            "user_id": actor.user_id,
+            "organization_id": actor.organization_id,
+            "role": actor.role.value,
+            "auth_method": actor.auth_method,
+            "credential_id": actor.credential_id,
+        }
+
+    def list_members(self, principal: Principal | None = None) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_MEMBERS, "membership.list")
+        return self.store.database.list_members(actor.organization_id)
+
+    def create_member(
+        self,
+        *,
+        subject: str,
+        display_name: str,
+        role: Role,
+        repository_ids: Iterable[str],
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_MEMBERS, "membership.create")
+        record = self.store.database.create_membership(
+            actor.organization_id,
+            subject=subject,
+            display_name=display_name,
+            role=role,
+            repository_ids=repository_ids,
+        )
+        self._audit(
+            actor,
+            "membership.create",
+            "membership",
+            str(record["membership_id"]),
+            "allow",
+        )
+        return record
+
+    def update_member(
+        self,
+        membership_id: str,
+        *,
+        role: Role,
+        repository_ids: Iterable[str],
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_MEMBERS, "membership.update")
+        own_membership = next(
+            (
+                item
+                for item in self.store.database.list_members(actor.organization_id)
+                if item["membership_id"] == membership_id
+            ),
+            None,
+        )
+        if own_membership is not None and own_membership["user_id"] == actor.user_id:
+            self._audit(
+                actor,
+                "membership.update",
+                "membership",
+                membership_id,
+                "deny",
+                reason_code="self_role_change",
+            )
+            raise AuthorizationDenied("self role changes are not permitted")
+        record = self.store.database.update_membership(
+            actor.organization_id,
+            membership_id,
+            role=role,
+            repository_ids=repository_ids,
+        )
+        if record is None:
+            raise JobNotFound("membership was not found")
+        self._audit(
+            actor,
+            "membership.update",
+            "membership",
+            membership_id,
+            "allow",
+        )
+        return record
+
+    def list_repositories(
+        self, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_REPOSITORIES, "repository.list")
+        return self.store.database.list_repositories(actor.organization_id)
+
+    def register_repository(
+        self,
+        repository: str,
+        *,
+        mode: str,
+        budget_microusd: int | None,
+        policy_version: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_REPOSITORIES, "repository.create")
+        alias, _ = self.registry.resolve(repository)
+        record = self.store.database.register_repository(
+            actor.organization_id,
+            alias,
+            mode=mode,
+            budget_microusd=budget_microusd,
+            policy_version=policy_version,
+        )
+        self._audit(
+            actor,
+            "repository.create",
+            "repository",
+            str(record["id"]),
+            "allow",
+            repository_id=str(record["id"]),
+            reason_code=None,
+        )
+        return record
+
+    def update_repository(
+        self,
+        repository_id: str,
+        *,
+        mode: str,
+        budget_microusd: int | None,
+        policy_version: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_REPOSITORIES, "repository.update")
+        record = self.store.database.update_repository(
+            actor.organization_id,
+            repository_id,
+            mode=mode,
+            budget_microusd=budget_microusd,
+            policy_version=policy_version,
+        )
+        if record is None:
+            raise JobNotFound("repository was not found")
+        self._audit(
+            actor,
+            "repository.update",
+            "repository",
+            repository_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return record
+
+    def create_credential(
+        self,
+        *,
+        expires_in_seconds: int,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        record = self.store.database.create_credential(
+            actor, expires_in_seconds=expires_in_seconds
+        )
+        self._audit(
+            actor,
+            "credential.create",
+            "access_credential",
+            str(record["credential_id"]),
+            "allow",
+        )
+        return record
+
+    def revoke_credential(
+        self, credential_id: str, *, principal: Principal | None = None
+    ) -> None:
+        actor = self._principal(principal)
+        allow_any = actor.allows(Permission.MANAGE_CREDENTIALS)
+        if not self.store.database.revoke_credential(
+            actor, credential_id, allow_any_user=allow_any
+        ):
+            raise JobNotFound("credential was not found")
+        self._audit(
+            actor,
+            "credential.revoke",
+            "access_credential",
+            credential_id,
+            "allow",
+        )
+
+    def list_audit(
+        self, *, limit: int, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ_AUDIT, "audit.list")
+        return self.store.database.list_audit_events(actor.organization_id, limit=limit)
+
+    def submit_feedback(
+        self,
+        finding_id: str,
+        *,
+        decision: str,
+        reason: str | None,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.SUBMIT_FEEDBACK, "finding.feedback")
+        finding = self.store.database.finding_for_principal(actor, finding_id)
+        if finding is None:
+            raise JobNotFound("finding was not found")
+        record = self.store.database.create_feedback(
+            actor, finding, decision=decision, reason=reason
+        )
+        self._audit(
+            actor,
+            "finding.feedback",
+            "finding",
+            finding_id,
+            "allow",
+            repository_id=str(finding["repository_id"]),
+        )
+        return record
+
+    def decide_finding(
+        self,
+        finding_id: str,
+        *,
+        decision: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.DECIDE_FINDING, "finding.decide")
+        finding = self.store.database.finding_for_principal(actor, finding_id)
+        if finding is None:
+            raise JobNotFound("finding was not found")
+        repository = self.store.database.authorized_repository(
+            actor, str(finding["repository_id"])
+        )
+        if repository is None:
+            raise JobNotFound("finding was not found")
+        record = self.store.database.decide_finding(
+            actor,
+            finding,
+            decision=decision,
+            policy_version=str(repository["policy_version"]),
+        )
+        self._audit(
+            actor,
+            "finding.decide",
+            "finding",
+            finding_id,
+            "allow",
+            repository_id=str(finding["repository_id"]),
+        )
+        return record
 
     def shutdown(self, *, wait: bool = True) -> None:
         with self._lock:
@@ -636,4 +1305,30 @@ def create_review_service_from_env(*, runner: ReviewRunner | None = None) -> Rev
         workers = int(os.environ.get("CRAG_SERVICE_WORKERS", "2"))
     except ValueError as exc:
         raise InvalidRequest("CRAG_SERVICE_WORKERS must be an integer") from exc
-    return ReviewService(registry, JobStore(state), runner=runner, workers=workers)
+    database_url = os.environ.get("CRAG_DATABASE_URL") or sqlite_database_url(
+        state / "reviews.sqlite3"
+    )
+    local_mode = os.environ.get("CRAG_ALLOW_LOCAL_TOKEN", "").casefold() in {
+        "1",
+        "true",
+        "yes",
+    }
+    auto_migrate = os.environ.get("CRAG_AUTO_MIGRATE", "").casefold() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if auto_migrate and not local_mode:
+        raise InvalidRequest("CRAG_AUTO_MIGRATE requires explicit local token mode")
+    store = JobStore(
+        state,
+        database_url=database_url,
+        auto_migrate=auto_migrate,
+    )
+    return ReviewService(
+        registry,
+        store,
+        runner=runner,
+        workers=workers,
+        local_mode=local_mode,
+    )
