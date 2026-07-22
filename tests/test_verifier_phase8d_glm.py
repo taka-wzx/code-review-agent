@@ -20,6 +20,11 @@ RAW_ROOT = ROOT / "traces" / "week8b-corpus"
 REAL = TRAINING / "real"
 
 
+def canonical_text_sha256(path: Path) -> str:
+    payload = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(payload).hexdigest()
+
+
 class FakeCompletions:
     def __init__(self) -> None:
         self.requests: list[dict[str, object]] = []
@@ -86,6 +91,14 @@ class Phase8DGlmTests(unittest.TestCase):
         mutated["queue_ids"] = list(reversed(mutated["queue_ids"]))
         with self.assertRaisesRegex(glm.Phase8DExecutionError, "two frozen"):
             glm.validate_recovery_config(mutated)
+
+    def test_canonical_text_hash_ignores_checkout_newlines(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            lf_path = Path(directory) / "lf.jsonl"
+            crlf_path = Path(directory) / "crlf.jsonl"
+            lf_path.write_bytes(b'{"row":1}\n{"row":2}\n')
+            crlf_path.write_bytes(b'{"row":1}\r\n{"row":2}\r\n')
+            self.assertEqual(canonical_text_sha256(lf_path), canonical_text_sha256(crlf_path))
 
     def test_budget_proxy_forces_glm_options_and_tracks_response_identity(self) -> None:
         fake = FakeClient()
@@ -156,11 +169,11 @@ class Phase8DGlmTests(unittest.TestCase):
         self.assertFalse(summary["trainable"])
         self.assertFalse(summary["quality_claim_allowed"])
         self.assertEqual(
-            hashlib.sha256(runs_path.read_bytes()).hexdigest(),
+            canonical_text_sha256(runs_path),
             summary["artifacts"]["finder_runs_sha256"],
         )
         self.assertEqual(
-            hashlib.sha256(candidates_path.read_bytes()).hexdigest(),
+            canonical_text_sha256(candidates_path),
             summary["artifacts"]["candidate_sources_sha256"],
         )
 
@@ -251,9 +264,7 @@ class Phase8DGlmTests(unittest.TestCase):
             "effective_candidates_sha256": effective_candidates_path,
         }
         for key, path in artifact_paths.items():
-            self.assertEqual(
-                hashlib.sha256(path.read_bytes()).hexdigest(), audit["artifacts"][key]
-            )
+            self.assertEqual(canonical_text_sha256(path), audit["artifacts"][key])
         self.assertEqual(
             audit["audit_sha256"],
             v8d._sha256(v8d._without_hash(audit, "audit_sha256")),
