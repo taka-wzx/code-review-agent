@@ -24,10 +24,13 @@ classifiers = [
 # Upper bounds: the OpenAI SDK has a history of breaking changes at majors;
 # a lockfile (requirements.lock) pins the exact CI/dev environment.
 dependencies = [
+    "alembic>=1.13,<2",
     "fastapi>=0.139,<1",
     "mcp>=1.28,<2",
     "openai>=1.40,<3",
+    "psycopg[binary]>=3.1,<4",
     "pyflakes>=3.0,<4",
+    "SQLAlchemy>=2.0,<3",
     "uvicorn>=0.51,<1",
 ]
 
@@ -40,6 +43,7 @@ dev = [
 
 [project.scripts]
 crag = "code_review_agent.agent:main"
+crag-db = "code_review_agent.database:main"
 crag-mcp = "code_review_agent.mcp_server:main"
 crag-service = "code_review_agent.service:main"
 
@@ -49,6 +53,14 @@ crag-service = "code_review_agent.service:main"
 [tool.setuptools]
 package-dir = { "" = "src" }
 packages = ["code_review_agent"]
+
+[tool.setuptools.data-files]
+"code_review_agent_migrations" = [
+    "alembic.ini",
+    "migrations/env.py",
+    "migrations/script.py.mako",
+]
+"code_review_agent_migrations/versions" = ["migrations/versions/*.py"]
 
 [tool.ruff]
 line-length = 100
