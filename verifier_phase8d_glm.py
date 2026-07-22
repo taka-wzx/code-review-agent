@@ -47,10 +47,82 @@ FINDER_SYSTEM = SYSTEM + FINDER_LIMITATION
 PROMPT_SHA256 = hashlib.sha256(FINDER_SYSTEM.encode("utf-8")).hexdigest()
 MAX_TOKENS_PER_CALL = 8000
 KEY_ENVS = ("GLM_API_KEY", "ZHIPUAI_API_KEY")
+R1_PHASE_ID = "week8d-r1-glm52-recovery-v1"
+R1_QUEUE_IDS = [
+    "finder-012a2b256fa9b8556da6577e",
+    "finder-f7dd7b18cc83b53266eed486",
+]
+R1_SOURCE_IDS = ["Textualize/rich#3468", "psf/requests#6655"]
 
 
 class Phase8DExecutionError(RuntimeError):
     """Raised when the bounded executor cannot proceed safely."""
+
+
+def validate_recovery_config(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != {
+        "schema_version",
+        "phase_id",
+        "base_artifacts",
+        "base_usage",
+        "queue_ids",
+        "source_ids",
+        "max_attempts_per_queue",
+        "finder",
+        "raw_trace_days",
+        "authorized",
+    }:
+        raise Phase8DExecutionError("R1 config keys differ from the recovery contract")
+    if raw["schema_version"] != 1 or raw["phase_id"] != R1_PHASE_ID:
+        raise Phase8DExecutionError("R1 config identity is not frozen")
+    if raw["base_artifacts"] != {
+        "finder_run_records_sha256": "69e652a1d57bf2aa0d0e9c3c505bd15a7c2ddfc9ad5d4bfdf02589e35cf7d1a8",
+        "candidate_source_records_sha256": "114190d88a14924872b1b4234e994b8ac84d90d869002cb66705034aafb8fe29",
+    }:
+        raise Phase8DExecutionError("R1 base artifact hashes are not frozen")
+    if raw["base_usage"] != {
+        "logical_calls": 176,
+        "input_tokens": 603_883,
+        "output_tokens": 119_027,
+        "estimated_cost_cny": 8.16382,
+    }:
+        raise Phase8DExecutionError("R1 base usage ledger is not frozen")
+    if raw["queue_ids"] != R1_QUEUE_IDS or raw["source_ids"] != R1_SOURCE_IDS:
+        raise Phase8DExecutionError("R1 may target only the two frozen failed sources")
+    if raw["max_attempts_per_queue"] != 1:
+        raise Phase8DExecutionError("R1 permits exactly one attempt per failed queue")
+    expected_finder = {
+        "provider": "glm",
+        "model": "glm-5.2",
+        "prompt_sha256": PROMPT_SHA256,
+        "anchor_temperature": 0.2,
+        "sampling_temperature": 0.7,
+        "thinking_type": "disabled",
+        "reasoning_effort": "none",
+        "stream": False,
+        "tool_choice": "auto",
+        "max_calls": 40,
+        "max_http_attempts": 120,
+        "max_input_tokens": 2_000_000,
+        "max_output_tokens": 200_000,
+        "max_cost_cny": 25,
+        "uncached_input_cny_per_million": 8,
+        "cached_input_cny_per_million": 2,
+        "output_cny_per_million": 28,
+    }
+    if raw["finder"] != expected_finder:
+        raise Phase8DExecutionError("R1 Finder settings differ from the recovery contract")
+    if raw["raw_trace_days"] != 30 or raw["authorized"] is not True:
+        raise Phase8DExecutionError("R1 retention or authority is not frozen")
+    return raw
+
+
+def load_recovery_config(path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise Phase8DExecutionError("cannot read R1 config") from exc
+    return validate_recovery_config(raw)
 
 
 def _canonical_bytes(value: Any) -> bytes:
@@ -548,6 +620,304 @@ def execute_queue(
     }
 
 
+def _jsonl_bytes(rows: Sequence[dict[str, Any]]) -> bytes:
+    return b"".join(
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        for row in rows
+    )
+
+
+def execute_recovery(
+    config: dict[str, Any],
+    recovery: dict[str, Any],
+    plan: dict[str, Any],
+    sources: Sequence[dict[str, Any]],
+    queue: Sequence[dict[str, Any]],
+    raw_root: Path,
+    base_runs_path: Path,
+    base_candidates_path: Path,
+    trace_dir: Path,
+    recovery_runs_out: Path,
+    recovered_candidates_out: Path,
+    effective_runs_out: Path,
+    effective_candidates_out: Path,
+    audit_out: Path,
+    client: Any,
+) -> dict[str, Any]:
+    """Run exactly one R1 recovery execution for each frozen failed queue."""
+
+    v8d.validate_config(config)
+    validate_recovery_config(recovery)
+    outputs = [
+        recovery_runs_out,
+        recovered_candidates_out,
+        effective_runs_out,
+        effective_candidates_out,
+        audit_out,
+    ]
+    if any(path.exists() for path in outputs):
+        raise Phase8DExecutionError("refusing to replace an existing R1 artifact")
+    if trace_dir.exists() and any(trace_dir.iterdir()):
+        raise Phase8DExecutionError("refusing to mix R1 with existing raw traces")
+
+    validated_sources = vc.validate_pr_sources(sources, plan)
+    validated_queue = vc.validate_finder_queue(queue, validated_sources)
+    base_runs = v8d._load_jsonl(base_runs_path)
+    base_candidates = vc.validate_candidate_sources(
+        v8d._load_jsonl(base_candidates_path), plan, validated_sources
+    )
+    v8d.validate_finder_runs(
+        base_runs, config, plan, validated_queue, validated_sources, base_candidates
+    )
+    run_records_sha256 = v8d._sha256(sorted(row["run_sha256"] for row in base_runs))
+    candidate_records_sha256 = vc.records_sha256(
+        base_candidates, "candidate_source_sha256"
+    )
+    if run_records_sha256 != recovery["base_artifacts"]["finder_run_records_sha256"]:
+        raise Phase8DExecutionError("R1 base Finder receipts changed")
+    if (
+        candidate_records_sha256
+        != recovery["base_artifacts"]["candidate_source_records_sha256"]
+    ):
+        raise Phase8DExecutionError("R1 base candidate sources changed")
+
+    base_by_queue = {row["queue_id"]: row for row in base_runs}
+    selected_queue = [row for row in validated_queue if row["queue_id"] in R1_QUEUE_IDS]
+    selected_queue.sort(key=lambda row: R1_QUEUE_IDS.index(row["queue_id"]))
+    if [row["queue_id"] for row in selected_queue] != R1_QUEUE_IDS:
+        raise Phase8DExecutionError("R1 queue selection is incomplete")
+    if [row["source_id"] for row in selected_queue] != R1_SOURCE_IDS:
+        raise Phase8DExecutionError("R1 source bindings changed")
+    for row in selected_queue:
+        original = base_by_queue[row["queue_id"]]
+        if original["status"] != "failed" or original["candidate_ids"]:
+            raise Phase8DExecutionError("R1 may supersede only an original failed receipt")
+
+    source_by_id = {row["source_id"]: row for row in validated_sources}
+    ledger_config = {"finder": recovery["finder"]}
+    ledger = BudgetLedger(ledger_config)
+    bounded_client = BudgetedClient(client, ledger)
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    recovery_runs: list[dict[str, Any]] = []
+    recovered_candidates: list[dict[str, Any]] = []
+
+    for queue_row in selected_queue:
+        source = source_by_id[queue_row["source_id"]]
+        path = _safe_diff_path(raw_root, queue_row["diff_object_key"])
+        try:
+            payload = path.read_bytes()
+        except OSError as exc:
+            raise Phase8DExecutionError("cannot read an R1 diff object") from exc
+        if hashlib.sha256(payload).hexdigest() != queue_row["diff_sha256"]:
+            raise Phase8DExecutionError("R1 diff SHA-256 mismatch")
+        if len(payload) != source["diff_bytes"]:
+            raise Phase8DExecutionError("R1 diff byte count mismatch")
+        try:
+            diff_text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise Phase8DExecutionError("R1 diff is not UTF-8") from exc
+
+        started_at = _utc_now()
+        before = (
+            ledger.input_tokens,
+            ledger.output_tokens,
+            ledger.cost_cny,
+            len(ledger.response_metadata),
+        )
+        item_candidates: list[dict[str, Any]] = []
+        pass_trace: dict[str, Any] = {}
+        error_category: str | None = None
+        try:
+            anchor, anchor_steps, anchor_tools = run_finder_pass(
+                bounded_client,
+                recovery["finder"]["model"],
+                diff_text,
+                recovery["finder"]["anchor_temperature"],
+            )
+            pass_trace["anchor"] = {
+                "status": "completed",
+                "temperature": recovery["finder"]["anchor_temperature"],
+                "steps": anchor_steps,
+                "tool_calls": anchor_tools,
+                "finding_count": len(anchor["findings"]),
+            }
+            sampler_findings: list[dict[str, Any]] = []
+            try:
+                sampler, sampler_steps, sampler_tools = run_finder_pass(
+                    bounded_client,
+                    recovery["finder"]["model"],
+                    diff_text,
+                    recovery["finder"]["sampling_temperature"],
+                )
+                sampler_findings = sampler["findings"]
+                pass_trace["sampling"] = {
+                    "status": "completed",
+                    "temperature": recovery["finder"]["sampling_temperature"],
+                    "steps": sampler_steps,
+                    "tool_calls": sampler_tools,
+                    "finding_count": len(sampler_findings),
+                }
+            except Exception as exc:
+                pass_trace["sampling"] = {
+                    "status": "degraded",
+                    "temperature": recovery["finder"]["sampling_temperature"],
+                    "error_category": _error_category(exc),
+                }
+            findings, duplicates = dedup_union(anchor["findings"], sampler_findings)
+            pass_trace["deduplicated_findings"] = duplicates
+            item_candidates = _candidate_rows(source, diff_text, findings)
+            if len(item_candidates) > queue_row["max_candidates"]:
+                raise Phase8DExecutionError("candidate ceiling exceeded")
+            status = "completed" if item_candidates else "completed_zero_candidates"
+        except Exception as exc:
+            status = "failed"
+            item_candidates = []
+            error_category = _error_category(exc)
+            pass_trace.setdefault(
+                "anchor", {"status": "failed", "error_category": error_category}
+            )
+
+        finished_at = _utc_now()
+        response_metadata = ledger.response_metadata[before[3] :]
+        delete_after = (
+            datetime.now(timezone.utc) + timedelta(days=recovery["raw_trace_days"])
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        original = base_by_queue[queue_row["queue_id"]]
+        trace = {
+            "schema_version": 1,
+            "phase_id": recovery["phase_id"],
+            "queue_id": queue_row["queue_id"],
+            "source_id": queue_row["source_id"],
+            "queue_sha256": queue_row["queue_sha256"],
+            "pr_source_sha256": queue_row["pr_source_sha256"],
+            "diff_sha256": queue_row["diff_sha256"],
+            "recovery_of_run_sha256": original["run_sha256"],
+            "prompt_sha256": PROMPT_SHA256,
+            "requested_model": recovery["finder"]["model"],
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "delete_after": delete_after,
+            "passes": pass_trace,
+            "responses": response_metadata,
+            "status": status,
+            "error_category": error_category,
+        }
+        raw_trace = _trace_bytes(trace)
+        trace_path = trace_dir / f"{queue_row['queue_id']}.json"
+        trace_path.write_bytes(raw_trace)
+        candidate_ids = sorted(row["candidate_id"] for row in item_candidates)
+        receipt = v8d.with_finder_run_hash(
+            {
+                "schema_version": 1,
+                "run_id": f"glm52-r1-{queue_row['queue_id']}",
+                "queue_id": queue_row["queue_id"],
+                "queue_sha256": queue_row["queue_sha256"],
+                "source_id": queue_row["source_id"],
+                "pr_source_sha256": queue_row["pr_source_sha256"],
+                "diff_sha256": queue_row["diff_sha256"],
+                "status": status,
+                "candidate_ids": candidate_ids,
+                "candidate_count": len(candidate_ids),
+                "provider": recovery["finder"]["provider"],
+                "model": recovery["finder"]["model"],
+                "prompt_sha256": PROMPT_SHA256,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "input_tokens": ledger.input_tokens - before[0],
+                "output_tokens": ledger.output_tokens - before[1],
+                "cost_cny": round(ledger.cost_cny - before[2], 6),
+                "trace_sha256": hashlib.sha256(raw_trace).hexdigest(),
+                "error_category": error_category,
+                "synthetic": False,
+                "run_sha256": "",
+            }
+        )
+        recovery_runs.append(receipt)
+        recovered_candidates.extend(item_candidates)
+
+    base_usage = recovery["base_usage"]
+    if base_usage["logical_calls"] + ledger.logical_calls > config["finder"]["max_calls"]:
+        raise Phase8DExecutionError("R1 plus base calls exceed the Phase 8D ceiling")
+    if base_usage["input_tokens"] + ledger.input_tokens > config["finder"]["max_input_tokens"]:
+        raise Phase8DExecutionError("R1 plus base input exceeds the Phase 8D ceiling")
+    if base_usage["output_tokens"] + ledger.output_tokens > config["finder"]["max_output_tokens"]:
+        raise Phase8DExecutionError("R1 plus base output exceeds the Phase 8D ceiling")
+    if base_usage["estimated_cost_cny"] + ledger.cost_cny > config["finder"]["max_cost_cny"]:
+        raise Phase8DExecutionError("R1 plus base cost exceeds the Phase 8D ceiling")
+
+    recovery_by_queue = {row["queue_id"]: row for row in recovery_runs}
+    effective_runs = [
+        recovery_by_queue.get(row["queue_id"], row) for row in base_runs
+    ]
+    effective_candidates = list(base_candidates) + recovered_candidates
+    vc.validate_candidate_sources(effective_candidates, plan, validated_sources)
+    v8d.validate_finder_runs(
+        effective_runs,
+        config,
+        plan,
+        validated_queue,
+        validated_sources,
+        effective_candidates,
+    )
+
+    artifact_rows = {
+        "recovery_runs_sha256": hashlib.sha256(_jsonl_bytes(recovery_runs)).hexdigest(),
+        "recovered_candidates_sha256": hashlib.sha256(
+            _jsonl_bytes(recovered_candidates)
+        ).hexdigest(),
+        "effective_runs_sha256": hashlib.sha256(_jsonl_bytes(effective_runs)).hexdigest(),
+        "effective_candidates_sha256": hashlib.sha256(
+            _jsonl_bytes(effective_candidates)
+        ).hexdigest(),
+    }
+    audit = v8d._with_hash(
+        {
+            "schema_version": 1,
+            "phase_id": recovery["phase_id"],
+            "base_run_records_sha256": run_records_sha256,
+            "base_candidate_records_sha256": candidate_records_sha256,
+            "supersessions": [
+                {
+                    "queue_id": row["queue_id"],
+                    "source_id": row["source_id"],
+                    "original_run_sha256": base_by_queue[row["queue_id"]]["run_sha256"],
+                    "recovery_run_sha256": row["run_sha256"],
+                    "recovery_status": row["status"],
+                }
+                for row in recovery_runs
+            ],
+            "usage": {
+                "logical_calls": ledger.logical_calls,
+                "input_tokens": ledger.input_tokens,
+                "output_tokens": ledger.output_tokens,
+                "estimated_cost_cny": round(ledger.cost_cny, 6),
+            },
+            "artifacts": artifact_rows,
+            "effective_failed": sum(row["status"] == "failed" for row in effective_runs),
+            "effective_candidates": len(effective_candidates),
+            "human_packets_exported": False,
+            "quality_claim_allowed": False,
+            "audit_sha256": "",
+        },
+        "audit_sha256",
+    )
+    for path in outputs:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    v8d._write_jsonl(recovery_runs_out, recovery_runs)
+    v8d._write_jsonl(recovered_candidates_out, recovered_candidates)
+    v8d._write_jsonl(effective_runs_out, effective_runs)
+    v8d._write_jsonl(effective_candidates_out, effective_candidates)
+    v8d._write_json(audit_out, audit)
+    return {
+        "status": "completed",
+        "recovery_runs": len(recovery_runs),
+        "recovered_candidates": len(recovered_candidates),
+        "effective_failed": audit["effective_failed"],
+        "effective_candidates": audit["effective_candidates"],
+        **audit["usage"],
+    }
+
+
 def _command_attest(args: argparse.Namespace) -> dict[str, Any]:
     config, plan, sources, queue = _load_inputs(args)
     if not config["authorization"]["raw_diff_read"]:
@@ -568,6 +938,28 @@ def _command_run(args: argparse.Namespace) -> dict[str, Any]:
         args.trace_dir,
         args.receipts_out,
         args.candidates_out,
+        _make_client(config),
+    )
+
+
+def _command_recover(args: argparse.Namespace) -> dict[str, Any]:
+    config, plan, sources, queue = _load_inputs(args)
+    recovery = load_recovery_config(args.recovery_config)
+    return execute_recovery(
+        config,
+        recovery,
+        plan,
+        sources,
+        queue,
+        args.raw_root,
+        args.base_runs,
+        args.base_candidates,
+        args.trace_dir,
+        args.recovery_runs_out,
+        args.recovered_candidates_out,
+        args.effective_runs_out,
+        args.effective_candidates_out,
+        args.audit_out,
         _make_client(config),
     )
 
@@ -593,6 +985,23 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--receipts-out", type=Path, required=True)
     run.add_argument("--candidates-out", type=Path, required=True)
     run.set_defaults(handler=_command_run)
+
+    recover = subparsers.add_parser("recover")
+    recover.add_argument("--config", type=Path, required=True)
+    recover.add_argument("--recovery-config", type=Path, required=True)
+    recover.add_argument("--plan", type=Path, required=True)
+    recover.add_argument("--pr-sources", type=Path, required=True)
+    recover.add_argument("--queue", type=Path, required=True)
+    recover.add_argument("--raw-root", type=Path, required=True)
+    recover.add_argument("--base-runs", type=Path, required=True)
+    recover.add_argument("--base-candidates", type=Path, required=True)
+    recover.add_argument("--trace-dir", type=Path, required=True)
+    recover.add_argument("--recovery-runs-out", type=Path, required=True)
+    recover.add_argument("--recovered-candidates-out", type=Path, required=True)
+    recover.add_argument("--effective-runs-out", type=Path, required=True)
+    recover.add_argument("--effective-candidates-out", type=Path, required=True)
+    recover.add_argument("--audit-out", type=Path, required=True)
+    recover.set_defaults(handler=_command_recover)
     return parser
 
 

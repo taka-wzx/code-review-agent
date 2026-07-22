@@ -49,6 +49,23 @@ test labels, fabricating human decisions, or claiming model quality. A merge to
 `master` is permitted by the user but remains inappropriate until the three
 real-human decisions and real quality gates are complete.
 
+### Phase 8D-R1 recovery amendment
+
+The user's instruction "authorize Phase 8D-R1, retry only the two failed
+sources once each" authorizes one recovery queue execution for exactly:
+
+- `finder-012a2b256fa9b8556da6577e` (`Textualize/rich#3468`); and
+- `finder-f7dd7b18cc83b53266eed486` (`psf/requests#6655`).
+
+R1 preserves the two original failed receipts and may add one superseding
+receipt per listed queue. It must never rewrite the v1 artifacts or execute any
+other queue. The R1 sub-budget is 40 logical calls, 120 theoretical HTTP
+attempts, 2,000,000 input tokens, 200,000 output tokens, and CNY 25; these are
+sub-ceilings inside, not additions to, the original Phase 8D budget. Request
+identity, temperatures, reasoning controls, raw boundaries, and retention stay
+unchanged. Blind packet export remains blocked until the effective 29-receipt
+view validates with zero failed sources.
+
 ## Offline workflow
 
 1. Validate the frozen authorization config.
@@ -116,6 +133,12 @@ Codex may create or modify only:
 - `verifier_training/real/phase8d-glm52-finder-runs.jsonl`
 - `verifier_training/real/phase8d-glm52-candidate-sources.jsonl`
 - `verifier_training/real/phase8d-glm52-summary.json`
+- `verifier_training/phase8d-r1-config.json`
+- `verifier_training/real/phase8d-glm52-r1-recovery-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-recovered-candidates.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-effective-runs.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-effective-candidates.jsonl`
+- `verifier_training/real/phase8d-glm52-r1-audit.json`
 
 All other provider adapters, production package files, dependencies, CI, prompts,
 sentinels, protected evaluation assets, raw diff objects, and prior result
