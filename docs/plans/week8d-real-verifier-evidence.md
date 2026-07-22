@@ -16,6 +16,7 @@ human annotation, trained-model result, API comparison, or production rollout.
 - Current task branch: `codex/week8-verifier-training`
 - Worktree: the existing isolated Week 8 worktree
 - Stable Phase 8 commit: `c96ef4e8364f4f5c9ce03a04d5d98761db2957f9`
+- Stable GLM amendment commit: `b10a280def80e5c4713918e0706063840a6aa9f5`
 
 The Phase 8A--8D offline preparation is committed at the stable commit above.
 This authorized provider amendment remains on the same isolated task branch.
@@ -189,7 +190,8 @@ command in this phase may read `eval/` or `eval/holdout/`.
   lock file changed.
 - No provider call occurred because neither accepted GLM key environment
   variable is present. No human label, adjudication, model training, protected
-  evaluation read, quality claim, push, PR, merge, or `master` change occurred.
+  evaluation read, quality claim, merge, or `master` change occurred. The task
+  branch was pushed and draft PR #4 was opened for review.
 
 - Implemented the zero-authority config, 29 deterministic non-executable Finder
   envelopes, completed/zero/failed receipt validation, blind independent packet
