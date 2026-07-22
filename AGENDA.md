@@ -220,9 +220,9 @@ manifest 的严格离线门禁。当前闭环示例仍为合成 fixture 且 `tra
 `docs/verifier-corpus.md`、`docs/verifier-transformer.md`。
 
 **当前步骤（Phase 8D，Finder 已闭门）**：R1 仅补跑原两条失败且均成功，保留原失败回执并
-生成 supersession audit；29 来源的有效视图为 137 条候选、3 个零候选、0 个失败。下一步导出
-两份盲标包，由两位真实标注员独立判断、第三人处理分歧；real freeze 前继续禁止质量结论与
-真实训练。详见
+生成 supersession audit；29 来源的有效视图为 137 条候选、3 个零候选、0 个失败。两份不同
+顺序的 137 项盲标包和空白响应模板已冻结，当前等待两位真实标注员独立完成；其后由第三人
+处理分歧。real freeze 前继续禁止质量结论与真实训练。详见
 `docs/plans/week8d-real-verifier-evidence.md` 与 `docs/verifier-real-evidence.md`。
 
 数据：

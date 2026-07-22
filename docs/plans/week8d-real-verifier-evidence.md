@@ -139,6 +139,11 @@ Codex may create or modify only:
 - `verifier_training/real/phase8d-glm52-r1-effective-runs.jsonl`
 - `verifier_training/real/phase8d-glm52-r1-effective-candidates.jsonl`
 - `verifier_training/real/phase8d-glm52-r1-audit.json`
+- `docs/verifier-annotation-rubric.md`
+- `verifier_training/real/phase8d-annotation-packet-a.json`
+- `verifier_training/real/phase8d-annotation-packet-b.json`
+- `verifier_training/real/phase8d-annotation-response-a-template.jsonl`
+- `verifier_training/real/phase8d-annotation-response-b-template.jsonl`
 
 All other provider adapters, production package files, dependencies, CI, prompts,
 sentinels, protected evaluation assets, raw diff objects, and prior result
@@ -257,6 +262,29 @@ command in this phase may read `eval/` or `eval/holdout/`.
 - The Finder completeness gate is now closed. Human packets remain unexported,
   so annotation, adjudication, real freeze, model training, and quality claims
   remain incomplete.
+
+### Human annotation packet freeze
+
+- Rubric: `docs/verifier-annotation-rubric.md`, SHA-256
+  `e54eb814406dc3bd85e18a8777fe9b78f1f37d26e0d2721b5558a431951a7210`.
+- Candidate-set SHA-256:
+  `f0e7a861b42fd41f2fd6ca120eb8bde842e8ffa4995951d6c297bed74c15907a`;
+  both packets must cover all 137 effective candidates.
+- Reviewer A is `human-reviewer-a-v1`, with order seed
+  `17283554618344652700`; reviewer B is `human-reviewer-b-v1`, with order
+  seed `18242521656380993050`.
+- Packets are real (`synthetic=false`), use created-at
+  `2026-07-22T05:04:37Z`, and must have different item order but the same
+  candidate-set and rubric hashes.
+- Response templates are intentionally invalid until a real human replaces
+  every blank label, rationale, and timestamp. Agent-generated decisions are
+  forbidden.
+- Packet A is `independent-918266436df4563aa1d6eae6`, with canonical packet
+  hash `e5689305e2682d7dcd57ff131a670656d2976d747e4397a97a5bd674edbeebf6`.
+  Packet B is `independent-8f8b764bf3502ca7406cc2d6`, with canonical
+  packet hash `f5c5ee8b0f4371a09ac42f093fc8969fb3d66fe61df42dc797d6928d2c10ee66`.
+  Their item orders differ and neither contains split, label, score,
+  prediction, or peer-label fields.
 
 - Implemented the zero-authority config, 29 deterministic non-executable Finder
   envelopes, completed/zero/failed receipt validation, blind independent packet

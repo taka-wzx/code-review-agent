@@ -95,6 +95,11 @@ SOURCE_ANNOTATION_KEYS = {
     "rationale",
 }
 RESPONSE_KEYS = {"candidate_id", "label", "rationale", "created_at"}
+INDEPENDENT_REVIEWER_IDS = {
+    "human-reviewer-a-v1",
+    "human-reviewer-b-v1",
+}
+ADJUDICATOR_ID = "human-adjudicator-c-v1"
 
 
 class Phase8DValidationError(ValueError):
@@ -561,8 +566,8 @@ def build_independent_packet(
         _fail("order_seed must be an integer")
     if not isinstance(synthetic, bool):
         _fail("synthetic must be boolean")
-    if synthetic is False:
-        _fail("real annotation packets are forbidden until human identities are assigned")
+    if synthetic is False and reviewer not in INDEPENDENT_REVIEWER_IDS:
+        _fail("real independent packets require an authorized reviewer ID")
     candidates = sorted(candidate_sources, key=lambda row: row["candidate_id"])
     order = list(candidates)
     random.Random(order_seed).shuffle(order)
@@ -602,7 +607,11 @@ def validate_packet(
     if not isinstance(packet["synthetic"], bool):
         _fail("annotation_packet.synthetic must be boolean")
     if packet["synthetic"] is False:
-        _fail("real annotation packets are forbidden until human identities are assigned")
+        expected_reviewers = (
+            INDEPENDENT_REVIEWER_IDS if mode == "independent" else {ADJUDICATOR_ID}
+        )
+        if packet["reviewer_id"] not in expected_reviewers:
+            _fail("real packet reviewer is not the authorized ID for its mode")
     candidates = {row["candidate_id"]: row for row in candidate_sources}
     items = packet["items"]
     if not isinstance(items, list) or not items:
@@ -679,6 +688,23 @@ def validate_independent_packet_pair(
         _fail("independent packets do not bind the same rubric")
     if packet_a["synthetic"] != packet_b["synthetic"]:
         _fail("independent packets mix synthetic and real provenance")
+
+
+def build_response_template(
+    packet: dict[str, Any], candidate_sources: Sequence[dict[str, Any]]
+) -> list[dict[str, str]]:
+    """Create a deliberately incomplete form for a real human to fill."""
+
+    packet = validate_packet(packet, candidate_sources)
+    return [
+        {
+            "candidate_id": item["candidate_id"],
+            "label": "",
+            "rationale": "",
+            "created_at": "",
+        }
+        for item in packet["items"]
+    ]
 
 
 def import_packet_responses(
@@ -766,8 +792,8 @@ def build_adjudication_packet(
     if len(provenance) != 1:
         _fail("independent annotations mix synthetic and real provenance")
     synthetic = next(iter(provenance))
-    if synthetic is False:
-        _fail("real adjudication packets are forbidden until a human amendment is recorded")
+    if synthetic is False and reviewer != ADJUDICATOR_ID:
+        _fail("real adjudication packets require the authorized adjudicator ID")
     if not needs_adjudication:
         _fail("no candidate requires adjudication")
     random.Random(order_seed).shuffle(needs_adjudication)
@@ -1031,6 +1057,15 @@ def _command_import_responses(args: argparse.Namespace) -> dict[str, Any]:
     return {"status": "ok", "annotations": len(annotations)}
 
 
+def _command_export_response_template(args: argparse.Namespace) -> dict[str, Any]:
+    plan = vc.load_plan(args.plan)
+    sources = vc.load_pr_sources(args.pr_sources, plan)
+    candidates = vc.load_candidate_sources(args.candidate_sources, plan, sources)
+    rows = build_response_template(_load_json(args.packet), candidates)
+    _write_jsonl(args.out, rows)
+    return {"status": "incomplete_template", "rows": len(rows)}
+
+
 def _command_export_adjudication(args: argparse.Namespace) -> dict[str, Any]:
     plan = vc.load_plan(args.plan)
     sources = vc.load_pr_sources(args.pr_sources, plan)
@@ -1132,6 +1167,14 @@ def _build_parser() -> argparse.ArgumentParser:
     response.add_argument("--responses", type=Path, required=True)
     response.add_argument("--out", type=Path, required=True)
     response.set_defaults(handler=_command_import_responses)
+
+    response_template = subparsers.add_parser("export-response-template")
+    response_template.add_argument("--plan", type=Path, required=True)
+    response_template.add_argument("--pr-sources", type=Path, required=True)
+    response_template.add_argument("--candidate-sources", type=Path, required=True)
+    response_template.add_argument("--packet", type=Path, required=True)
+    response_template.add_argument("--out", type=Path, required=True)
+    response_template.set_defaults(handler=_command_export_response_template)
 
     adjudication = subparsers.add_parser("export-adjudication")
     adjudication.add_argument("--plan", type=Path, required=True)

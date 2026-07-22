@@ -247,6 +247,78 @@ class Phase8DGlmTests(unittest.TestCase):
             v8d._sha256(v8d._without_hash(audit, "audit_sha256")),
         )
 
+    def test_real_blind_packets_accept_only_the_two_frozen_reviewers(self) -> None:
+        candidates = v8d._load_jsonl(REAL / "phase8d-glm52-r1-effective-candidates.jsonl")
+        rubric = hashlib.sha256(
+            (ROOT / "docs" / "verifier-annotation-rubric.md").read_bytes()
+        ).hexdigest()
+        packet_a = v8d.build_independent_packet(
+            candidates,
+            "human-reviewer-a-v1",
+            rubric,
+            101,
+            "2026-07-22T05:00:00Z",
+            synthetic=False,
+        )
+        packet_b = v8d.build_independent_packet(
+            candidates,
+            "human-reviewer-b-v1",
+            rubric,
+            202,
+            "2026-07-22T05:00:00Z",
+            synthetic=False,
+        )
+        v8d.validate_packet(packet_a, candidates)
+        v8d.validate_packet(packet_b, candidates)
+        v8d.validate_independent_packet_pair(packet_a, packet_b)
+        self.assertFalse(packet_a["synthetic"])
+        template = v8d.build_response_template(packet_a, candidates)
+        self.assertEqual(len(template), 137)
+        self.assertEqual(
+            {row["label"] for row in template}
+            | {row["rationale"] for row in template}
+            | {row["created_at"] for row in template},
+            {""},
+        )
+        self.assertNotEqual(
+            [item["candidate_id"] for item in packet_a["items"]],
+            [item["candidate_id"] for item in packet_b["items"]],
+        )
+        with self.assertRaisesRegex(v8d.Phase8DValidationError, "authorized"):
+            v8d.build_independent_packet(
+                candidates,
+                "unassigned-reviewer",
+                rubric,
+                303,
+                "2026-07-22T05:00:00Z",
+                synthetic=False,
+            )
+
+    def test_committed_blind_packets_are_distinct_complete_and_unlabeled(self) -> None:
+        candidates = v8d._load_jsonl(REAL / "phase8d-glm52-r1-effective-candidates.jsonl")
+        packet_a = json.loads((REAL / "phase8d-annotation-packet-a.json").read_text())
+        packet_b = json.loads((REAL / "phase8d-annotation-packet-b.json").read_text())
+        v8d.validate_packet(packet_a, candidates)
+        v8d.validate_packet(packet_b, candidates)
+        v8d.validate_independent_packet_pair(packet_a, packet_b)
+        self.assertEqual(len(packet_a["items"]), 137)
+        self.assertEqual(len(packet_b["items"]), 137)
+        self.assertNotEqual(
+            [item["candidate_id"] for item in packet_a["items"]],
+            [item["candidate_id"] for item in packet_b["items"]],
+        )
+        forbidden = {"split", "label", "score", "prediction", "peer_label"}
+        self.assertFalse(any(forbidden & set(item) for item in packet_a["items"]))
+        self.assertFalse(any(forbidden & set(item) for item in packet_b["items"]))
+        template_a = v8d._load_jsonl(
+            REAL / "phase8d-annotation-response-a-template.jsonl"
+        )
+        template_b = v8d._load_jsonl(
+            REAL / "phase8d-annotation-response-b-template.jsonl"
+        )
+        self.assertEqual(template_a, v8d.build_response_template(packet_a, candidates))
+        self.assertEqual(template_b, v8d.build_response_template(packet_b, candidates))
+
 
 if __name__ == "__main__":
     unittest.main()

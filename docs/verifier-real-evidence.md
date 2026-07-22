@@ -99,8 +99,18 @@ contains 26 completed sources, 3 zero-candidate sources, zero failures, and 137
 candidates. R1 used 13 logical calls, 32,779 input tokens, 8,825 output tokens,
 and an estimated CNY 0.509332; combined v1+R1 estimated cost is CNY 8.673152.
 The supersession audit binds both old failure hashes to the new receipts rather
-than rewriting history. Finder is now complete and the next offline action is
-to export the two blinded human packets.
+than rewriting history. Finder is now complete.
+
+Two 137-item blind packets and deliberately blank response templates are now
+frozen under `verifier_training/real/`. Packet A belongs only to
+`human-reviewer-a-v1`; packet B belongs only to `human-reviewer-b-v1`. Give the
+files to two distinct real people separately. Neither reviewer may see the
+other packet or response. Each person fills every template row with one of
+`keep`, `drop`, or `uncertain`, an evidence-based rationale, and a real UTC
+timestamp. Work on copies outside the committed repository; do not edit the
+frozen templates in place. Return the two completed JSONL files for strict
+import. No adjudication packet can be generated until both complete response
+sets exist.
 
 ## Finder receipt contract
 
