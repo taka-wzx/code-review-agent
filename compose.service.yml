@@ -21,6 +21,10 @@ x-runtime-hardening: &runtime-hardening
   read_only: true
   cap_drop:
     - ALL
+  cap_add:
+    - CHOWN
+    - SETGID
+    - SETUID
   security_opt:
     - no-new-privileges:true
   tmpfs:
@@ -51,16 +55,12 @@ services:
     <<: [*app-image, *runtime-hardening]
     profiles:
       - migration
-    entrypoint: ["crag-db"]
-    command: ["upgrade"]
+    entrypoint: ["crag-entrypoint"]
+    command: ["crag-db", "upgrade"]
     environment:
       <<: *database-environment
     secrets:
-      - source: postgres_password
-        target: postgres_password
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
+      - postgres_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,21 +78,9 @@ services:
       CRAG_SERVICE_HOST: ${CRAG_SERVICE_HOST:-0.0.0.0}
       CRAG_SERVICE_PORT: 8000
     secrets:
-      - source: postgres_password
-        target: postgres_password
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
-      - source: webhook_secret
-        target: webhook_secret
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
-      - source: service_token
-        target: service_token
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
+      - postgres_password
+      - webhook_secret
+      - service_token
     volumes:
       - service_artifacts:/var/lib/crag
       - type: bind
@@ -107,6 +95,7 @@ services:
     healthcheck:
       test:
         - CMD
+        - crag-entrypoint
         - python
         - -c
         - >-
@@ -123,7 +112,8 @@ services:
 
   worker:
     <<: [*app-image, *runtime-hardening]
-    entrypoint: ["crag-worker"]
+    entrypoint: ["crag-entrypoint"]
+    command: ["crag-worker"]
     environment:
       <<: *service-environment
       CRAG_WORKER_RUNNER: ${CRAG_WORKER_RUNNER:-real}
@@ -139,16 +129,8 @@ services:
       GLM_API_KEY_FILE: /run/secrets/provider_api_key
       ZHIPUAI_API_KEY_FILE: /run/secrets/provider_api_key
     secrets:
-      - source: postgres_password
-        target: postgres_password
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
-      - source: provider_api_key
-        target: provider_api_key
-        uid: "1000"
-        gid: "1000"
-        mode: 0400
+      - postgres_password
+      - provider_api_key
     volumes:
       - service_artifacts:/var/lib/crag
       - type: bind
@@ -159,7 +141,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "crag-worker", "--check"]
+      test: ["CMD", "crag-entrypoint", "crag-worker", "--check"]
       interval: 10s
       timeout: 5s
       retries: 6

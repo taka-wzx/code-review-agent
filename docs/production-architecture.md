@@ -264,3 +264,9 @@ context；不得把包含冻结资产的仓库根目录直接发送给 Docker da
 Compose fake-run 只证明单 Docker host、临时 Postgres 和无外部调用的工程链路；它不是云部署或
 生产容量结果。在上述条件完成前，架构只能以本地/受控 shadow 试点叙述，不能标注“生产可用”。Repair、远程
 审批执行代码、A2A 和 Verifier Training 不进入这条部署关键路径。
+
+镜像入口包含一个最小 root bootstrap，仅用于读取 Compose runtime secret、将 allow-listed secret
+复制到 `/tmp` tmpfs 并设置 `0600`，随后使用 `setpriv` 以 UID/GID `1000:1000` exec API、worker
+或显式 migration。应用进程的 capability bounding/inheritable/ambient 集为空；secret 内容不进入
+镜像层、Compose 输出、argv、日志或 trace。该 bootstrap 是容器边界的一部分，不是服务代码的 root
+运行许可。

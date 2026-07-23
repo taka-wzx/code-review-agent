@@ -342,6 +342,14 @@ registered checkout mount. The volume contains bounded job artifacts/traces,
 not credentials. Neither role mounts a host credential directory, `.env`, or
 the Docker socket. Both use a read-only root, dropped capabilities,
 `no-new-privileges`, a bounded tmpfs, SIGTERM, and a finite stop grace.
+The image starts through a minimal root-only bootstrap because Compose secret
+long syntax cannot portably set ownership across runtimes. The bootstrap reads
+only the mounted secret files, copies the allow-listed values into the `/tmp`
+tmpfs with mode `0600`, and then execs the API, worker, or migration command
+with `setpriv` as UID/GID `1000:1000`. It drops the capability bounding,
+inheritable, and ambient sets before the application starts. No service code
+runs as root, and secret contents never enter image layers, Compose output,
+argv, logs, or traces.
 The Compose stop grace is a separate outer deadline and must remain longer
 than `CRAG_SHUTDOWN_GRACE_SECONDS`; using the same deadline lets Docker send
 SIGKILL before the worker can persist its final `stopped` heartbeat and exit.

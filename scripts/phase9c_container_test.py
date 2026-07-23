@@ -295,6 +295,20 @@ print("trace-secret-scan-ok")
 """
 
 
+_RUNTIME_IDENTITY_SCAN = r"""
+from pathlib import Path
+
+status = {}
+for line in Path("/proc/1/status").read_text(encoding="ascii").splitlines():
+    key, _, value = line.partition(":")
+    if key in {"Uid", "CapEff"}:
+        status[key] = value.strip().split()[0]
+if status.get("Uid") != "1000" or status.get("CapEff") != "0000000000000000":
+    raise SystemExit(f"service process identity is not non-root/capability-free: {status}")
+print("runtime-identity-scan-ok")
+"""
+
+
 _IMAGE_HOST_PATH_SCAN = r"""
 import json
 from pathlib import Path
@@ -695,6 +709,13 @@ def _run_acceptance() -> dict[str, Any]:
             for container_id in worker_ids:
                 harness.docker_run(
                     "exec", container_id, "python", "-c", _SECRET_SCAN, timeout=30
+                )
+            harness.compose(
+                "exec", "-T", "api", "python", "-c", _RUNTIME_IDENTITY_SCAN, timeout=30
+            )
+            for container_id in worker_ids:
+                harness.docker_run(
+                    "exec", container_id, "python", "-c", _RUNTIME_IDENTITY_SCAN, timeout=30
                 )
 
             image_id = harness.compose("images", "-q", "api").stdout.strip()

@@ -386,3 +386,9 @@ PR 合并；禁止直接 push/merge/rebase `master`。合并后必须核验 merg
 - 2026-07-23：原 Compose 把 Docker stop deadline 与 worker 内部 drain deadline 设为相同值，
   Docker 可能在 worker 写入最终状态并退出前发送 SIGKILL。新增独立外层 stop grace，默认比内部
   deadline 多 5 秒；容器验收检查 worker 在该边界内以退出码 0 停止。
+- 2026-07-23: Compose implementations ignore secret `uid`/`gid`/`mode` long-syntax fields.
+  The deployment contract therefore uses short-syntax mounts plus a minimal root-only image
+  bootstrap. It copies only allow-listed runtime secrets to a `0600` tmpfs directory and
+  execs the service command as UID/GID `1000:1000` with empty capability bounding,
+  inheritable, and ambient sets. Secret values remain absent from image layers, Compose
+  output, argv, logs, and traces.

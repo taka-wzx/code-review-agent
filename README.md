@@ -201,6 +201,9 @@ Compose 的 `CRAG_CONTAINER_STOP_GRACE_PERIOD` 默认 `35s`，必须始终大于
 镜像基于 `python:3.13-slim`，只 COPY 打包元数据、`src` 与 Alembic migration 资源，
 `.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；API 和 worker 均以
 非 root 用户运行。`CRAG_WORKER_RUNNER=fake` 只用于无网络容器验收，生产缺 key 时不会静默降级。
+镜像入口的 root bootstrap 仅复制 allow-listed runtime secret 到 `/tmp` tmpfs（`0600`），随后以
+UID/GID `1000:1000` 和空 capability 集 exec 服务进程；secret 内容不会进入镜像层、Compose 输出、
+argv、日志或 trace。
 Compose 默认 `CRAG_ALLOW_LOCAL_TOKEN=false`；fake 容器脚本可显式启用临时 local token，但必须让
 API 只绑定容器 loopback 并从容器内发请求，不能把该兼容身份暴露到宿主或不可信网络。
 
