@@ -3,8 +3,9 @@
 ## 文档性质
 
 本文描述 Review 产品主线的**目标架构合同**，不是“已经生产部署”的声明。图中绿色节点已有
-本地实现或有界验证，黄色虚线节点是进入生产闭环前必须补齐的能力。Phase 9A 只冻结边界，
-不实现这些新增服务。
+实现或有界 fake/Postgres 验证，黄色虚线节点是进入生产闭环前必须补齐的能力。Phase 9C 已实现
+API/worker 分离、Postgres lease、背压和同主机容器编排基础；云部署、真实身份验证、完整审批发布、
+跨主机 artifact store 和生产 SLO 仍不在已完成范围。
 
 ## 目标链路
 
@@ -18,9 +19,10 @@ flowchart LR
 
     subgraph CONTROL["Control plane"]
         ADMIN["Organization admin<br/>repo registry · mode · budgets"]
-        API["Webhook / API gateway<br/>HMAC · auth · limits"]
-        IDEM["Idempotency + job database<br/>delivery · PR/head · state"]
-        QUEUE["Bounded async queue"]
+        API["Webhook / API<br/>HMAC · auth · quota · durable ack"]
+        IDEM["Postgres job database<br/>idempotency · state · usage"]
+        QUEUE["Lease queue<br/>SKIP LOCKED · heartbeat · fencing"]
+        HEALTH["Liveness / readiness<br/>schema · DB · worker heartbeat"]
         APPROVAL["Maintainer approval<br/>RBAC · bound nonce · payload hash"]
         PUBLISH["GitHub publisher<br/>revalidate · fail closed"]
         FEEDBACK["Feedback service<br/>finding-version binding"]
@@ -28,6 +30,7 @@ flowchart LR
 
     subgraph REVIEW["Review data plane"]
         WORKER["Review worker"]
+        ARTIFACT["Private artifact volume<br/>payload · per-attempt trace"]
         CONTEXT["Context builder<br/>registered checkout · repo rules"]
         ENGINE["Finder → dedupe/scope → Verifier"]
         FINDINGS["Finding store<br/>evidence · status · content hash"]
@@ -44,8 +47,11 @@ flowchart LR
     ADMIN -.->|"configure"| API
     ADMIN -.->|"register / shadow by default"| IDEM
     API -->|"persist before 2xx"| IDEM
+    API -->|"fsync + opaque key"| ARTIFACT
     IDEM --> QUEUE
     QUEUE --> WORKER
+    WORKER -->|"lease heartbeat / fenced result"| IDEM
+    WORKER --> ARTIFACT
     WORKER --> CONTEXT
     RULES -.->|"approved repo context"| CONTEXT
     CONTEXT --> ENGINE
@@ -70,31 +76,34 @@ flowchart LR
     METRICS -.-> DASH
     METRICS -.->|"eligible aggregate"| RULES
     APPROVAL -.->|"approve rule version"| RULES
+    API --> HEALTH
+    WORKER --> HEALTH
 
     classDef current fill:#d9ead3,stroke:#38761d,color:#1d1d1d;
     classDef target fill:#fff2cc,stroke:#bf9000,stroke-dasharray:5 5,color:#1d1d1d;
-    class PR,API,IDEM,QUEUE,WORKER,CONTEXT,ENGINE,FINDINGS,TRACE current;
+    class PR,API,IDEM,QUEUE,HEALTH,WORKER,ARTIFACT,CONTEXT,ENGINE,FINDINGS,TRACE current;
     class COMMENTS,DEV,ADMIN,APPROVAL,PUBLISH,FEEDBACK,RULES,METRICS,DASH target;
 ```
 
-“已有”表示仓库中存在相应能力，不表示生产完备。例如当前 API 使用静态 Bearer、单进程有界
-executor 和 SQLite；Finding 主要作为 Review 结果持久化，并没有独立的审批/反馈 schema。
-当前 CLI 有 GitHub publish 能力且 Week 7.5 有单次 webhook 链路证据，但服务端没有远程身份与
-审批绑定，所以图中的 publisher 仍整体标为目标能力。
+“已有”表示仓库中存在相应能力或有界验证，不表示生产完备。Phase 9C API 不执行 Review；多个
+worker 通过 Postgres lease 协调，inline payload/trace 仍依赖单 Docker host 的私有共享 volume。
+任务成功只到 `awaiting_approval`。当前 CLI 有 GitHub publish 能力且 Week 7.5 有单次 webhook
+链路证据，但服务端没有 Phase 9D 的完整审批/发布绑定，所以 publisher 仍整体标为目标能力。
 
 ## 当前实现与目标差距
 
-| 层 | 当前可核验事实 | 生产主线要求 | Phase 9A 处理 |
+| 层 | 当前可核验事实 | 生产主线要求 | Phase 9C 状态 |
 | --- | --- | --- | --- |
-| GitHub 接入 | FastAPI webhook；原始 body HMAC；仓库白名单；delivery 幂等；单次私有 draft PR live probe | GitHub App/OAuth 身份、可运营 hook、紧凑 ack、端到端 SLO | 只冻结指标和边界 |
-| 异步执行 | `ReviewService` + 单进程 bounded executor；`queued -> running -> succeeded|failed` | 可恢复队列、明确 retry/attempt、容量与 backpressure | 不重构 |
-| 数据库 | SQLite 保存 job、结果、diff hash/bytes，不保存 inline diff | 组织/仓库/身份、Finding 版本、审批、发布、反馈、指标 lineage | 不改 schema |
-| Review 引擎 | Python diff 上下文、双 Finder、去重/scope、双 Verifier、sentinel、降级/fail-open | 冻结版本、shadow 运行、仓库策略输入、SLO 与成本门禁 | Review 保持主线，不改算法 |
-| 审批 | Repair 有本地一次性审批绑定；Review 服务未暴露远程审批 | 维护者 RBAC；绑定 repo/PR/head/Finding hash 的一次性批准 | 仅定义，不复用布尔审批 |
-| 发布 | CLI 可以构建/发送 GitHub review；服务不自动发布 | shadow 默认；guarded publish 逐次重验权限和 payload | 仅定义 fail-closed 边界 |
-| 反馈 | 无生产 accept/reject 采集 | 绑定已发布 Finding 版本、结构化原因、成熟期 | 只定义事件与 KPI |
-| 记忆 | 有静态仓库约定上下文；无业务反馈记忆 | 仓库级聚合、版本化、维护者批准、可回滚 | 禁止用户个人记忆 |
-| 可观测 | `crag.observability/v1alpha1`、本地 redacted JSONL、稳定错误、tokens/部分成本 | 跨服务 trace、业务事件、完整成本、数据质量和告警 | 复用 profile，补目标事件合同 |
+| GitHub 接入 | FastAPI webhook；HMAC；仓库注册；delivery + PR/head/policy 幂等 | GitHub App/OAuth、可运营 hook、端到端 SLO | durable ack 已实现；真实 GitHub 未授权 |
+| 异步执行 | API/worker 分离；Postgres `SKIP LOCKED`；lease/heartbeat/fencing；有限 retry | 故障演练、容量模型、多区域策略 | 同主机 fake/Postgres 验证，不声称 exactly-once |
+| 数据库 | 组织级 Phase 9B schema + Phase 9C job/quota/worker/attempt 字段 | 备份、在线迁移、failover、数据保留 | 显式 Alembic migration；生产多 worker 只支持 Postgres |
+| Artifact | DB opaque key + 私有共享 payload/trace volume | 跨主机对象存储、加密/备份、清理 SLO | 单 Docker host 基础，非高可用存储 |
+| Review 引擎 | Python diff 上下文、双 Finder、去重/scope、双 Verifier、sentinel | 冻结版本、shadow 运行、仓库策略、SLO 与成本门禁 | 算法未改；调用次数有硬预算 |
+| 审批 | Finding decision/RBAC 基础；job 停在 `awaiting_approval` | 绑定 repo/PR/head/Finding hash 的完整一次性批准 | Phase 9D 实现 job transition |
+| 发布 | CLI 可构建/发送 GitHub review；服务不自动发布 | shadow 默认；guarded publish 逐次重验权限和 payload | 禁止外部写入 |
+| 反馈/记忆 | 版本绑定 feedback 基础；无生产聚合记忆 | 发布后反馈、仓库级版本化规则、可回滚 | 不进入 Phase 9C 执行路径 |
+| 可观测 | redacted canonical JSONL、稳定错误、worker heartbeat、usage | 跨服务 exporter、告警、完整成本和数据质量 | 本地 artifact + DB lineage；无生产 exporter |
+| 部署 | 非 root 单镜像；Postgres/migrate/API/scale-worker Compose；健康检查 | TLS、secret manager、镜像签名、备份、云编排 | fake-run 基础，不是云部署 |
 
 ## 核心领域对象
 
@@ -120,14 +129,18 @@ latency_slo
 unique(repository_id, pull_request_id, head_sha, review_policy_version)
 review_id
 delivery_ids[]
+submission_key / idempotency_key_hashes[]
+state = received | queued | leased | running | awaiting_approval | ...
 attempts[]
-primary_terminal_class
+lease_owner / lease_token / lease_expires_at / heartbeat_at
+attempt_count / retry_category / available_at
 result_sha256
-trace_id
+final_trace_key
 ```
 
 delivery 可以多对一映射到 Review。基础设施 retry 只增加 attempt，不增加逻辑 Review；这同时是
-completion、cost 和 duplicate webhook 指标的分母边界。
+completion、cost 和 duplicate webhook 指标的分母边界。每次 attempt 都是 at-least-once；fencing
+保证旧 lease 不能写入可见结果，但不保证已经发出的 provider 请求 exactly-once。
 
 ### Finding
 
@@ -192,15 +205,24 @@ approved_by, activated_at, rollback_to
 
 ## 请求与故障语义
 
-1. API 先执行流式大小限制、验签和事件/仓库检查，再执行幂等事务；无效请求在模型工作前结束。
-2. job 与 delivery 映射持久化成功后才能 ack；ack 响应应紧凑，不回传完整 Review。
-3. worker 从注册仓库获取精确 PR/head diff，构建有预算的 Python 上下文并执行 Review。
-4. 结果和 terminal 状态原子持久化；错误使用稳定类别，不回显 diff、路径、异常或凭据。
-5. degraded/fail-open 可以进入 shadow 审核，但 guarded publish 默认不允许自动获得发布资格；
-   是否允许维护者强制发布必须是独立、显式、可审计的策略，Phase 9A 不授权。
-6. publisher 的授权或绑定失败是 hard deny；GitHub 超时不得用盲重试制造重复 comment，必须先按
+1. API 先执行流式大小限制、验签和事件/仓库检查，再执行幂等与 quota 事务；无效请求在模型工作
+   前结束，queue/rate/model-call admission 超限返回稳定 429。
+2. inline payload 先以私有 temp + fsync + atomic replace 持久化，再把 `received` CAS 为 `queued`；
+   只有 job/submission/Webhook mapping 和 artifact lineage 都完成后才返回紧凑 202。
+3. worker 按 org quota -> repo quota -> job 的统一锁序，以 Postgres `SKIP LOCKED` 获得有期限 lease；
+   独立 heartbeat 续租，失效 token 的任何 terminal write 都被 fencing 拒绝。
+4. transient network、provider 5xx 和 rate limit 有限重试；authentication、authorization、
+   schema/policy、budget、external-command 和 unknown internal 默认不重试。重试耗尽进入
+   `dead_letter`，永久失败进入 `failed`。
+5. 获胜 attempt 把 Review、Finding、usage、audit、reservation 结算、trace key 和
+   `awaiting_approval` 在同一数据库事务提交；错误不回显 diff、路径、异常、header 或凭据。
+6. SIGTERM 使 API 停止新提交但不等待 Review；worker 停止 claim、在 grace 内继续续租，超时后
+   由 lease 恢复。`/healthz` 是进程 liveness，`/readyz` 还要求 DB/schema/worker heartbeat。
+7. degraded/fail-open 可以进入 shadow 审核，但不能自动获得发布资格；完整审批发布由 Phase 9D
+   绑定 repository/PR/head/Finding hash 和 maintainer principal 后实现。
+8. publisher 的授权或绑定失败是 hard deny；GitHub 超时不得用盲重试制造重复 comment，必须先按
    idempotency/publish receipt 查询和对账。
-7. feedback、metrics、rule update 的失败不能回滚已经发生的 GitHub publish，但必须产生可重放
+9. feedback、metrics、rule update 的失败不能回滚已经发生的 GitHub publish，但必须产生可重放
    事件和告警。
 
 ## 可观测链路
@@ -219,14 +241,26 @@ approved_by, activated_at, rollback_to
 
 ## 部署边界
 
-首个生产试点应保持单区域、少量注册仓库和 shadow 默认值，但仍需在另一个阶段完成：
+Phase 9C 提供一个非 root 应用镜像和 Postgres、显式 `migrate`、API、可 scale worker 的
+`compose.service.yml`。API/worker 不自动执行 DDL；rollout 顺序固定为 Postgres ready -> one-shot
+migration -> API/worker。数据库/Webhook/provider/local-token 内容只通过 runtime secret file 注入；
+Compose 不保存明文。API 使用 `/healthz` 编排，流量入口使用 `/readyz`，worker 检查数据库及自身
+heartbeat。CI/容器 harness 先生成只含 Dockerfile、打包元数据、migration 和 `src/` 的过滤 build
+context；不得把包含冻结资产的仓库根目录直接发送给 Docker daemon。
+容器的 stop grace 是 worker 内部 drain grace 之外的外层期限，默认多留 5 秒缓冲；部署覆盖配置时
+必须继续保持外层期限更长，避免 Docker 在 worker 写入 `stopped` heartbeat 前强制终止。
 
-- GitHub App/OAuth 与组织/仓库 RBAC；
-- TLS、secret manager、数据库备份/迁移、durable queue、并发和容量测试；
-- 审批/发布/反馈 schema 与 UI；
+首个生产试点仍应保持单区域、少量注册仓库和 shadow 默认值，并在后续阶段完成：
+
+- GitHub App/OAuth 的真实验证与安装生命周期；
+- 外部 TLS/secret manager、数据库备份/failover、镜像签名和恢复演练；
+- 跨主机 artifact/object storage、保留/删除策略和清理 SLO；
+- 真实流量下的容量、长任务 heartbeat、provider 429 与故障注入；
+- Phase 9D 审批/发布状态机、outbox/receipt 和 UI；
 - 端到端 webhook ack、review p50/p95、成本和故障演练；
 - 数据保留、删除、审计访问和隐私评审；
 - guarded publish 的独立安全评审与回滚开关。
 
-在这些条件完成前，架构只能以本地/受控 shadow 试点叙述，不能标注“生产可用”。Repair、远程
+Compose fake-run 只证明单 Docker host、临时 Postgres 和无外部调用的工程链路；它不是云部署或
+生产容量结果。在上述条件完成前，架构只能以本地/受控 shadow 试点叙述，不能标注“生产可用”。Repair、远程
 审批执行代码、A2A 和 Verifier Training 不进入这条部署关键路径。

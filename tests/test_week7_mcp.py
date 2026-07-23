@@ -61,10 +61,14 @@ class Week7McpTests(unittest.TestCase):
                     status = _structured(
                         await session.call_tool("get_review_status", {"review_id": job_id})
                     )
-                    if status["state"] in {"succeeded", "failed"}:
+                    if status["state"] in {
+                        "awaiting_approval",
+                        "failed",
+                        "dead_letter",
+                    }:
                         break
                     await anyio.sleep(0.01)
-                self.assertEqual(status["state"], "succeeded")
+                self.assertEqual(status["state"], "awaiting_approval")
 
                 resource = await session.read_resource(f"crag://reviews/{job_id}")
                 review = json.loads(resource.contents[0].text)
@@ -87,6 +91,13 @@ class Week7McpTests(unittest.TestCase):
                     )
                 )
                 self.assertFalse(pr["duplicate"])
+                replay = _structured(
+                    await session.call_tool(
+                        "review_pr", {"repository": "owner/repo", "pull_request": "8"}
+                    )
+                )
+                self.assertTrue(replay["duplicate"])
+                self.assertEqual(replay["review_id"], pr["review_id"])
 
         anyio.run(exercise)
 

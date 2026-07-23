@@ -33,6 +33,32 @@ PROVIDERS: dict[str, ProviderConfig] = {
     },
 }
 REQUEST_TIMEOUT = 120.0  # seconds per API call
+MAX_SECRET_FILE_BYTES = 4096
+
+
+def _api_key_from_environment(names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    for name in names:
+        path_value = os.environ.get(f"{name}_FILE")
+        if not path_value:
+            continue
+        try:
+            encoded = Path(path_value).read_bytes()
+        except OSError as exc:
+            raise RuntimeError(f"{name}_FILE is unavailable") from exc
+        if len(encoded) > MAX_SECRET_FILE_BYTES:
+            raise RuntimeError(f"{name}_FILE exceeds the supported size")
+        try:
+            value = encoded.decode("utf-8").strip()
+        except UnicodeDecodeError as exc:
+            raise RuntimeError(f"{name}_FILE is not UTF-8") from exc
+        if not value:
+            raise RuntimeError(f"{name}_FILE is empty")
+        return value
+    return None
 
 
 def load_dotenv() -> None:
@@ -52,7 +78,7 @@ def load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def make_client() -> tuple[OpenAI, str]:
+def make_client(*, load_env_file: bool = True) -> tuple[OpenAI, str]:
     """Build a provider-agnostic client + model id from LLM_PROVIDER env.
 
     LLM_MODEL overrides the provider's default model id -- e.g. to pin a
@@ -60,16 +86,22 @@ def make_client() -> tuple[OpenAI, str]:
     same endpoint. Note the defaults above are provider ALIASES the vendor
     can repoint at new weights; cross-run comparisons should record the
     model id (traces do) and treat alias drift as a confound."""
-    load_dotenv()
+    if load_env_file:
+        load_dotenv()
     provider = os.environ.get("LLM_PROVIDER", "deepseek").lower()
     if provider not in PROVIDERS:
         sys.exit(f"Unknown LLM_PROVIDER={provider!r}; choose one of {list(PROVIDERS)}")
     cfg = PROVIDERS[provider]
-    api_key = next((os.environ[e] for e in cfg["key_envs"] if os.environ.get(e)), None)
+    try:
+        api_key = _api_key_from_environment(cfg["key_envs"])
+    except RuntimeError as exc:
+        sys.exit(str(exc))
     if not api_key:
         envs = " or ".join(cfg["key_envs"])
-        sys.exit(f"No credentials for provider {provider!r}: set the {envs} environment variable\n"
-                 f'  PowerShell:  $env:{cfg["key_envs"][0]} = "..."')
+        sys.exit(
+            f"No credentials for provider {provider!r}: set {envs} or the corresponding "
+            "_FILE variable"
+        )
     client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
                     timeout=REQUEST_TIMEOUT, max_retries=2)
     return client, os.environ.get("LLM_MODEL") or cfg["model"]

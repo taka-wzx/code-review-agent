@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from typing import Any, Callable
 
@@ -44,10 +45,24 @@ def create_mcp(
         return service.submit_diff(repository, diff, principal=principal())
 
     @mcp.tool()
-    def review_pr(repository: str, pull_request: str) -> dict[str, Any]:
+    def review_pr(
+        repository: str,
+        pull_request: str,
+        head_sha: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         """Queue a GitHub pull request review against a registered repository."""
+        if head_sha is None and idempotency_key is None:
+            digest = hashlib.sha256(
+                f"{repository.casefold()}\0{pull_request}".encode("utf-8")
+            ).hexdigest()
+            idempotency_key = f"mcp-compat:{digest}"
         job, duplicate = service.submit_pr(
-            repository, pull_request, principal=principal()
+            repository,
+            pull_request,
+            principal=principal(),
+            head_sha=head_sha,
+            idempotency_key=idempotency_key,
         )
         return {**job, "duplicate": duplicate}
 
@@ -77,7 +92,8 @@ def create_mcp(
             f"Review {change!r} in registered repository {repository!r}, focusing on "
             f"{focus!r}. Use review_pr for a PR number or exact GitHub PR URL; "
             "otherwise use review_diff with a unified diff. Poll get_review_status "
-            "until succeeded or failed. Do not request unregistered paths, commands, "
+            "until awaiting_approval, failed, or dead_letter. Do not request unregistered "
+            "paths, commands, "
             "credentials, posting, approval, or repository mutation."
         )
 

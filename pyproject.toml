@@ -46,6 +46,7 @@ crag = "code_review_agent.agent:main"
 crag-db = "code_review_agent.database:main"
 crag-mcp = "code_review_agent.mcp_server:main"
 crag-service = "code_review_agent.service:main"
+crag-worker = "code_review_agent.worker:main"
 
 # src/ layout: only the code_review_agent package is installable. The eval
 # harness (run_eval/repeat_eval/judge/replay_verifier/bench_verifier/
