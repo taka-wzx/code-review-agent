@@ -267,7 +267,7 @@ Compose fake-run 只证明单 Docker host、临时 Postgres 和无外部调用�
 
 镜像入口包含一个最小 root bootstrap，仅用于读取 Compose runtime secret、将 allow-listed secret
 复制到 `/tmp` tmpfs 并设置 `0600`；bootstrap 仅保留 `CHOWN`、`DAC_READ_SEARCH`、`SETGID`、
-`SETPCAP`、`SETUID`，随后使用 `setpriv` 以 UID/GID `1000:1000` exec API、worker
+`KILL`、`SETPCAP`、`SETUID`，随后使用 `setpriv` 以 UID/GID `1000:1000` exec API、worker
 或显式 migration。应用进程的 capability bounding/inheritable/ambient 集为空；secret 内容不进入
 镜像层、Compose 输出、argv、日志或 trace。该 bootstrap 是容器边界的一部分，不是服务代码的 root
 运行许可。

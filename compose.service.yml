@@ -24,6 +24,7 @@ x-runtime-hardening: &runtime-hardening
   cap_add:
     - CHOWN
     - DAC_READ_SEARCH
+    - KILL
     - SETGID
     - SETPCAP
     - SETUID

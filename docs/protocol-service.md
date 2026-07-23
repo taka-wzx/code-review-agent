@@ -345,7 +345,7 @@ the Docker socket. Both use a read-only root, dropped capabilities,
 The image starts through a minimal root-only bootstrap because Compose secret
 long syntax cannot portably set ownership across runtimes. The bootstrap reads
 only the mounted secret files, copies the allow-listed values into the `/tmp`
-tmpfs with mode `0600`, and receives only `CHOWN`, `DAC_READ_SEARCH`, `SETGID`,
+tmpfs with mode `0600`, and receives only `CHOWN`, `DAC_READ_SEARCH`, `KILL`, `SETGID`,
 `SETPCAP`, and `SETUID` during bootstrap. It then execs the API, worker, or migration
 command with `setpriv` as UID/GID `1000:1000`. It drops the capability bounding,
 inheritable, and ambient sets before the application starts. No service code

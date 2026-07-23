@@ -389,7 +389,7 @@ PR 合并；禁止直接 push/merge/rebase `master`。合并后必须核验 merg
 - 2026-07-23: Compose implementations ignore secret `uid`/`gid`/`mode` long-syntax fields.
   The deployment contract therefore uses short-syntax mounts plus a minimal root-only image
   bootstrap. It copies only allow-listed runtime secrets to a `0600` tmpfs directory and
-  receives only `CHOWN`, `DAC_READ_SEARCH`, `SETGID`, `SETPCAP`, and `SETUID` during
+  receives only `CHOWN`, `DAC_READ_SEARCH`, `KILL`, `SETGID`, `SETPCAP`, and `SETUID` during
   bootstrap, then
   execs the service command as UID/GID `1000:1000` with empty capability bounding,
   inheritable, and ambient sets. Secret values remain absent from image layers, Compose

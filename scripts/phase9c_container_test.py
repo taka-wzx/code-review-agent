@@ -298,16 +298,31 @@ print("trace-secret-scan-ok")
 _RUNTIME_IDENTITY_SCAN = r"""
 from pathlib import Path
 
-status = {}
-for line in Path("/proc/1/status").read_text(encoding="ascii").splitlines():
-    key, _, value = line.partition(":")
-    if key in {"Uid", "CapEff", "CapBnd", "CapInh", "CapAmb"}:
-        status[key] = value.strip().split()[0]
 capabilities = ("CapEff", "CapBnd", "CapInh", "CapAmb")
-if status.get("Uid") != "1000" or any(
-    status.get(capability) != "0000000000000000" for capability in capabilities
-):
-    raise SystemExit(f"service process identity is not non-root/capability-free: {status}")
+markers = ("crag-service", "crag-worker")
+matches = []
+for process in Path("/proc").glob("[0-9]*"):
+    try:
+        command = process.joinpath("cmdline").read_bytes().replace(b"\0", b" ").decode(
+            "utf-8", errors="replace"
+        )
+        if not any(marker in command for marker in markers):
+            continue
+        status = {}
+        for line in process.joinpath("status").read_text(encoding="ascii").splitlines():
+            key, _, value = line.partition(":")
+            if key in {"Uid", *capabilities}:
+                status[key] = value.strip().split()[0]
+        matches.append((str(process), command, status))
+    except (FileNotFoundError, PermissionError):
+        continue
+if not matches:
+    raise SystemExit("durable service process was not found")
+for process, command, status in matches:
+    if status.get("Uid") != "1000" or any(
+        status.get(capability) != "0000000000000000" for capability in capabilities
+    ):
+        raise SystemExit(f"service process identity is not non-root/capability-free: {process} {command} {status}")
 print("runtime-identity-scan-ok")
 """
 
