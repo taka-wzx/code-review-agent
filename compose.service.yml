@@ -56,7 +56,11 @@ services:
     environment:
       <<: *database-environment
     secrets:
-      - postgres_password
+      - source: postgres_password
+        target: postgres_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,9 +78,21 @@ services:
       CRAG_SERVICE_HOST: ${CRAG_SERVICE_HOST:-0.0.0.0}
       CRAG_SERVICE_PORT: 8000
     secrets:
-      - postgres_password
-      - webhook_secret
-      - service_token
+      - source: postgres_password
+        target: postgres_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: webhook_secret
+        target: webhook_secret
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: service_token
+        target: service_token
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
     volumes:
       - service_artifacts:/var/lib/crag
       - type: bind
@@ -123,8 +139,16 @@ services:
       GLM_API_KEY_FILE: /run/secrets/provider_api_key
       ZHIPUAI_API_KEY_FILE: /run/secrets/provider_api_key
     secrets:
-      - postgres_password
-      - provider_api_key
+      - source: postgres_password
+        target: postgres_password
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
+      - source: provider_api_key
+        target: provider_api_key
+        uid: "1000"
+        gid: "1000"
+        mode: 0400
     volumes:
       - service_artifacts:/var/lib/crag
       - type: bind

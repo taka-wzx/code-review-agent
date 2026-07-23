@@ -180,6 +180,9 @@ class Phase9CPostgresTests(unittest.TestCase):
         assert recovered is not None
         self.assertEqual(recovered.job_id, first.job_id)
         self.assertNotEqual(recovered.lease_token, first.lease_token)
+        self.store.trace_path_for_lease(first).write_text(
+            '{"trace":"stale"}\n', encoding="utf-8"
+        )
         with self.assertRaises(LeaseLost):
             self.store.complete(
                 first,
