@@ -306,6 +306,8 @@ for process in Path("/proc").glob("[0-9]*"):
         command = process.joinpath("cmdline").read_bytes().replace(b"\0", b" ").decode(
             "utf-8", errors="replace"
         )
+        if "docker-init" in command or "tini" in command:
+            continue
         if not any(marker in command for marker in markers):
             continue
         status = {}
