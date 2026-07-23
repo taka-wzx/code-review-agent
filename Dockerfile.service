@@ -43,9 +43,12 @@ RUN python -m pip install -r requirements.lock \
         '    [ -n "$source" ] || continue' \
         '    [ -f "$source" ] || continue' \
         '    target="$secret_dir/${variable%_FILE}"' \
-        '    cp "$source" "$target"' \
-        '    chown appuser:appuser "$target"' \
-        '    chmod 0600 "$target"' \
+        '    temporary="$target.$$"' \
+        '    rm -f "$temporary"' \
+        '    cp "$source" "$temporary"' \
+        '    chmod 0600 "$temporary"' \
+        '    chown appuser:appuser "$temporary"' \
+        '    mv -f "$temporary" "$target"' \
         '    export "$variable=$target"' \
         '  done' \
         '  if [ "$#" -eq 0 ]; then set -- crag-service; elif [ "${1#-}" != "$1" ]; then set -- crag-service "$@"; fi' \
