@@ -7,25 +7,60 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1 \
     CRAG_SERVICE_HOST=0.0.0.0 \
     CRAG_SERVICE_PORT=8000 \
-    CRAG_STATE_DIR=/state
+    CRAG_STATE_DIR=/var/lib/crag/state \
+    CRAG_JOB_DATA_DIR=/var/lib/crag/jobs \
+    CRAG_TRACE_DIR=/var/lib/crag/traces
 
 WORKDIR /app
 
-COPY pyproject.toml README.md LICENSE ./
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+        /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Retries=5 update \
+    && apt-get install --yes --no-install-recommends ca-certificates gh git util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml requirements.lock README.md LICENSE ./
 COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
 
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends ca-certificates gh git \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install . \
-    && useradd --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir /state \
-    && chown appuser:appuser /state
+RUN python -m pip install -r requirements.lock \
+    && python -m pip install . --no-deps \
+    && groupadd --gid 1000 appuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /var/lib/crag/state /var/lib/crag/jobs /var/lib/crag/traces \
+    && chown -R appuser:appuser /var/lib/crag \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'set -eu' \
+        'if [ "$(id -u)" -eq 0 ]; then' \
+        '  secret_dir=/tmp/crag-secrets' \
+        '  mkdir -p "$secret_dir"' \
+        '  chown root:root "$secret_dir"' \
+        '  chmod 0711 "$secret_dir"' \
+        '  for variable in CRAG_DATABASE_PASSWORD_FILE CRAG_WEBHOOK_SECRET_FILE CRAG_SERVICE_TOKEN_FILE DEEPSEEK_API_KEY_FILE GLM_API_KEY_FILE ZHIPUAI_API_KEY_FILE; do' \
+        '    source=$(printenv "$variable" 2>/dev/null || true)' \
+        '    [ -n "$source" ] || continue' \
+        '    [ -f "$source" ] || continue' \
+        '    target="$secret_dir/${variable%_FILE}"' \
+        '    temporary="$target.$$"' \
+        '    rm -f "$temporary"' \
+        '    cp "$source" "$temporary"' \
+        '    chmod 0600 "$temporary"' \
+        '    chown appuser:appuser "$temporary"' \
+        '    mv -f "$temporary" "$target"' \
+        '    export "$variable=$target"' \
+        '  done' \
+        '  if [ "$#" -eq 0 ]; then set -- crag-service; elif [ "${1#-}" != "$1" ]; then set -- crag-service "$@"; fi' \
+        '  exec setpriv --reuid=1000 --regid=1000 --init-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all -- "$@"' \
+        'fi' \
+        'exec "$@"' \
+        > /usr/local/bin/crag-entrypoint \
+    && chmod 0755 /usr/local/bin/crag-entrypoint
 
-USER appuser
+USER root
 
 EXPOSE 8000
-ENTRYPOINT ["crag-service"]
-CMD ["--help"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["crag-entrypoint"]
+CMD ["crag-service"]

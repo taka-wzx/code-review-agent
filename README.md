@@ -4,11 +4,11 @@
 Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。产品通过开发者 accept/reject 反馈，
 衡量审查噪声、人工复核时间、可靠性和成本。
 
-> **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、异步
-> job、组织/用户/RBAC、仓库隔离、API token 摘要、Finding 审批/反馈基础、Alembic migration 与
-> canonical trace；真实 OAuth/OIDC 验签服务、完整审批 UI、真实 GitHub guarded publish、指标
-> 聚合和生产部署仍未实现。历史评测主要来自单项目人工植入缺陷、确定性 fakes 或 synthetic
-> 流程，应读作工程证据，不是生产收益。项目位于私有 GitHub 仓库，已发布 v0.1.0。
+> **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、组织/
+> 用户/RBAC、Postgres 持久 job lease、API/worker 分离、背压与限流、Finding 审批/反馈基础、
+> Alembic migration 和 canonical trace；真实 OAuth/OIDC 验签服务、完整审批 UI、真实 GitHub
+> guarded publish、跨主机 artifact store、指标聚合和云部署仍未实现。历史评测和 Phase 9C
+> 容量检查来自单项目数据、确定性 fakes 或 synthetic 流程，应读作工程证据，不是生产收益。
 
 ## 产品主线
 
@@ -55,7 +55,7 @@ repository/PR/head SHA、Finding 内容哈希和一次性审批。反馈记忆�
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
 - **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
 - **Canonical trace/span**（`observability.py`、`redaction.py`、`tracelog.py`，Week 6 Phase 2）：每次 Agent Run、阶段、LLM、工具、策略、审批、沙箱、checkpoint 和终态使用同一 `crag.observability/v1alpha1` trace；记录 provider/model、可用 token、整数 micro-USD、时延、工具与 fail-open/degraded 计数；原始 Prompt、diff、工具参数/结果、stdout/stderr、异常消息和主机绝对路径在序列化前统一剔除或脱敏；旧 flat JSONL 读取兼容保留到 0.2.x
-- **HTTP / GitHub Webhook / MCP 服务**（Week 7 + Phase 9B）：FastAPI 与官方 MCP SDK 共用异步任务核心；可替换 AuthBackend、短期 API token 摘要、组织/仓库 RBAC、Webhook HMAC、Host/Origin 防 DNS rebinding、版本化数据库和 canonical trace 资源形成统一边界
+- **HTTP / GitHub Webhook / MCP 服务**（Week 7 + Phase 9B/9C）：FastAPI 与官方 MCP SDK 共用持久任务接口；API 只验签、授权、限流和持久提交，独立 worker 通过 Postgres lease/fencing 执行 Review；可替换 AuthBackend、短期 API token 摘要、组织/仓库 RBAC、Webhook HMAC、Host/Origin 防 DNS rebinding、版本化数据库和 canonical trace 资源形成统一边界
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）
 - **敏感文件防护**：`read_file` 黑名单拦截 `.env*` / `*.pem` / `*.key` / `id_rsa*` / `credentials*` 等；搜索与遍历跳过 vcs/venv/缓存目录；git/gh 子进程 list 形式无 shell 注入，`-` 开头参数注入有校验
@@ -143,7 +143,7 @@ $env:DEEPSEEK_API_KEY = "sk-..."        # glm 则设 $env:GLM_API_KEY（或 ZHIP
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe scripts\verify.py --eval-assets
+.\.venv\Scripts\python.exe scripts\verify.py
 ```
 
 **Linux / macOS：**
@@ -151,27 +151,63 @@ python -m venv .venv
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -e ".[dev]"
-./.venv/bin/python scripts/verify.py --eval-assets
+./.venv/bin/python scripts/verify.py
 ```
 
-`scripts/verify.py` 依次执行：Ruff lint → 单测+golden 测试（带分支覆盖率）→ 覆盖率门禁（85%）→ mypy → `python -m code_review_agent --help` 冒烟 → `crag --help` 冒烟 →（`--eval-assets` 时）eval/holdout 资产三方一致性校验。任一步失败即退出非零。
+`scripts/verify.py` 依次执行：Ruff lint → 单测+golden 测试（带分支覆盖率）→ 覆盖率门禁（85%）→ mypy → `python -m code_review_agent --help` 冒烟 → `crag --help` 冒烟。任一步失败即退出非零。Phase 9C 的本地与 CI 验证均不读取冻结评测目录。
 
 ## Docker
 
 ```bash
-docker build -t code-review-agent .
+python scripts/phase9c_container_test.py --prepare-context /tmp/crag-build-context
+docker build -t code-review-agent /tmp/crag-build-context
 docker run --rm code-review-agent --help
 
-# 独立服务镜像（默认只做 help smoke；运行需要显式注入服务配置）
-docker build -f Dockerfile.service -t code-review-agent-service .
+# 同一非 root 服务镜像可运行 API、migration 或 worker 角色
+docker build -f Dockerfile.service -t code-review-agent-service /tmp/crag-build-context
 docker run --rm code-review-agent-service --help
 ```
 
-镜像基于 `python:3.13-slim`，只 COPY 打包元数据、`src` 与 Alembic migration 资源，
-`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；容器内以非 root
-用户启动 `crag` CLI。
+过滤 context 只复制 Dockerfile、打包元数据、Alembic migration 和 `src/`；不要用仓库根目录作为
+build context，否则 Docker 会遍历本阶段禁止访问的冻结目录。
+服务镜像先按 `requirements.lock` 安装冻结版本，再用 `--no-deps` 安装项目包。
 
-## Phase 9B 身份、RBAC 与数据库
+`compose.service.yml` 提供 Postgres、显式 one-shot migration、API 和可横向扩展的 worker。
+先在仓库外创建仅当前用户可读的 Postgres password、Webhook secret 和 provider-key 文件，再把
+它们的**路径**传给 Compose；文件内容不会进入 Compose、镜像层或命令行：
+
+```powershell
+$env:CRAG_POSTGRES_PASSWORD_FILE = "<private-path>\postgres_password"
+$env:CRAG_WEBHOOK_SECRET_FILE = "<private-path>\webhook_secret"
+$env:CRAG_SERVICE_TOKEN_FILE = "<private-path>\local_service_token"
+$env:CRAG_PROVIDER_API_KEY_FILE = "<private-path>\provider_api_key"
+$env:CRAG_REPOSITORY_ROOT = "<private-registered-checkout-root>"
+$env:CRAG_REPOSITORIES_JSON = '{"owner/repo":"/repositories/repo"}'
+$env:CRAG_BUILD_CONTEXT = "<filtered-build-context>"
+
+docker compose -f compose.service.yml up -d postgres
+docker compose -f compose.service.yml --profile migration run --rm migrate
+docker compose -f compose.service.yml up -d --scale worker=2 api worker
+```
+
+migration 必须显式成功后才能启动 API/worker；二者只检查 exact Alembic head，不执行 DDL。
+Compose 的 API healthcheck 使用 `/healthz`，流量入口应使用 `/readyz`；worker healthcheck 通过
+`crag-worker --check` 验证数据库和新鲜 heartbeat。注册 checkout 只读挂载，job payload 与最终
+trace 使用单 Docker host 上的私有 named volume。不要挂载 `.env`、宿主凭据目录或 Docker socket。
+Compose 的 `CRAG_CONTAINER_STOP_GRACE_PERIOD` 默认 `35s`，必须始终大于 worker 内部
+`CRAG_SHUTDOWN_GRACE_SECONDS`，给 stopped heartbeat 和进程退出留出缓冲，避免 Docker 在 drain
+边界直接发送 SIGKILL。
+
+镜像基于 `python:3.13-slim`，只 COPY 打包元数据、`src` 与 Alembic migration 资源，
+`.dockerignore` 排除 `.env*`、密钥文件、VCS 元数据、本地 trace 与评测结果；API 和 worker 均以
+非 root 用户运行。`CRAG_WORKER_RUNNER=fake` 只用于无网络容器验收，生产缺 key 时不会静默降级。
+镜像入口的 root bootstrap 仅复制 allow-listed runtime secret 到 `/tmp` tmpfs（`0600`），随后以
+UID/GID `1000:1000` 和空 capability 集 exec 服务进程；secret 内容不会进入镜像层、Compose 输出、
+argv、日志或 trace。
+Compose 默认 `CRAG_ALLOW_LOCAL_TOKEN=false`；fake 容器脚本可显式启用临时 local token，但必须让
+API 只绑定容器 loopback 并从容器内发请求，不能把该兼容身份暴露到宿主或不可信网络。
+
+## Phase 9C 持久服务、身份与数据库
 
 服务端生产数据现以 organization 为租户根，包含 users、memberships、repositories、
 repository access、review jobs、Finding、feedback、approval、audit、webhook delivery 和
@@ -180,34 +216,42 @@ Review/feedback；maintainer 可对获权仓库批准或拒绝 Finding；org_adm
 策略和审计，但不能代替 maintainer 审批具体 Finding。REST 与 MCP 使用同一授权函数，跨组织
 资源 ID 按不存在处理。
 
-生产数据库推荐 Postgres（Psycopg 3），SQLite 只用于本地开发和单机测试。Alembic 是唯一 schema
-版本来源，migration 必须作为独立部署步骤先运行；service worker 只检查当前 revision，未到 head
-时拒绝启动，绝不在多 worker startup 中执行 DDL：
+生产多 worker 路径要求 Postgres（Psycopg 3），SQLite 只用于本地开发和单机兼容测试。Alembic
+是唯一 schema 版本来源，migration 必须作为独立部署步骤先运行；API/worker 只检查当前 revision，
+未到 head 时拒绝启动，绝不在 startup 中执行 DDL。API 在 payload/reference 持久化后返回 202，
+worker 通过 `FOR UPDATE SKIP LOCKED`、有期限 lease、heartbeat 和 fencing token 原子 claim：
 
 ```powershell
-$env:CRAG_DATABASE_URL = "postgresql+psycopg://user:password@db/crag"
+$env:CRAG_DATABASE_URL = "postgresql+psycopg://user@db/crag"
+$env:CRAG_DATABASE_PASSWORD_FILE = "<private-password-file>"
 crag-db upgrade
 crag-db check
 crag-service
+crag-worker
 ```
+
+新 job 状态为 `received -> queued -> leased -> running -> awaiting_approval`；`approved`、
+`published` 和 `declined` 仅冻结接口，由 Phase 9D 实现。任务执行是 at-least-once：worker 死亡后
+lease 超时可由另一 worker 以新 token 重试，旧 token 不能提交结果；因此最多有一个可见终态，
+但不能声称模型调用 exactly-once。本阶段仍禁止所有外部写操作。
 
 本地 SQLite 可省略 `CRAG_DATABASE_URL`，但仍应先执行 `crag-db upgrade`。若保留 Phase 9B 的
 local-development static token 兼容入口，必须同时显式设置 `CRAG_ALLOW_LOCAL_TOKEN=true` 和
-`CRAG_SERVICE_TOKEN`，只允许绑定 `127.0.0.1`、`localhost` 或 `::1`；只有本地/测试空库可再
-显式设置 `CRAG_AUTO_MIGRATE=true`。默认远程 bearer 由数据库中的短期 API credential 验证，
+`CRAG_SERVICE_TOKEN_FILE`，只允许绑定 `127.0.0.1`、`localhost` 或 `::1`。API 会拒绝
+`CRAG_AUTO_MIGRATE`；本地/测试空库同样必须显式运行 `crag-db upgrade`。默认远程 bearer 由数据库中的短期 API credential 验证，
 token 明文只在创建响应出现一次，数据库仅保存 SHA-256 摘要、prefix、有效期和吊销时间。
 
-Phase 9B 没有实现真实 OAuth flow 或联网 JWKS discovery。生产 OIDC/JWT 通过可替换
+Phase 9C 仍没有实现真实 OAuth flow 或联网 JWKS discovery。生产 OIDC/JWT 通过可替换
 `VerifiedOIDCJWTAuthBackend` 接入，部署方必须在映射 Principal 前完成 signature、issuer、
 audience、expiry 和 key rotation 验证。完整 API、配置、安全和迁移说明见
 [`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
-[`docs/plans/phase9b-identity-rbac.md`](docs/plans/phase9b-identity-rbac.md)。
+[`docs/plans/phase9c-durable-service.md`](docs/plans/phase9c-durable-service.md)。
 
-> **验证状态如实声明**：Phase 9A 没有在本机重新 build 应用镜像。当前 `origin/master`
+> **历史验证锚点**：Phase 9A 当时没有在本机重新 build 应用镜像；其 master
 > `acc0dcce077113dcbbde2478abd53cbb09a4ef2e` 对应 GitHub Actions run
 > [`29894645345`](https://github.com/taka-wzx/code-review-agent/actions/runs/29894645345)，
 > 其 `container-smoke` 与其余 6 个 job 均成功。该 job 证明 CI 中的镜像 build/help smoke，
-> 不证明容器内真实 Webhook/REST/MCP 链路或生产部署。
+> 不证明 Phase 9C 容器链路或生产部署，不能替代本任务的新 CI 结果。
 
 ## 测试与质量
 
@@ -223,7 +267,7 @@ audience、expiry 和 key rotation 验证。完整 API、配置、安全和迁�
 | CLI 冒烟 | `python -m code_review_agent --help` 与 `crag --help` 均正常 |
 | 评测资产一致性 | **本轮未运行**：Phase 9A 明确禁止读取 `eval/` / `eval/holdout/` |
 
-测试策略三层，均不需要外部模型 key：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖安全、Repair、协议服务、Verifier 训练数据合同，以及并发/超时语义。当前 master CI 矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装校验与容器冒烟；精确锚点是 `acc0dcce077113dcbbde2478abd53cbb09a4ef2e` / Actions run `29894645345`，7 个 job 全部成功。
+测试策略三层，均不需要外部模型 key：**golden 测试**用 FakeClient 锁定请求序列与 trace 事件流（行为保持重构的安全网，Week 2 里把并行编排 patch 成串行执行以继续锁协议语义）；**纯函数单测**覆盖校验/合并/去重/指标/哨兵分类（含冻结负例）；**回归测试**覆盖安全、Repair、协议服务、Verifier 训练数据合同，以及并发/超时语义。CI 基础矩阵为 Linux 3.10–3.13 + Windows 3.11，外加 lockfile 安装与过滤-context 容器 smoke；Phase 9C 又增加真实 Postgres migration/lease/50-concurrent-submit load gate 和 Compose fake-run gate。其结果必须以本任务 PR 和合并后 master 的实际 Actions 结果为准，不能在运行前预报通过。
 
 ## 评测
 
@@ -353,32 +397,31 @@ Phase 4 使用本地 content-addressed 镜像串行执行 12 个无网络、只�
 `repository_digest` 不是已向 registry 验证的 manifest digest；结果交叉校验器兼作全清
 验收门，因此诚实记录的失败仍会保留在不可变报告中，但验收命令会非零退出。
 
-### 标准协议与服务化（Week 7）
+### 标准协议与持久服务（Week 7 + Phase 9B/9C）
 
-Week 7 新增 `crag-service`（FastAPI + GitHub Webhook + MCP Streamable HTTP）和
-`crag-mcp`（MCP stdio）。两种协议共用 `ReviewService`：提交只引用管理员预注册的
-`owner/repo`，任务异步经过 `queued -> running -> succeeded|failed`，SQLite 保存幂等
-身份/状态/结果但不保存 inline diff，trace 继续使用 Week 6 的 canonical JSONL。
+Week 7 建立了 `crag-service`（FastAPI + GitHub Webhook + MCP Streamable HTTP）与 `crag-mcp`
+协议边界；Phase 9B 增加组织身份、RBAC 和 Alembic schema；Phase 9C 把执行面拆成只做 durable
+submit/read 的 API 与独立 `crag-worker`。生产队列协调只依赖 Postgres：worker 以
+`SKIP LOCKED` claim、lease/heartbeat 续租和 fencing token 提交结果，进程死亡后由 lease 到期恢复，
+不再以启动扫库把其他进程的任务标失败。
 
-HTTP `/v1/*` 和 `/mcp` 强制 Bearer；Webhook 在 JSON 解析前按原始 body 校验
-`X-Hub-Signature-256`；MCP HTTP 还由官方 SDK 校验 Host/Origin。`X-GitHub-Delivery`
-是幂等键，重放不会触发第二次 review。MCP 暴露 `review_diff`、`review_pr`、
-`get_review_status`，两类 review/trace Resource 和 `review_change` Prompt。
-Webhook 在流式读取期间执行 1 MiB 上限，验证错误不回显 diff；每个状态目录由单一
-进程独占，提交落库与 executor 入队相对 shutdown 原子化，避免任务或 delivery ID 搁浅。
-`approve_patch` 有意不暴露：现有 Repair 审批是一次性且绑定精确 checkpoint/candidate，
-在没有远程身份与 pending-operation 持久绑定前，通用审批 API 会削弱该不变量。A2A 也按
-原路线图推迟到单 Agent 服务与 MCP 有运行证据之后。
+新任务依次经过 `received -> queued -> leased -> running -> awaiting_approval`。Webhook delivery
+摘要和 PR/head/policy submission key 阻止逻辑重复；REST `Idempotency-Key` 同 key/同 payload 返回
+原 job，不同 payload 返回稳定 409。组织和仓库各自限制排队数、并发数、固定窗口提交率与月度
+模型调用预算；超限返回稳定 429。API 收到 SIGTERM 后停止新提交但不等待 Review，worker 停止
+claim、在 grace 内继续 heartbeat，未完成任务最终由 lease 恢复。
 
-配置、REST/MCP 示例、安全边界、GitHub Webhook 和容器说明见
-[`docs/protocol-service.md`](docs/protocol-service.md)，冻结合同见
-[`docs/plans/week7-protocol-service.md`](docs/plans/week7-protocol-service.md)。Week 7.5 又以
-一个私有草稿 PR、临时 GitHub Webhook、官方 `gh` 和 `deepseek-v4-pro` 完成了有界真实链路：
-唯一任务成功，重投保持同一 review 且未增加模型调用，无效签名返回 401。初次投递也暴露了
-一次 GitHub 侧 10 秒超时，但现有证据不足以确定根因，需先补充端到端时序埋点再设计修复；
-推送后的 CI 已在 Ubuntu 验证锁文件安装及 CLI/服务镜像 build/help smoke，但未在容器中执行
-真实协议链路；MCP-over-HTTP 与远程 OAuth 仍未验证，因此不声称生产可用。完整脱敏证据见
-[`docs/week7-5-live-validation.md`](docs/week7-5-live-validation.md)。
+HTTP `/v1/*` 和 `/mcp` 仍强制 Principal；Webhook 仍在 JSON 解析前校验原始 body HMAC；MCP
+HTTP 仍校验 Host/Origin。`/healthz` 只表示 API 进程存活，`/readyz` 还要求 schema/数据库正常及
+至少一个新鲜 worker heartbeat。inline diff 与最终 canonical trace 使用数据库 lineage 指向的私有
+artifact volume，不进入业务表；单 Docker host 共享卷不是多主机对象存储，也不构成 exactly-once
+证明。
+
+配置、REST/MCP、安全边界、lease/retry、配额、Webhook 和容器说明见
+[`docs/protocol-service.md`](docs/protocol-service.md)，Phase 9C 冻结合同见
+[`docs/plans/phase9c-durable-service.md`](docs/plans/phase9c-durable-service.md)。Week 7.5 的单次私有
+链路证据仍只是历史有界探针；Phase 9C 容器门禁使用 fake runner 和本地 Postgres，不调用真实
+GitHub、模型或 OAuth，因此不声称生产可用。
 
 ### Verifier 后训练基础（第 8 阶段）
 
@@ -477,9 +520,23 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 - **Week 8 真实证据准备（Phase 8D）**：冻结并执行 GLM-5.2 双温度 Finder；R1 后 29 个
   来源的有效视图为 137 条候选、3 个零候选、0 个失败。synthetic 双标/仲裁/freeze 已离线
   闭环并正确保持非 trainable；双人真人盲标、第三位真人仲裁和真实模型质量验证仍未完成
+- **Phase 9A/9B 产品与身份基础**：收敛 Review 业务闭环和 KPI 合同；新增 organization/user/
+  repository lineage、非单调 RBAC、短期 credential 摘要、审计、Finding feedback/decision、
+  Alembic migration 和 Postgres 生产方言边界
+- **Phase 9C 持久服务基础**：API/worker 分离，Postgres 原子 claim、lease/heartbeat/fencing、
+  重试分类、幂等 submission、组织/仓库 quota、显式 migration、同主机 artifact volume 和
+  API + scale-worker + Postgres Compose；所有验收使用 fake runner，不授权真实外部调用
 
 ## 已知限制
 
+- **持久执行不是 exactly-once**：Postgres lease/fencing 保证一个逻辑 job 只有一个可见结果，但
+  worker 在 lease 丢失前已发出的模型调用可能被新 attempt 重复；Phase 9C 禁止外部写操作，未来
+  publisher 必须另行使用幂等 outbox/receipt。
+- **artifact volume 只覆盖单 Docker host**：inline payload 和最终 trace 依赖 API/worker 共享的
+  私有 volume；已有数据库 lineage 驱动的有界 best-effort orphan 清理，但没有对象存储、跨主机
+  复制、备份自动化或垃圾回收 SLO，不能据此声称多主机高可用。
+- **部署仍需运维前置**：Postgres 备份、显式 migration、外部 TLS/secret manager、注册 checkout
+  更新和初始身份 provisioning 仍由部署方负责；Compose/fake-run 不是云部署或生产容量结论。
 - **真实代码库泛化仍需验证**：评测集源自单一项目的人工植入缺陷；分布外证据目前只有 W16 的 3-commit 真实 PR 抽查（规模小、人工判读）
 - **Week 4 可信集尚未 materialize**：3 仓/30 PR reporting 只是已冻结的采集与统计计划，
   当前没有真实 PR snapshot、人工 gold 或 Agent 运行数字，不能用框架完成代替泛化结果
@@ -499,12 +556,9 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 - **模型是服务端别名非快照**：跨代对比混入模型漂移变量；`LLM_MODEL` 可锁定快照 id，trace 记录 meta
 - **封闭世界假设**：truth.json 之外的真 bug 会被判 FP/noise，precision 是有偏低估
 - **工具全部静态只读，不跑测试**：read_file/search_repo/run_linter 均不执行被审代码
-- **应用 Dockerfile 本轮未重新构建**：工作站已有 Docker，Week 6 只复用了按 image SHA-256
-  锁定的 Week 3 Repair 镜像完成 12-case smoke；这不能替代当前应用镜像的全新本地 build。
-  仓库为**私有** GitHub 仓库（未公开发布）；当前 master `acc0dcce077113dcbbde2478abd53cbb09a4ef2e`
-  的 Actions run `29894645345`（含容器冒烟）已运行通过，v0.1.0 Release 已发布——本 README
-  不含公开 CI badge
-- **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求（SDK 自动重试还可能让在途请求略微越过截止点）；并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
+- **容器依赖并非完全可复现**：服务镜像和 Compose 固定 Python/Postgres major，但 slim/APT patch
+  与 `postgres:16-alpine` 仍会随上游更新；正式发布还需记录解析后的 image digest 与镜像扫描结果。
+- **延迟预算是协作式软截止，不是硬实时超时**：截止只保证不再发起新请求并封顶新请求的 timeout，无法强杀已在途的同步 HTTP 请求；Phase 9C durable worker 已禁用 SDK 内部重试并交由持久 job retry 管理，但 CLI 仍保留历史 SDK 策略。并行与截止语义目前只有**离线（FakeClient/barrier）测试**证据，尚未做真实 provider 延迟基准——p50/p95、stage latency、超时率、429 率、降级率待测
 - **阶段内并行提高瞬时并发请求数**：计划内请求总数与 token 成本不变，但同一时刻账号在 provider 侧的在途请求从 1 变 2，真实环境下可能更容易触发 provider rate limit（RateLimitError 仍显式穿透不静默降级）
 
 ## License

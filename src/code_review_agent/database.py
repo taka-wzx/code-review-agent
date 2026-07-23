@@ -16,6 +16,7 @@ from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, event, text
+from sqlalchemy.engine import Connection, make_url
 
 from code_review_agent.identity import Principal, Role, token_digest
 
@@ -56,9 +57,88 @@ def new_id() -> str:
     return uuid.uuid4().hex
 
 
+def _ensure_default_service_quotas(
+    connection: Connection,
+    organization_id: str,
+    repository_id: str | None,
+    occurred_at: str,
+) -> None:
+    statement = text(
+        "INSERT INTO service_quotas "
+        "(id, organization_id, repository_id, scope_kind, max_queued_jobs, "
+        "max_concurrent_jobs, submission_rate_limit, submission_window_seconds, "
+        "submission_window_started_at, submission_window_count, "
+        "monthly_model_call_budget, model_call_month, monthly_model_calls_used, "
+        "monthly_model_calls_reserved, model_call_limit_per_job, created_at, updated_at) "
+        "VALUES (:id, :org, :repo, :kind, :queued, :concurrent, :rate, 60, "
+        ":occurred, 0, :budget, :month, 0, 0, 64, :occurred, :occurred) "
+        "ON CONFLICT DO NOTHING"
+    )
+    scopes: list[tuple[str, str | None, int, int, int, int]] = [
+        ("organization", None, 1000, 16, 600, 100000)
+    ]
+    if repository_id is not None:
+        scopes.append(("repository", repository_id, 100, 2, 60, 10000))
+    for kind, repo, queued, concurrent, rate, budget in scopes:
+        connection.execute(
+            statement,
+            {
+                "id": new_id(),
+                "org": organization_id,
+                "repo": repo,
+                "kind": kind,
+                "queued": queued,
+                "concurrent": concurrent,
+                "rate": rate,
+                "budget": budget,
+                "month": occurred_at[:7],
+                "occurred": occurred_at,
+            },
+        )
+
+
 def sqlite_database_url(path: Path) -> str:
     absolute = Path(path).resolve().as_posix()
     return f"sqlite+pysqlite:///{absolute}"
+
+
+def _secret_file(variable: str) -> str | None:
+    path_value = os.environ.get(variable)
+    if not path_value:
+        return None
+    try:
+        encoded = Path(path_value).read_bytes()
+    except OSError as exc:
+        raise DatabaseError(f"{variable} is unavailable") from exc
+    if len(encoded) > 4096:
+        raise DatabaseError(f"{variable} exceeds the supported size")
+    try:
+        value = encoded.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise DatabaseError(f"{variable} is not UTF-8") from exc
+    if not value:
+        raise DatabaseError(f"{variable} is empty")
+    return value
+
+
+def database_url_from_env(*, default: str | None = None) -> str:
+    """Build a database URL without placing a password in Compose or argv."""
+
+    configured = os.environ.get("CRAG_DATABASE_URL")
+    if not configured:
+        configured = _secret_file("CRAG_DATABASE_URL_FILE") or default
+    if not configured:
+        raise DatabaseError("CRAG_DATABASE_URL is required")
+    password = _secret_file("CRAG_DATABASE_PASSWORD_FILE")
+    if password is None:
+        return configured
+    try:
+        parsed = make_url(configured)
+    except Exception as exc:
+        raise DatabaseError("CRAG_DATABASE_URL is invalid") from exc
+    if parsed.drivername.startswith("sqlite"):
+        raise DatabaseError("CRAG_DATABASE_PASSWORD_FILE cannot be used with SQLite")
+    return parsed.set(password=password).render_as_string(hide_password=False)
 
 
 def _alembic_config(database_url: str) -> Config:
@@ -209,6 +289,12 @@ class Database:
                     repository_id = str(row._mapping["id"])
                     if row._mapping["organization_id"] != LOCAL_ORGANIZATION_ID:
                         raise DatabaseError("local repository alias belongs to another organization")
+                _ensure_default_service_quotas(
+                    connection,
+                    LOCAL_ORGANIZATION_ID,
+                    repository_id,
+                    now,
+                )
                 access = connection.execute(
                     text(
                         "SELECT id FROM repository_access WHERE organization_id=:org "
@@ -262,6 +348,12 @@ class Database:
                     "VALUES (:id, :slug, :display_name, :policy_version, :created_at)"
                 ),
                 record,
+            )
+            _ensure_default_service_quotas(
+                connection,
+                str(record["id"]),
+                None,
+                str(record["created_at"]),
             )
         return record
 
@@ -493,6 +585,12 @@ class Database:
                     ":budget_microusd, :policy_version, :active, :created_at)"
                 ),
                 record,
+            )
+            _ensure_default_service_quotas(
+                connection,
+                organization_id,
+                str(record["id"]),
+                str(record["created_at"]),
             )
         return record
 
@@ -890,12 +988,16 @@ class Database:
 
 
 def _default_database_url() -> str:
-    configured = os.environ.get("CRAG_DATABASE_URL")
-    if configured:
-        return configured
-    state = Path(os.environ.get("CRAG_STATE_DIR", Path.home() / ".crag" / "service"))
+    if os.environ.get("CRAG_DATABASE_URL") or os.environ.get("CRAG_DATABASE_URL_FILE"):
+        return database_url_from_env()
+    configured_state = os.environ.get("CRAG_STATE_DIR")
+    state = (
+        Path(configured_state)
+        if configured_state
+        else Path.home() / ".crag" / "service"
+    )
     state.mkdir(parents=True, exist_ok=True)
-    return sqlite_database_url(state / "reviews.sqlite3")
+    return database_url_from_env(default=sqlite_database_url(state / "reviews.sqlite3"))
 
 
 def build_parser() -> argparse.ArgumentParser:

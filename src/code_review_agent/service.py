@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import re
 from typing import Any, AsyncIterator
 import uuid
@@ -37,6 +38,7 @@ from code_review_agent.identity import (
 )
 from code_review_agent.service_core import (
     AuthorizationDenied,
+    IdempotencyConflict,
     InvalidRequest,
     JobNotFound,
     MAX_DIFF_BYTES,
@@ -44,6 +46,7 @@ from code_review_agent.service_core import (
     SCHEMA_VERSION,
     ServiceClosed,
     ServiceError,
+    QuotaExceeded,
     create_review_service_from_env,
 )
 
@@ -62,6 +65,19 @@ class PullRequestSubmission(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     repository: str = Field(min_length=3, max_length=128)
     pull_request: str = Field(min_length=1, max_length=256)
+    head_sha: str | None = Field(default=None, pattern="^[0-9a-fA-F]{40,64}$")
+
+
+class ServiceQuotaUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_queued_jobs: int | None = Field(default=None, ge=1, le=100000)
+    max_concurrent_jobs: int | None = Field(default=None, ge=1, le=64)
+    submission_rate_limit: int | None = Field(default=None, ge=1, le=100000)
+    submission_window_seconds: int | None = Field(default=None, ge=1, le=86400)
+    monthly_model_call_budget: int | None = Field(
+        default=None, ge=1, le=1000000000
+    )
+    model_call_limit_per_job: int | None = Field(default=None, ge=1, le=256)
 
 
 class MembershipCreate(BaseModel):
@@ -126,6 +142,7 @@ class HttpSettings:
             {"127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"}
         ),
         local_token_enabled: bool = True,
+        worker_stale_seconds: float = 30.0,
     ) -> None:
         if service_token and len(service_token.encode("utf-8")) < 32:
             raise InvalidRequest("CRAG_SERVICE_TOKEN must be at least 32 UTF-8 bytes")
@@ -137,11 +154,14 @@ class HttpSettings:
             raise InvalidRequest("CRAG_ALLOWED_ORIGINS must contain exact HTTP origins")
         if not allowed_hosts or any("/" in item or " " in item for item in allowed_hosts):
             raise InvalidRequest("CRAG_ALLOWED_HOSTS must contain exact host values")
+        if not 1 <= worker_stale_seconds <= 3600:
+            raise InvalidRequest("CRAG_WORKER_STALE_SECONDS must be between 1 and 3600")
         self.service_token = service_token
         self.webhook_secret = webhook_secret.encode("utf-8")
         self.allowed_origins = allowed_origins
         self.allowed_hosts = allowed_hosts
         self.local_token_enabled = local_token_enabled
+        self.worker_stale_seconds = worker_stale_seconds
 
     @classmethod
     def from_env(cls) -> "HttpSettings":
@@ -158,15 +178,44 @@ class HttpSettings:
             "true",
             "yes",
         }
+        try:
+            worker_stale_seconds = float(
+                os.environ.get("CRAG_WORKER_STALE_SECONDS", "30")
+            )
+        except ValueError as exc:
+            raise InvalidRequest("CRAG_WORKER_STALE_SECONDS must be numeric") from exc
         return cls(
             service_token=(
-                os.environ.get("CRAG_SERVICE_TOKEN", "") if local_token_enabled else ""
+                _secret_setting("CRAG_SERVICE_TOKEN") if local_token_enabled else ""
             ),
-            webhook_secret=os.environ.get("CRAG_WEBHOOK_SECRET", ""),
+            webhook_secret=_secret_setting("CRAG_WEBHOOK_SECRET"),
             allowed_origins=origins,
             allowed_hosts=hosts,
             local_token_enabled=local_token_enabled,
+            worker_stale_seconds=worker_stale_seconds,
         )
+
+
+def _secret_setting(name: str) -> str:
+    configured = os.environ.get(name)
+    if configured:
+        return configured
+    path_value = os.environ.get(f"{name}_FILE")
+    if not path_value:
+        return ""
+    try:
+        encoded = Path(path_value).read_bytes()
+    except OSError as exc:
+        raise InvalidRequest(f"{name}_FILE is unavailable") from exc
+    if len(encoded) > 4096:
+        raise InvalidRequest(f"{name}_FILE exceeds the supported size")
+    try:
+        value = encoded.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise InvalidRequest(f"{name}_FILE is not UTF-8") from exc
+    if not value:
+        raise InvalidRequest(f"{name}_FILE is empty")
+    return value
 
 
 def _webhook_signature(body: bytes, header: str, secret: bytes) -> None:
@@ -177,7 +226,7 @@ def _webhook_signature(body: bytes, header: str, secret: bytes) -> None:
         raise ServiceError("webhook authentication failed")
 
 
-def _webhook_fields(payload: Any) -> tuple[str, str]:
+def _webhook_fields(payload: Any) -> tuple[str, str, str]:
     if not isinstance(payload, dict) or payload.get("action") not in _PULL_REQUEST_ACTIONS:
         raise InvalidRequest("pull_request action is not reviewable")
     repository = payload.get("repository")
@@ -186,9 +235,13 @@ def _webhook_fields(payload: Any) -> tuple[str, str]:
         raise InvalidRequest("webhook payload is missing repository or pull_request")
     alias = repository.get("full_name")
     number = pull_request.get("number")
+    head = pull_request.get("head")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
     if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
         raise InvalidRequest("webhook repository or pull_request identity is invalid")
-    return alias, str(number)
+    if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-fA-F]{40,64}", head_sha) is None:
+        raise InvalidRequest("webhook pull_request head SHA is invalid")
+    return alias, str(number), head_sha.casefold()
 
 
 async def _bounded_body(request: Request, limit: int) -> bytes:
@@ -250,6 +303,10 @@ def create_app(
         status = (
             404
             if isinstance(exc, JobNotFound)
+            else 429
+            if isinstance(exc, QuotaExceeded)
+            else 409
+            if isinstance(exc, IdempotencyConflict)
             else 403
             if isinstance(exc, AuthorizationDenied)
             else 503
@@ -260,10 +317,15 @@ def create_app(
         )
         if exc.code == "service_error":
             status = 401
+        headers: dict[str, str] | None = None
+        if status == 401:
+            headers = {"WWW-Authenticate": "Bearer"}
+        elif isinstance(exc, QuotaExceeded) and exc.retry_after is not None:
+            headers = {"Retry-After": str(exc.retry_after)}
         return JSONResponse(
             status_code=status,
             content={"schema_version": SCHEMA_VERSION, "error": {"code": exc.code}},
-            headers={"WWW-Authenticate": "Bearer"} if status == 401 else None,
+            headers=headers,
         )
 
     @app.exception_handler(RequestValidationError)
@@ -353,6 +415,25 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"schema_version": SCHEMA_VERSION, "status": "ok"}
 
+    @app.get("/readyz")
+    def readyz() -> JSONResponse:
+        database_ready = service.store.database_ready()
+        workers = (
+            service.store.live_worker_count(stale_seconds=http.worker_stale_seconds)
+            if database_ready
+            else 0
+        )
+        ready = database_ready and workers > 0 and service.accepting
+        return JSONResponse(
+            status_code=200 if ready else 503,
+            content={
+                "schema_version": SCHEMA_VERSION,
+                "status": "ready" if ready else "not_ready",
+                "database": "ready" if database_ready else "unavailable",
+                "worker": "ready" if workers > 0 else "unavailable",
+            },
+        )
+
     def request_principal(request: Request) -> Principal:
         principal = getattr(request.state, "principal", None)
         if not isinstance(principal, Principal):
@@ -376,6 +457,7 @@ def create_app(
             body.diff,
             principal=request_principal(request),
             correlation_id=request.state.correlation_id,
+            idempotency_key=request.headers.get("idempotency-key"),
         )
 
     @app.post("/v1/reviews/pr", status_code=202)
@@ -385,6 +467,8 @@ def create_app(
             body.pull_request,
             principal=request_principal(request),
             correlation_id=request.state.correlation_id,
+            idempotency_key=request.headers.get("idempotency-key"),
+            head_sha=body.head_sha,
         )
         return {**job, "duplicate": duplicate}
 
@@ -480,6 +564,49 @@ def create_app(
             principal=principal,
         )
 
+    @app.get("/v1/organizations/{organization_id}/service-quota")
+    def get_organization_service_quota(
+        request: Request, organization_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        return service.get_service_quota(principal=principal)
+
+    @app.patch("/v1/organizations/{organization_id}/service-quota")
+    def update_organization_service_quota(
+        request: Request, organization_id: str, body: ServiceQuotaUpdate
+    ) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        return service.update_service_quota(
+            principal=principal, **body.model_dump(exclude_unset=True)
+        )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/service-quota"
+    )
+    def get_repository_service_quota(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        return service.get_service_quota(
+            repository_id=repository_id, principal=principal
+        )
+
+    @app.patch(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/service-quota"
+    )
+    def update_repository_service_quota(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        body: ServiceQuotaUpdate,
+    ) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        return service.update_service_quota(
+            repository_id=repository_id,
+            principal=principal,
+            **body.model_dump(exclude_unset=True),
+        )
+
     @app.post("/v1/credentials", status_code=201)
     def create_credential(request: Request, body: CredentialCreate) -> dict[str, Any]:
         return service.create_credential(
@@ -551,13 +678,14 @@ def create_app(
             payload = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
-        repository, pull_request = _webhook_fields(payload)
+        repository, pull_request, head_sha = _webhook_fields(payload)
         job, duplicate = await anyio.to_thread.run_sync(
             lambda: service.submit_webhook_pr(
                 repository,
                 pull_request,
                 delivery_id=delivery,
                 correlation_id=delivery,
+                head_sha=head_sha,
             )
         )
         return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})

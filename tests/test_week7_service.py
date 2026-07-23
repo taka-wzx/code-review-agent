@@ -74,7 +74,11 @@ class Week7HttpServiceTests(unittest.TestCase):
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
             response = self.client.get(f"/v1/reviews/{job_id}", headers=self.auth)
-            if response.json()["state"] in {"succeeded", "failed"}:
+            if response.json()["state"] in {
+                "awaiting_approval",
+                "failed",
+                "dead_letter",
+            }:
                 return response
             time.sleep(0.01)
         self.fail("job did not become terminal")
@@ -143,7 +147,7 @@ class Week7HttpServiceTests(unittest.TestCase):
         payload = {
             "action": "opened",
             "repository": {"full_name": "owner/repo"},
-            "pull_request": {"number": 8},
+            "pull_request": {"number": 8, "head": {"sha": "a" * 40}},
         }
         body = json.dumps(payload, separators=(",", ":")).encode()
         headers = self.signed_headers(body)
@@ -191,7 +195,7 @@ class Week7HttpServiceTests(unittest.TestCase):
         payload = {
             "action": "opened",
             "repository": {"full_name": "owner/repo"},
-            "pull_request": {"number": 8},
+            "pull_request": {"number": 8, "head": {"sha": "a" * 40}},
         }
         body = json.dumps(payload).encode()
         headers = self.signed_headers(body)
@@ -217,9 +221,9 @@ class Week7HttpServiceTests(unittest.TestCase):
 
     def test_webhook_rejects_bad_action_delivery_and_repository(self):
         cases = [
-            ({"action": "closed", "repository": {"full_name": "owner/repo"}, "pull_request": {"number": 1}}, "d-1"),
-            ({"action": "opened", "repository": {"full_name": "other/repo"}, "pull_request": {"number": 1}}, "d-2"),
-            ({"action": "opened", "repository": {"full_name": "owner/repo"}, "pull_request": {"number": True}}, "d-3"),
+            ({"action": "closed", "repository": {"full_name": "owner/repo"}, "pull_request": {"number": 1, "head": {"sha": "a" * 40}}}, "d-1"),
+            ({"action": "opened", "repository": {"full_name": "other/repo"}, "pull_request": {"number": 1, "head": {"sha": "a" * 40}}}, "d-2"),
+            ({"action": "opened", "repository": {"full_name": "owner/repo"}, "pull_request": {"number": True, "head": {"sha": "a" * 40}}}, "d-3"),
         ]
         for payload, delivery in cases:
             body = json.dumps(payload).encode()

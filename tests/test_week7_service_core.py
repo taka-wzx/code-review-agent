@@ -1,9 +1,12 @@
 import json
+from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -21,7 +24,6 @@ from code_review_agent.service_core import (
     ReviewRequest,
     ReviewService,
     ServiceClosed,
-    StateDirectoryInUse,
     normalize_pr_ref,
     normalize_repository,
     validate_diff,
@@ -129,7 +131,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
         self.assertEqual(normalize_pr_ref("owner/repo", 12), "12")
         self.assertEqual(
             normalize_pr_ref("owner/repo", "https://github.com/Owner/Repo/pull/007/"),
-            "https://github.com/Owner/Repo/pull/7",
+            "7",
         )
         for value in ("0", "-1", "--repo=x", "https://github.com/other/repo/pull/1"):
             with self.subTest(value=value), self.assertRaises(InvalidRequest):
@@ -161,7 +163,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
         store.trace_path(job_id).write_text('{"ok":true}\n', encoding="utf-8")
         store.succeed(job_id, {"summary": "done"})
         job = store.get(job_id)
-        self.assertEqual(job["state"], "succeeded")
+        self.assertEqual(job["state"], "awaiting_approval")
         self.assertEqual(job["review"], {"summary": "done"})
         self.assertEqual(store.read_trace(job_id), '{"ok":true}\n')
         with self.assertRaises(RuntimeError):
@@ -169,35 +171,67 @@ class Week7ServiceCoreTests(unittest.TestCase):
         with self.assertRaises(JobNotFound):
             store.get("not-a-job")
 
-    def test_store_marks_abandoned_work_failed_on_restart(self):
+    def test_store_leaves_abandoned_work_for_lease_recovery(self):
         state = self.root / "state"
         store = self.make_store(state)
-        queued, _ = store.create(
+        running, _ = store.create(
             source_kind="diff", repository="owner/repo", source_ref="inline",
             source_sha256="0" * 64, source_bytes=1,
         )
-        running, _ = store.create(
+        queued, _ = store.create(
             source_kind="diff", repository="owner/repo", source_ref="inline",
             source_sha256="1" * 64, source_bytes=1,
         )
-        store.mark_running(running)
+        start = datetime.now(timezone.utc) + timedelta(seconds=1)
+        lease = store.claim("restart-worker", lease_seconds=1, now=start)
+        self.assertIsNotNone(lease)
+        assert lease is not None
+        self.assertEqual(lease.job_id, running)
+        store.mark_running(lease, now=start)
         store.close()
         restarted = self.make_store(state)
-        for job_id in (queued, running):
-            job = restarted.get(job_id)
-            self.assertEqual(job["state"], "failed")
-            self.assertEqual(job["error"]["code"], "service_restarted")
+        self.assertEqual(restarted.get(queued)["state"], "queued")
+        self.assertEqual(restarted.get(running)["state"], "running")
+        recovered = restarted.claim(
+            "recovery-worker", lease_seconds=10, now=start + timedelta(seconds=2)
+        )
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual(recovered.job_id, running)
+        self.assertEqual(recovered.attempt_count, 2)
 
-    def test_store_lock_prevents_a_second_process_from_sweeping_live_jobs(self):
+    def test_compatibility_mark_running_claims_the_requested_job(self):
+        store = self.make_store(self.root / "compat-requested")
+        first, _ = store.create(
+            source_kind="diff",
+            repository="owner/repo",
+            source_ref="inline",
+            source_sha256="2" * 64,
+            source_bytes=1,
+        )
+        second, _ = store.create(
+            source_kind="diff",
+            repository="owner/repo",
+            source_ref="inline",
+            source_sha256="3" * 64,
+            source_bytes=1,
+        )
+        store.mark_running(second)
+        self.assertEqual(store.get(first)["state"], "queued")
+        self.assertEqual(store.get(second)["state"], "running")
+        store.fail(second, "compatibility_test")
+
+    def test_store_allows_a_second_process_without_sweeping_live_jobs(self):
         state = self.root / "state"
         store = self.make_store(state)
         queued, _ = store.create(
             source_kind="diff", repository="owner/repo", source_ref="inline",
             source_sha256="0" * 64, source_bytes=1,
         )
-        with self.assertRaises(StateDirectoryInUse):
-            JobStore(state)
+        second = JobStore(state, database_url=store.database_url, auto_migrate=False)
+        self.stores.append(second)
         self.assertEqual(store.get(queued)["state"], "queued")
+        self.assertFalse((state / ".service.lock").exists())
 
     def test_store_idempotent_delivery_and_result_limit(self):
         store = self.make_store(self.root / "state")
@@ -212,7 +246,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
         self.assertEqual(first, second)
         store.mark_running(first)
         store.succeed(first, {"value": "x" * MAX_RESULT_BYTES})
-        self.assertEqual(store.get(first)["error"]["code"], "result_too_large")
+        self.assertEqual(store.get(first)["error"]["code"], "schema_policy")
 
     def test_review_service_success_failure_and_duplicate(self):
         runner = FakeRunner()
@@ -271,6 +305,50 @@ class Week7ServiceCoreTests(unittest.TestCase):
         self.assertEqual(runner._pr_diff(request), DIFF)
         self.assertEqual(calls[0][0], ["gh", "pr", "diff", "7"])
         self.assertEqual(calls[0][1]["stderr"], subprocess.DEVNULL)
+        self.assertIn("env", calls[0][1])
+
+    def test_default_runner_fences_pr_diff_to_submitted_head(self):
+        calls = []
+        responses = iter([(HEAD := "a" * 40).encode(), DIFF.encode(), HEAD.encode()])
+
+        def process(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return FakeProcess(kwargs["stdout"], next(responses))
+
+        request = ReviewRequest(
+            "0" * 32,
+            "pull_request",
+            "owner/repo",
+            self.repo,
+            "7",
+            head_sha=HEAD,
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPSEEK_API_KEY": "provider-secret",
+                "CRAG_DATABASE_URL": "postgresql://secret@db/reviews",
+                "GH_TOKEN": "github-required-token",
+            },
+            clear=False,
+        ):
+            self.assertEqual(DefaultReviewRunner(process_factory=process)._pr_diff(request), DIFF)
+        self.assertEqual(
+            [call[0][1:3] for call in calls],
+            [["pr", "view"], ["pr", "diff"], ["pr", "view"]],
+        )
+        for _, kwargs in calls:
+            self.assertNotIn("DEEPSEEK_API_KEY", kwargs["env"])
+            self.assertNotIn("CRAG_DATABASE_URL", kwargs["env"])
+            self.assertEqual(kwargs["env"]["GH_TOKEN"], "github-required-token")
+
+        mismatch = DefaultReviewRunner(
+            process_factory=lambda *args, **kwargs: FakeProcess(
+                kwargs["stdout"], ("b" * 40).encode()
+            )
+        )
+        with self.assertRaisesRegex(InvalidRequest, "head no longer matches"):
+            mismatch._pr_diff(request)
 
     def test_default_runner_closes_canonical_trace(self):
         request = ReviewRequest("0" * 32, "diff", "owner/repo", self.repo, "inline", DIFF)
@@ -286,6 +364,25 @@ class Week7ServiceCoreTests(unittest.TestCase):
         self.assertIn("crag.service.schema", trace_path.read_text(encoding="utf-8"))
         review.assert_called_once()
 
+    def test_default_runner_disables_sdk_retries_before_budgeting(self):
+        class Client:
+            def __init__(self, max_retries=2):
+                self.max_retries = max_retries
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=lambda **_: None))
+
+            def with_options(self, *, max_retries):
+                return Client(max_retries=max_retries)
+
+        request = ReviewRequest("0" * 32, "diff", "owner/repo", self.repo, "inline", DIFF)
+        runner = DefaultReviewRunner(client_factory=lambda: (Client(), "model"))
+        with patch(
+            "code_review_agent.service_core.run_review",
+            return_value={"summary": "done", "findings": []},
+        ) as review:
+            runner(request, self.root / "no-retries.jsonl")
+        budgeted = review.call_args.args[0]
+        self.assertEqual(budgeted._target.max_retries, 0)
+
     def test_pr_diff_command_failures_are_bounded(self):
         request = ReviewRequest("0" * 32, "pull_request", "owner/repo", self.repo, "7")
         for returncode, data in (
@@ -298,7 +395,7 @@ class Week7ServiceCoreTests(unittest.TestCase):
                 )
             )
             with self.subTest(returncode=returncode), self.assertRaisesRegex(
-                ExternalCommandError, "GitHub diff command failed|empty or too large"
+                ExternalCommandError, "GitHub command failed|empty or too large"
             ):
                 runner._pr_diff(request)
         processes = []
@@ -328,22 +425,21 @@ class Week7ServiceCoreTests(unittest.TestCase):
         finally:
             service.shutdown()
 
-    def test_failed_executor_submission_rolls_back_job_and_delivery(self):
+    def test_submission_does_not_depend_on_an_executor(self):
         service = ReviewService(
-            self.registry, self.make_store(self.root / "race"), runner=FakeRunner()
+            self.registry, self.make_store(self.root / "race")
         )
         try:
-            with patch.object(
-                service._executor,
-                "submit",
-                side_effect=RuntimeError("executor closed"),
-            ), self.assertRaises(ServiceClosed):
-                service.submit_pr("owner/repo", "9", delivery_id="delivery-race")
             job, duplicate = service.submit_pr(
                 "owner/repo", "9", delivery_id="delivery-race"
             )
             self.assertFalse(duplicate)
-            self.wait_terminal(service, job["review_id"])
+            self.assertEqual(job["state"], "queued")
+            replay, duplicate2 = service.submit_pr(
+                "owner/repo", "9", delivery_id="delivery-race"
+            )
+            self.assertTrue(duplicate2)
+            self.assertEqual(job["review_id"], replay["review_id"])
         finally:
             service.shutdown()
 

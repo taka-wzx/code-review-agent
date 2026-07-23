@@ -137,8 +137,9 @@ class Phase9BIdentityRBACTests(unittest.TestCase):
         while time.monotonic() < deadline:
             response = self.client.get(f"/v1/reviews/{job_id}", headers=self.auth(actor))
             if response.status_code == 200 and response.json()["state"] in {
-                "succeeded",
+                "awaiting_approval",
                 "failed",
+                "dead_letter",
             }:
                 return response.json()
             time.sleep(0.01)
@@ -314,7 +315,10 @@ class Phase9BIdentityRBACTests(unittest.TestCase):
         reviewer_b = self.members["reviewer_b"][1]
         viewer_a = self.members["viewer_a"][1]
         submitted, _ = self.service.submit_pr(
-            "owner/repo-b", "9", principal=reviewer_b
+            "owner/repo-b",
+            "9",
+            principal=reviewer_b,
+            idempotency_key="phase9b-compatible-pr-9",
         )
         mcp = create_mcp(self.service, principal_provider=lambda: viewer_a)
 
@@ -371,7 +375,7 @@ class Phase9BIdentityRBACTests(unittest.TestCase):
         payload = {
             "action": "opened",
             "repository": {"full_name": "owner/repo-a"},
-            "pull_request": {"number": 8},
+            "pull_request": {"number": 8, "head": {"sha": "a" * 40}},
             "approval": {"decision": "approved", "principal_id": "spoofed"},
         }
         body = json.dumps(payload, separators=(",", ":")).encode()
