@@ -25,6 +25,7 @@ x-runtime-hardening: &runtime-hardening
     - CHOWN
     - DAC_READ_SEARCH
     - SETGID
+    - SETPCAP
     - SETUID
   security_opt:
     - no-new-privileges:true

@@ -301,9 +301,12 @@ from pathlib import Path
 status = {}
 for line in Path("/proc/1/status").read_text(encoding="ascii").splitlines():
     key, _, value = line.partition(":")
-    if key in {"Uid", "CapEff"}:
+    if key in {"Uid", "CapEff", "CapBnd", "CapInh", "CapAmb"}:
         status[key] = value.strip().split()[0]
-if status.get("Uid") != "1000" or status.get("CapEff") != "0000000000000000":
+capabilities = ("CapEff", "CapBnd", "CapInh", "CapAmb")
+if status.get("Uid") != "1000" or any(
+    status.get(capability) != "0000000000000000" for capability in capabilities
+):
     raise SystemExit(f"service process identity is not non-root/capability-free: {status}")
 print("runtime-identity-scan-ok")
 """
