@@ -23,6 +23,7 @@ x-runtime-hardening: &runtime-hardening
     - ALL
   cap_add:
     - CHOWN
+    - DAC_READ_SEARCH
     - SETGID
     - SETUID
   security_opt:
