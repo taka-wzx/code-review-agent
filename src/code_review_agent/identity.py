@@ -37,6 +37,7 @@ class Permission(str, Enum):
     MANAGE_MEMBERS = "manage_members"
     MANAGE_REPOSITORIES = "manage_repositories"
     MANAGE_CREDENTIALS = "manage_credentials"
+    MANAGE_POLICY = "manage_policy"
     READ_AUDIT = "read_audit"
 
 
@@ -60,6 +61,7 @@ _ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = {
             Permission.MANAGE_MEMBERS,
             Permission.MANAGE_REPOSITORIES,
             Permission.MANAGE_CREDENTIALS,
+            Permission.MANAGE_POLICY,
             Permission.READ_AUDIT,
             Permission.APPROVE_PUBLICATION,
         }

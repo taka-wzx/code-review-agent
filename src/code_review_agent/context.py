@@ -16,6 +16,15 @@ budgeted so the pack cannot blow up the prompt.
 import re
 from pathlib import Path
 
+from code_review_agent.context_memory import (
+    ContextMode,
+    MemoryQuery,
+    OrganizationPolicyStore,
+    RepositoryMemoryStore,
+    RunContext,
+    render_policy,
+    repository_source_sha,
+)
 from code_review_agent.tools import _iter_text_files
 
 CONVENTION_FILES = ("CLAUDE.md", "CONVENTIONS.md", "CONTRIBUTING.md")
@@ -27,6 +36,7 @@ SNIPPET_CTX_LINES = 3        # lines of context around a caller line
 MAX_CALLER_FILES = 3         # caller files per symbol
 MAX_HITS_PER_FILE = 3        # snippets per caller file
 PACK_CAP = 28_000            # total chars for the whole pack
+CONTEXT_TOKEN_CAP = 8_000    # deterministic chars/4 cap for static + hierarchy
 
 # Accepts both `+++ b/path` (default git) and `+++ path` (--no-prefix);
 # stops at a tab so `+++ path<TAB>timestamp` (diff -u style) keeps only the
@@ -220,3 +230,103 @@ def build_context(diff_text: str, repo: Path, log=lambda msg: None) -> str:
         used += len(s)
     log(f"context pack: {len(pack)} sections, {used} chars")
     return "\n\n".join(pack)
+
+
+def _estimated_tokens(value: str) -> int:
+    return max(1, (len(value.encode("utf-8")) + 3) // 4) if value else 0
+
+
+def _languages(files: list[str]) -> tuple[str, ...]:
+    names = {
+        ".py": "python",
+        ".js": "javascript",
+        ".jsx": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".go": "go",
+        ".rs": "rust",
+        ".java": "java",
+        ".kt": "kotlin",
+        ".rb": "ruby",
+    }
+    return tuple(sorted({names[Path(path).suffix.casefold()] for path in files
+                         if Path(path).suffix.casefold() in names}))
+
+
+def build_context_for_mode(
+    diff_text: str,
+    repo: Path,
+    *,
+    mode: ContextMode | str,
+    run_context: RunContext | None = None,
+    memory_store: RepositoryMemoryStore | None = None,
+    policy_store: OrganizationPolicyStore | None = None,
+    organization_id: str = "",
+    repository_id: str = "",
+    base_sha: str | None = None,
+    token_cap: int = CONTEXT_TOKEN_CAP,
+    log=lambda msg: None,
+) -> str:
+    """Build one of the three frozen Phase 9E context ablations."""
+    selected_mode = ContextMode.parse(mode)
+    if selected_mode is ContextMode.OFF:
+        log("context mode: off")
+        return ""
+
+    static_pack = build_context(diff_text, repo, log=log)
+    if selected_mode is ContextMode.CURRENT_STATIC:
+        log("context mode: current_static")
+        return static_pack
+
+    revision = (base_sha or (run_context.source_revision if run_context else None)
+                or repository_source_sha(Path(repo)))
+    if (
+        memory_store is None
+        or not organization_id
+        or not repository_id
+        or revision is None
+    ):
+        log("hierarchical context unavailable; using current_static")
+        return static_pack
+
+    static_tokens = _estimated_tokens(static_pack)
+    available = max(0, token_cap - static_tokens)
+    if run_context is not None:
+        available = min(available, run_context.token_remaining)
+    policy = policy_store.active(organization_id) if policy_store is not None else None
+    policy_text = render_policy(policy)
+    policy_section = f"## Organization policy\n\n{policy_text}" if policy_text else ""
+    policy_tokens = _estimated_tokens(policy_section)
+    if policy_tokens > available:
+        policy_section = ""
+        policy_tokens = 0
+    files, symbols = parse_diff(diff_text)
+    selection = memory_store.retrieve(
+        MemoryQuery(
+            organization_id=organization_id,
+            repository_id=repository_id,
+            base_sha=revision,
+            paths=tuple(files),
+            languages=_languages(files),
+            symbols=tuple(symbols),
+            lexical=" ".join(files + symbols),
+            token_budget=max(0, available - policy_tokens),
+        )
+    )
+    if run_context is not None:
+        run_context.consume_tokens(policy_tokens + selection.token_used)
+    for provenance in selection.provenance:
+        log(
+            "repository memory: "
+            f"{provenance['memory_id']} source_sha={provenance['source_sha']}"
+        )
+    hierarchy = [section for section in (
+        policy_section,
+        f"## Trusted repository memory\n\n{selection.text}" if selection.text else "",
+        static_pack,
+    ) if section]
+    log(
+        "context mode: hierarchical "
+        f"memory_records={len(selection.records)} tokens={policy_tokens + selection.token_used}"
+    )
+    return "\n\n".join(hierarchy)

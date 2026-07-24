@@ -22,6 +22,7 @@ from sqlalchemy.engine import Connection, make_url
 
 from code_review_agent.identity import Principal, Role, token_digest
 from code_review_agent.approval_publish import PublicationError, canonical_json, sha256_hex
+from code_review_agent.context_memory import OrganizationPolicyStore, RepositoryMemoryStore
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -986,6 +987,22 @@ class Database:
                 event_type=f"finding.feedback.{decision}",
                 subject_sha256=str(finding["content_sha256"]),
                 occurred_at=str(record["created_at"]),
+            )
+        # Only a human rationale can create durable feedback memory. A feedback
+        # row without a reason remains audit/metric data and is never promoted.
+        if decision in {"accepted", "rejected"} and isinstance(rationale, str) and rationale.strip():
+            policy = OrganizationPolicyStore(self).active(principal.organization_id)
+            retention_days = policy.retention_days if policy is not None else 90
+            RepositoryMemoryStore(self).add_feedback(
+                organization_id=principal.organization_id,
+                repository_id=str(finding["repository_id"]),
+                decision=decision,
+                fingerprint=str(finding["fingerprint"]),
+                finding_hash=str(finding["content_sha256"]),
+                source_sha=str(finding["source_revision"]),
+                principal_id=principal.user_id,
+                reason=rationale.strip(),
+                retention_days=retention_days,
             )
         record["rationale"] = record.pop("reason")
         return record
