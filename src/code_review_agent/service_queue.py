@@ -1892,6 +1892,37 @@ class JobStore:
         return encoded, normalized_findings
 
     @staticmethod
+    def _finding_lineage(
+        finding: Mapping[str, Any],
+        organization_id: str,
+        repository_id: str,
+        source_revision: str,
+    ) -> tuple[str, str, str]:
+        """Return stable ID plus content/evidence hashes without model-owned IDs."""
+        content = {
+            key: finding.get(key)
+            for key in ("path", "file", "line", "severity", "category", "message", "issue", "suggestion")
+            if key in finding
+        }
+        evidence = {
+            key: value
+            for key, value in finding.items()
+            if key not in content
+        }
+        content_hash = hashlib.sha256(
+            json.dumps(content, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        evidence_hash = hashlib.sha256(
+            json.dumps(evidence, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        ).hexdigest()
+        stable_id = hashlib.sha256(
+            f"{organization_id}\0{repository_id}\0{source_revision}\0{content_hash}\0{evidence_hash}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        return stable_id, content_hash, evidence_hash
+
+    @staticmethod
     def _insert_job_audit(
         connection: Connection,
         row: Mapping[str, Any],
@@ -2004,28 +2035,37 @@ class JobStore:
                 usage=normalized_usage,
                 now=current,
             )
+            source_revision = str(row.get("head_sha") or row["source_sha256"])
             for finding in normalized_findings:
                 payload = json.dumps(
                     finding, ensure_ascii=False, sort_keys=True, separators=(",", ":")
                 )
-                content_hash = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+                finding_id, content_hash, evidence_hash = self._finding_lineage(
+                    finding,
+                    str(row["organization_id"]),
+                    str(row["repository_id"]),
+                    source_revision,
+                )
                 fingerprint = str(finding.get("fingerprint") or content_hash)
                 connection.execute(
                     text(
                         "INSERT INTO findings "
                         "(id, organization_id, repository_id, review_job_id, fingerprint, "
-                        "content_sha256, path, line, severity, category, status, payload_json, "
-                        "created_at) VALUES (:id, :org, :repo, :job, :fingerprint, :content, "
+                        "content_sha256, evidence_sha256, source_revision, path, line, severity, "
+                        "category, status, payload_json, created_at) VALUES "
+                        "(:id, :org, :repo, :job, :fingerprint, :content, :evidence, :revision, "
                         ":path, :line, :severity, :category, 'pending_approval', :payload, "
                         ":created) ON CONFLICT DO NOTHING"
                     ),
                     {
-                        "id": new_id(),
+                        "id": finding_id,
                         "org": row["organization_id"],
                         "repo": row["repository_id"],
                         "job": lease.job_id,
                         "fingerprint": fingerprint[:128],
                         "content": content_hash,
+                        "evidence": evidence_hash,
+                        "revision": source_revision,
                         "path": finding.get("path") or finding.get("file"),
                         "line": finding.get("line"),
                         "severity": finding.get("severity"),
@@ -2068,6 +2108,25 @@ class JobStore:
                 reason_code=None,
                 attempt_count=lease.attempt_count,
                 now=final_current,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO metric_events "
+                    "(id, organization_id, repository_id, review_job_id, finding_id, "
+                    "approval_id, principal_id, event_type, subject_sha256, occurred_at) "
+                    "VALUES (:id, :org, :repo, :job, NULL, NULL, :principal, :event, "
+                    ":subject, :occurred)"
+                ),
+                {
+                    "id": new_id(),
+                    "org": row["organization_id"],
+                    "repo": row["repository_id"],
+                    "job": lease.job_id,
+                    "principal": row["submitted_by"],
+                    "event": "review.awaiting_approval",
+                    "subject": hashlib.sha256(lease.job_id.encode("utf-8")).hexdigest(),
+                    "occurred": _iso(final_current),
+                },
             )
         self._delete_payload(lease.payload_key)
 

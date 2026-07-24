@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import secrets
 import sysconfig
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 import uuid
 
 from alembic import command
@@ -19,6 +21,7 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection, make_url
 
 from code_review_agent.identity import Principal, Role, token_digest
+from code_review_agent.approval_publish import PublicationError, canonical_json, sha256_hex
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[2]
@@ -215,6 +218,31 @@ class Database:
 
     def close(self) -> None:
         self.engine.dispose()
+
+    @contextmanager
+    def _write_transaction(self) -> Iterator[Connection]:
+        """Serialize Phase 9D approval races on SQLite and lock normally elsewhere."""
+        connection = self.engine.connect()
+        transaction = None
+        sqlite_immediate = connection.dialect.name == "sqlite"
+        try:
+            if sqlite_immediate:
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            else:
+                transaction = connection.begin()
+            yield connection
+            if sqlite_immediate:
+                connection.commit()
+            elif transaction is not None:
+                transaction.commit()
+        except BaseException:
+            if sqlite_immediate:
+                connection.rollback()
+            elif transaction is not None and transaction.is_active:
+                transaction.rollback()
+            raise
+        finally:
+            connection.close()
 
     def bootstrap_local(self, repository_aliases: Iterable[str]) -> Principal:
         """Create the deterministic loopback-only principal and repository rows."""
@@ -850,8 +878,9 @@ class Database:
             row = connection.execute(
                 text(
                     "SELECT f.id, f.organization_id, f.repository_id, f.review_job_id, "
-                    "f.fingerprint, f.content_sha256, f.path, f.line, f.severity, f.category, "
-                    "f.status, f.payload_json, f.created_at FROM findings f "
+                    "f.fingerprint, f.content_sha256, f.evidence_sha256, f.source_revision, "
+                    "f.path, f.line, f.severity, f.category, f.status, f.payload_json, "
+                    "f.created_at FROM findings f "
                     "WHERE f.id=:id AND f.organization_id=:org" + repository_access
                 ),
                 {
@@ -876,8 +905,9 @@ class Database:
             rows = connection.execute(
                 text(
                     "SELECT f.id, f.organization_id, f.repository_id, f.review_job_id, "
-                    "f.fingerprint, f.content_sha256, f.path, f.line, f.severity, f.category, "
-                    "f.status, f.payload_json, f.created_at FROM findings f "
+                    "f.fingerprint, f.content_sha256, f.evidence_sha256, f.source_revision, "
+                    "f.path, f.line, f.severity, f.category, f.status, f.payload_json, "
+                    "f.created_at FROM findings f "
                     "WHERE f.review_job_id=:job AND f.organization_id=:org" + access_clause
                 ),
                 {
@@ -897,7 +927,8 @@ class Database:
         with self.engine.connect() as connection:
             feedback = connection.execute(
                 text(
-                    "SELECT id, principal_id, decision, reason, created_at "
+                    "SELECT id, principal_id, decision, finding_hash, reason AS rationale, "
+                    "created_at "
                     "FROM finding_feedback WHERE finding_id=:finding "
                     "AND organization_id=:org ORDER BY created_at, id"
                 ),
@@ -921,7 +952,7 @@ class Database:
         finding: Mapping[str, Any],
         *,
         decision: str,
-        reason: str | None,
+        rationale: str | None,
     ) -> dict[str, Any]:
         record = {
             "id": new_id(),
@@ -930,7 +961,8 @@ class Database:
             "finding_id": finding["id"],
             "principal_id": principal.user_id,
             "decision": decision,
-            "reason": reason,
+            "finding_hash": finding["content_sha256"],
+            "reason": rationale,
             "created_at": utc_now(),
         }
         with self.engine.begin() as connection:
@@ -938,12 +970,24 @@ class Database:
                 text(
                     "INSERT INTO finding_feedback "
                     "(id, organization_id, repository_id, finding_id, principal_id, "
-                    "decision, reason, created_at) VALUES (:id, :organization_id, "
-                    ":repository_id, :finding_id, :principal_id, :decision, :reason, "
-                    ":created_at)"
+                    "decision, finding_hash, reason, created_at) VALUES "
+                    "(:id, :organization_id, :repository_id, :finding_id, :principal_id, "
+                    ":decision, :finding_hash, :reason, :created_at)"
                 ),
                 record,
             )
+            self._metric_event(
+                connection,
+                organization_id=principal.organization_id,
+                repository_id=str(finding["repository_id"]),
+                review_job_id=str(finding["review_job_id"]),
+                finding_id=str(finding["id"]),
+                principal_id=principal.user_id,
+                event_type=f"finding.feedback.{decision}",
+                subject_sha256=str(finding["content_sha256"]),
+                occurred_at=str(record["created_at"]),
+            )
+        record["rationale"] = record.pop("reason")
         return record
 
     def decide_finding(
@@ -985,6 +1029,503 @@ class Database:
                 {"status": status, "id": finding["id"], "org": principal.organization_id},
             )
         return record
+
+    @staticmethod
+    def _metric_event(
+        connection: Connection,
+        *,
+        organization_id: str,
+        repository_id: str,
+        review_job_id: str | None,
+        finding_id: str | None = None,
+        approval_id: str | None = None,
+        principal_id: str | None = None,
+        event_type: str,
+        subject_sha256: str | None,
+        occurred_at: str,
+    ) -> None:
+        connection.execute(
+            text(
+                "INSERT INTO metric_events "
+                "(id, organization_id, repository_id, review_job_id, finding_id, "
+                "approval_id, principal_id, event_type, subject_sha256, occurred_at) "
+                "VALUES (:id, :org, :repo, :job, :finding, :approval, :principal, "
+                ":event, :subject, :occurred)"
+            ),
+            {
+                "id": new_id(),
+                "org": organization_id,
+                "repo": repository_id,
+                "job": review_job_id,
+                "finding": finding_id,
+                "approval": approval_id,
+                "principal": principal_id,
+                "event": event_type,
+                "subject": subject_sha256,
+                "occurred": occurred_at,
+            },
+        )
+
+    def _publish_job(
+        self,
+        connection: Connection,
+        principal: Principal,
+        review_job_id: str,
+        *,
+        lock: bool,
+    ) -> dict[str, Any] | None:
+        access_clause = ""
+        if principal.role is not Role.ORG_ADMIN:
+            access_clause = (
+                " AND EXISTS (SELECT 1 FROM repository_access a "
+                "WHERE a.organization_id=j.organization_id AND a.repository_id=j.repository_id "
+                "AND a.user_id=:user)"
+            )
+        lock_clause = " FOR UPDATE" if lock and connection.dialect.name != "sqlite" else ""
+        row = connection.execute(
+            text(
+                "SELECT j.id, j.organization_id, j.repository_id, j.repository_alias, "
+                "j.source_kind, j.source_ref, j.source_sha256, j.head_sha, j.state, "
+                "r.policy_version FROM review_jobs j JOIN repositories r "
+                "ON r.id=j.repository_id AND r.organization_id=j.organization_id "
+                "WHERE j.id=:job AND j.organization_id=:org" + access_clause + lock_clause
+            ),
+            {"job": review_job_id, "org": principal.organization_id, "user": principal.user_id},
+        ).first()
+        return None if row is None else _mapping(row)
+
+    @staticmethod
+    def _publication_material(
+        connection: Connection, job: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        if str(job["source_kind"]) != "pull_request" or not job.get("head_sha"):
+            raise PublicationError("approval_not_publishable")
+        rows = connection.execute(
+            text(
+                "SELECT id, content_sha256, evidence_sha256, source_revision, path, line, "
+                "severity, category, payload_json FROM findings WHERE organization_id=:org "
+                "AND review_job_id=:job AND status IN ('pending_approval','approved') "
+                "ORDER BY id"
+            ),
+            {"org": job["organization_id"], "job": job["id"]},
+        ).all()
+        findings: list[dict[str, Any]] = []
+        finding_hashes: list[dict[str, str]] = []
+        for raw in rows:
+            finding = _mapping(raw)
+            try:
+                payload = json.loads(str(finding["payload_json"]))
+            except (TypeError, ValueError) as exc:
+                raise PublicationError("approval_finding_invalid") from exc
+            if not isinstance(payload, dict):
+                raise PublicationError("approval_finding_invalid")
+            findings.append(
+                {
+                    "finding_id": finding["id"],
+                    "content_sha256": finding["content_sha256"],
+                    "evidence_sha256": finding["evidence_sha256"],
+                    "source_revision": finding["source_revision"],
+                    "path": finding["path"],
+                    "line": finding["line"],
+                    "severity": finding["severity"],
+                    "category": finding["category"],
+                    "finding": payload,
+                }
+            )
+            finding_hashes.append(
+                {
+                    "finding_id": str(finding["id"]),
+                    "content_sha256": str(finding["content_sha256"]),
+                    "evidence_sha256": str(finding["evidence_sha256"]),
+                    "source_revision": str(finding["source_revision"]),
+                }
+            )
+        payload = {
+            "schema_version": "crag.github-publish/v1",
+            "repository": str(job["repository_alias"]),
+            "pull_request": str(job["source_ref"]),
+            "head_sha": str(job["head_sha"]),
+            "findings": findings,
+        }
+        payload_bytes = canonical_json(payload)
+        return {
+            "payload": payload,
+            "payload_sha256": sha256_hex(payload_bytes),
+            "finding_set_sha256": sha256_hex(canonical_json({"findings": finding_hashes})),
+            "head_sha": str(job["head_sha"]),
+            "policy_version": str(job["policy_version"]),
+        }
+
+    def _prepare_publish_proposal(
+        self, principal: Principal, review_job_id: str
+    ) -> dict[str, Any]:
+        with self._write_transaction() as connection:
+            job = self._publish_job(connection, principal, review_job_id, lock=True)
+            if job is None:
+                raise PublicationError("approval_not_found")
+            if job["state"] != "awaiting_approval":
+                raise PublicationError("approval_not_pending")
+            material = self._publication_material(connection, job)
+            now = utc_now()
+            existing_rows = connection.execute(
+                text(
+                    "SELECT * FROM publish_proposals WHERE organization_id=:org "
+                    "AND review_job_id=:job AND invalidated_at IS NULL ORDER BY created_at DESC"
+                ),
+                {"org": job["organization_id"], "job": job["id"]},
+            ).all()
+            matching: dict[str, Any] | None = None
+            for raw in existing_rows:
+                proposal = _mapping(raw)
+                if (
+                    proposal["payload_sha256"] == material["payload_sha256"]
+                    and proposal["head_sha"] == material["head_sha"]
+                    and proposal["policy_version"] == material["policy_version"]
+                ):
+                    matching = proposal
+                else:
+                    connection.execute(
+                        text("UPDATE publish_proposals SET invalidated_at=:now WHERE id=:id"),
+                        {"now": now, "id": proposal["id"]},
+                    )
+            expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace(
+                "+00:00", "Z"
+            )
+            if matching is None:
+                prior = connection.execute(
+                    text(
+                        "SELECT id FROM publish_proposals WHERE organization_id=:org "
+                        "AND review_job_id=:job AND payload_sha256=:payload AND policy_version=:policy"
+                    ),
+                    {
+                        "org": job["organization_id"],
+                        "job": job["id"],
+                        "payload": material["payload_sha256"],
+                        "policy": material["policy_version"],
+                    },
+                ).first()
+                proposal_id = str(prior._mapping["id"]) if prior is not None else new_id()
+                connection.execute(
+                    text(
+                        "INSERT INTO publish_proposals "
+                        "(id, organization_id, repository_id, review_job_id, head_sha, "
+                        "payload_sha256, finding_set_sha256, policy_version, nonce, expires_at, "
+                        "invalidated_at, created_at) VALUES (:id, :org, :repo, :job, :head, "
+                        ":payload, :findings, :policy, :nonce, :expires, NULL, :created) "
+                        "ON CONFLICT (organization_id, review_job_id, payload_sha256, policy_version) "
+                        "DO UPDATE SET head_sha=excluded.head_sha, finding_set_sha256=excluded.finding_set_sha256, "
+                        "nonce=excluded.nonce, expires_at=excluded.expires_at, invalidated_at=NULL"
+                    ),
+                    {
+                        "id": proposal_id,
+                        "org": job["organization_id"],
+                        "repo": job["repository_id"],
+                        "job": job["id"],
+                        "head": material["head_sha"],
+                        "payload": material["payload_sha256"],
+                        "findings": material["finding_set_sha256"],
+                        "policy": material["policy_version"],
+                        "nonce": secrets.token_hex(32),
+                        "expires": expires_at,
+                        "created": now,
+                    },
+                )
+                matching_row = connection.execute(
+                    text("SELECT * FROM publish_proposals WHERE id=:id"), {"id": proposal_id}
+                ).one()
+                matching = _mapping(matching_row)
+            elif str(matching["expires_at"]) <= now:
+                connection.execute(
+                    text(
+                        "UPDATE publish_proposals SET nonce=:nonce, expires_at=:expires "
+                        "WHERE id=:id"
+                    ),
+                    {"nonce": secrets.token_hex(32), "expires": expires_at, "id": matching["id"]},
+                )
+                matching["nonce"] = connection.execute(
+                    text("SELECT nonce FROM publish_proposals WHERE id=:id"),
+                    {"id": matching["id"]},
+                ).scalar_one()
+                matching["expires_at"] = expires_at
+        return {
+            "review_job_id": str(job["id"]),
+            "repository_id": str(job["repository_id"]),
+            "head_sha": material["head_sha"],
+            "payload_sha256": material["payload_sha256"],
+            "finding_set_sha256": material["finding_set_sha256"],
+            "policy_version": material["policy_version"],
+            "nonce": str(matching["nonce"]),
+            "expires_at": str(matching["expires_at"]),
+        }
+
+    def pending_publish_reviews(self, principal: Principal) -> list[dict[str, Any]]:
+        access_clause = ""
+        if principal.role is not Role.ORG_ADMIN:
+            access_clause = (
+                " AND EXISTS (SELECT 1 FROM repository_access a "
+                "WHERE a.organization_id=j.organization_id AND a.repository_id=j.repository_id "
+                "AND a.user_id=:user)"
+            )
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT j.id FROM review_jobs j WHERE j.organization_id=:org "
+                    "AND j.state='awaiting_approval'" + access_clause + " ORDER BY j.completed_at, j.id"
+                ),
+                {"org": principal.organization_id, "user": principal.user_id},
+            ).all()
+        proposals = []
+        for row in rows:
+            try:
+                proposals.append(self._prepare_publish_proposal(principal, str(row._mapping["id"])))
+            except PublicationError as exc:
+                if exc.code not in {"approval_not_pending", "approval_not_publishable"}:
+                    raise
+        return proposals
+
+    def decide_publish_review(
+        self,
+        principal: Principal,
+        review_job_id: str,
+        *,
+        decision: str,
+        payload_sha256: str,
+        nonce: str,
+    ) -> dict[str, Any]:
+        if decision not in {"approved", "rejected"}:
+            raise PublicationError("approval_decision_invalid")
+        with self._write_transaction() as connection:
+            job = self._publish_job(connection, principal, review_job_id, lock=True)
+            if job is None:
+                raise PublicationError("approval_not_found")
+            if job["state"] != "awaiting_approval":
+                raise PublicationError("approval_consumed")
+            material = self._publication_material(connection, job)
+            if payload_sha256 != material["payload_sha256"]:
+                raise PublicationError("approval_payload_mismatch")
+            proposal_row = connection.execute(
+                text(
+                    "SELECT * FROM publish_proposals WHERE organization_id=:org AND "
+                    "review_job_id=:job AND nonce=:nonce"
+                ),
+                {"org": job["organization_id"], "job": job["id"], "nonce": nonce},
+            ).first()
+            if proposal_row is None:
+                raise PublicationError("approval_replayed")
+            proposal = _mapping(proposal_row)
+            now = utc_now()
+            if proposal["invalidated_at"] is not None:
+                raise PublicationError("approval_payload_mismatch")
+            if str(proposal["expires_at"]) <= now:
+                raise PublicationError("approval_expired")
+            if (
+                proposal["payload_sha256"] != material["payload_sha256"]
+                or proposal["head_sha"] != material["head_sha"]
+                or proposal["policy_version"] != material["policy_version"]
+            ):
+                connection.execute(
+                    text("UPDATE publish_proposals SET invalidated_at=:now WHERE id=:id"),
+                    {"now": now, "id": proposal["id"]},
+                )
+                raise PublicationError("approval_payload_mismatch")
+            approval_id = new_id()
+            connection.execute(
+                text(
+                    "INSERT INTO publish_approvals "
+                    "(id, organization_id, repository_id, review_job_id, proposal_id, principal_id, "
+                    "decision, head_sha, payload_sha256, policy_version, nonce, expires_at, used_at, "
+                    "created_at) VALUES (:id, :org, :repo, :job, :proposal, :principal, :decision, "
+                    ":head, :payload, :policy, :nonce, :expires, :used, :created)"
+                ),
+                {
+                    "id": approval_id,
+                    "org": job["organization_id"],
+                    "repo": job["repository_id"],
+                    "job": job["id"],
+                    "proposal": proposal["id"],
+                    "principal": principal.user_id,
+                    "decision": decision,
+                    "head": material["head_sha"],
+                    "payload": material["payload_sha256"],
+                    "policy": material["policy_version"],
+                    "nonce": nonce,
+                    "expires": proposal["expires_at"],
+                    "used": now,
+                    "created": now,
+                },
+            )
+            target_state = "approved" if decision == "approved" else "declined"
+            state_update = connection.execute(
+                text(
+                    "UPDATE review_jobs SET state=:state, updated_at=:updated WHERE id=:id "
+                    "AND organization_id=:org AND state='awaiting_approval'"
+                ),
+                {"state": target_state, "updated": datetime.now(timezone.utc), "id": job["id"], "org": job["organization_id"]},
+            )
+            if state_update.rowcount != 1:
+                raise PublicationError("approval_consumed")
+            connection.execute(
+                text("UPDATE publish_proposals SET invalidated_at=:now WHERE id=:id"),
+                {"now": now, "id": proposal["id"]},
+            )
+            if decision == "rejected":
+                connection.execute(
+                    text(
+                        "UPDATE findings SET status='rejected' WHERE organization_id=:org "
+                        "AND review_job_id=:job AND status IN ('pending_approval','approved')"
+                    ),
+                    {"org": job["organization_id"], "job": job["id"]},
+                )
+                attempt: dict[str, Any] | None = None
+            else:
+                idempotency_key = sha256_hex(
+                    f"{job['organization_id']}\0{job['id']}\0{material['payload_sha256']}\0{material['policy_version']}".encode(
+                        "utf-8"
+                    )
+                )
+                attempt = {
+                    "id": new_id(),
+                    "idempotency_key": idempotency_key,
+                    "status": "prepared",
+                }
+                connection.execute(
+                    text(
+                        "INSERT INTO publish_attempts "
+                        "(id, organization_id, repository_id, review_job_id, approval_id, "
+                        "idempotency_key, status, receipt_sha256, error_code, created_at, completed_at) "
+                        "VALUES (:id, :org, :repo, :job, :approval, :key, 'prepared', NULL, NULL, "
+                        ":created, NULL)"
+                    ),
+                    {
+                        "id": attempt["id"],
+                        "org": job["organization_id"],
+                        "repo": job["repository_id"],
+                        "job": job["id"],
+                        "approval": approval_id,
+                        "key": idempotency_key,
+                        "created": now,
+                    },
+                )
+            self._metric_event(
+                connection,
+                organization_id=str(job["organization_id"]),
+                repository_id=str(job["repository_id"]),
+                review_job_id=str(job["id"]),
+                approval_id=approval_id,
+                principal_id=principal.user_id,
+                event_type=f"publication.approval.{decision}",
+                subject_sha256=material["payload_sha256"],
+                occurred_at=now,
+            )
+        result = {
+            "approval_id": approval_id,
+            "review_job_id": str(job["id"]),
+            "repository_id": str(job["repository_id"]),
+            "decision": decision,
+            "head_sha": material["head_sha"],
+            "payload_sha256": material["payload_sha256"],
+            "policy_version": material["policy_version"],
+            "expires_at": str(proposal["expires_at"]),
+            "used_at": now,
+        }
+        if attempt is not None:
+            result["_publish"] = {
+                "attempt_id": attempt["id"],
+                "idempotency_key": attempt["idempotency_key"],
+                "payload": material["payload"],
+                "repository_alias": str(job["repository_alias"]),
+                "pull_request": str(job["source_ref"]),
+            }
+        return result
+
+    def finish_publish_attempt(
+        self,
+        *,
+        approval_id: str,
+        review_job_id: str,
+        receipt_id: str | None,
+        error_code: str | None,
+    ) -> None:
+        success = receipt_id is not None
+        now = utc_now()
+        with self._write_transaction() as connection:
+            approval = connection.execute(
+                text(
+                    "SELECT organization_id, repository_id, principal_id, payload_sha256 "
+                    "FROM publish_approvals WHERE id=:approval AND review_job_id=:job"
+                ),
+                {"approval": approval_id, "job": review_job_id},
+            ).first()
+            if approval is None:
+                raise PublicationError("publish_attempt_not_found")
+            row = _mapping(approval)
+            attempt = connection.execute(
+                text(
+                    "UPDATE publish_attempts SET status=:status, receipt_sha256=:receipt, "
+                    "error_code=:error, completed_at=:completed WHERE approval_id=:approval "
+                    "AND review_job_id=:job AND status='prepared'"
+                ),
+                {
+                    "status": "succeeded" if success else "failed",
+                    "receipt": sha256_hex(str(receipt_id).encode("utf-8")) if success else None,
+                    "error": None if success else (error_code or "publisher_failed"),
+                    "completed": now,
+                    "approval": approval_id,
+                    "job": review_job_id,
+                },
+            )
+            if attempt.rowcount != 1:
+                return
+            target_state = "published" if success else "failed"
+            connection.execute(
+                text(
+                    "UPDATE review_jobs SET state=:state, error_code=:error, updated_at=:updated "
+                    "WHERE id=:job AND organization_id=:org AND state='approved'"
+                ),
+                {
+                    "state": target_state,
+                    "error": None if success else (error_code or "publisher_failed"),
+                    "updated": datetime.now(timezone.utc),
+                    "job": review_job_id,
+                    "org": row["organization_id"],
+                },
+            )
+            if success:
+                connection.execute(
+                    text(
+                        "UPDATE findings SET status='published' WHERE organization_id=:org "
+                        "AND review_job_id=:job AND status IN ('pending_approval','approved')"
+                    ),
+                    {"org": row["organization_id"], "job": review_job_id},
+                )
+            self._metric_event(
+                connection,
+                organization_id=str(row["organization_id"]),
+                repository_id=str(row["repository_id"]),
+                review_job_id=review_job_id,
+                approval_id=approval_id,
+                principal_id=str(row["principal_id"]),
+                event_type="publication.published" if success else "publication.failed",
+                subject_sha256=str(row["payload_sha256"]),
+                occurred_at=now,
+            )
+
+    def publish_approvals_for_review(
+        self, principal: Principal, review_job_id: str
+    ) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            job = self._publish_job(connection, principal, review_job_id, lock=False)
+            if job is None:
+                return []
+            rows = connection.execute(
+                text(
+                    "SELECT id, principal_id, decision, head_sha, payload_sha256, policy_version, "
+                    "expires_at, used_at, created_at FROM publish_approvals WHERE organization_id=:org "
+                    "AND review_job_id=:job ORDER BY created_at, id"
+                ),
+                {"org": principal.organization_id, "job": review_job_id},
+            ).all()
+        return [_mapping(row) for row in rows]
 
 
 def _default_database_url() -> str:

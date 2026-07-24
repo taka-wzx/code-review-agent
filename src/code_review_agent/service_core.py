@@ -16,6 +16,13 @@ from typing import Any, Callable, Iterable, Mapping, Protocol
 import uuid
 
 from code_review_agent.agent import run_review
+from code_review_agent.approval_publish import (
+    DryRunPublisher,
+    PublicationError,
+    PublishReceipt,
+    PublishRequest,
+    Publisher,
+)
 from code_review_agent.database import database_url_from_env, sqlite_database_url
 from code_review_agent.identity import (
     Permission,
@@ -66,6 +73,14 @@ class ExternalCommandError(RuntimeError):
 
 class ModelCallBudgetExceeded(RuntimeError):
     """Raised before a provider request would exceed the job call budget."""
+
+
+class ApprovalConflict(IdempotencyConflict):
+    code = "approval_conflict"
+
+
+class PublisherFailed(ServiceError):
+    code = "publisher_failed"
 
 
 def _without_sdk_retries(target: Any) -> Any:
@@ -390,6 +405,7 @@ class ReviewService:
         runner: ReviewRunner | None = None,
         workers: int = 2,
         local_mode: bool = True,
+        publisher: Publisher | None = None,
     ) -> None:
         if isinstance(workers, bool) or not 1 <= workers <= 8:
             raise ValueError("workers must be between 1 and 8")
@@ -397,6 +413,7 @@ class ReviewService:
         self.store = store
         self.runner = runner
         self.local_mode = local_mode
+        self.publisher = publisher or DryRunPublisher()
         if local_mode:
             self.store.bootstrap_local(self.registry.paths.keys())
         self._lock = threading.Lock()
@@ -1028,16 +1045,26 @@ class ReviewService:
         finding_id: str,
         *,
         decision: str,
-        reason: str | None,
+        reason: str | None = None,
+        rationale: str | None = None,
         principal: Principal | None = None,
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.SUBMIT_FEEDBACK, "finding.feedback")
+        if decision not in {"accepted", "rejected", "uncertain", "fixed", "duplicate"}:
+            raise InvalidRequest("feedback decision is invalid")
+        if reason is not None and rationale is not None:
+            raise InvalidRequest("feedback rationale is ambiguous")
+        rationale = rationale if rationale is not None else reason
+        if rationale is not None and (
+            not isinstance(rationale, str) or len(rationale) > 512
+        ):
+            raise InvalidRequest("feedback rationale is invalid")
         finding = self.store.database.finding_for_principal(actor, finding_id)
         if finding is None:
             raise JobNotFound("finding was not found")
         record = self.store.database.create_feedback(
-            actor, finding, decision=decision, reason=reason
+            actor, finding, decision=decision, rationale=rationale
         )
         self._audit(
             actor,
@@ -1048,6 +1075,163 @@ class ReviewService:
             repository_id=str(finding["repository_id"]),
         )
         return record
+
+    @staticmethod
+    def _raise_approval_error(error: PublicationError) -> None:
+        if error.code == "approval_not_found":
+            raise JobNotFound("review job was not found") from error
+        if error.code in {
+            "approval_consumed",
+            "approval_replayed",
+            "approval_expired",
+            "approval_payload_mismatch",
+            "approval_not_pending",
+        }:
+            raise ApprovalConflict("approval is not valid for the current review") from error
+        raise InvalidRequest("review cannot be approved for publication") from error
+
+    def list_pending_approvals(
+        self, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "publication.pending.list")
+        try:
+            records = self.store.database.pending_publish_reviews(actor)
+        except PublicationError as error:
+            self._raise_approval_error(error)
+        self._audit(
+            actor,
+            "publication.pending.list",
+            "organization",
+            actor.organization_id,
+            "allow",
+        )
+        return records
+
+    def _finish_publication(
+        self, actor: Principal, record: dict[str, Any]
+    ) -> dict[str, Any]:
+        publish = record.pop("_publish", None)
+        if not isinstance(publish, dict):
+            return record
+        request = PublishRequest(
+            organization_id=actor.organization_id,
+            repository_id=str(record["repository_id"]),
+            review_job_id=str(record["review_job_id"]),
+            repository_alias=str(publish["repository_alias"]),
+            pull_request=str(publish["pull_request"]),
+            head_sha=str(record["head_sha"]),
+            payload=publish["payload"],
+            payload_sha256=str(record["payload_sha256"]),
+            idempotency_key=str(publish["idempotency_key"]),
+        )
+        receipt: PublishReceipt | None = None
+        try:
+            receipt = self.publisher.publish(request)
+        except Exception:
+            try:
+                receipt = self.publisher.lookup(request.idempotency_key)
+            except Exception:
+                receipt = None
+        if receipt is None:
+            self.store.database.finish_publish_attempt(
+                approval_id=str(record["approval_id"]),
+                review_job_id=str(record["review_job_id"]),
+                receipt_id=None,
+                error_code="publisher_failed",
+            )
+            self._audit(
+                actor,
+                "publication.publish",
+                "review_job",
+                str(record["review_job_id"]),
+                "error",
+                repository_id=str(record["repository_id"]),
+                reason_code="publisher_failed",
+            )
+            raise PublisherFailed("publisher did not return an idempotent receipt")
+        self.store.database.finish_publish_attempt(
+            approval_id=str(record["approval_id"]),
+            review_job_id=str(record["review_job_id"]),
+            receipt_id=receipt.receipt_id,
+            error_code=None,
+        )
+        self._audit(
+            actor,
+            "publication.publish",
+            "review_job",
+            str(record["review_job_id"]),
+            "allow",
+            repository_id=str(record["repository_id"]),
+        )
+        record["state"] = "published"
+        return record
+
+    def decide_review_publication(
+        self,
+        review_job_id: str,
+        *,
+        decision: str,
+        payload_sha256: str,
+        nonce: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.APPROVE_PUBLICATION, "publication.decide")
+        try:
+            record = self.store.database.decide_publish_review(
+                actor,
+                review_job_id,
+                decision=decision,
+                payload_sha256=payload_sha256,
+                nonce=nonce,
+            )
+        except PublicationError as error:
+            self._raise_approval_error(error)
+        self._audit(
+            actor,
+            f"publication.{decision}",
+            "review_job",
+            review_job_id,
+            "allow",
+            repository_id=str(record["repository_id"]),
+        )
+        return self._finish_publication(actor, record)
+
+    def list_review_approvals(
+        self, review_job_id: str, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "publication.approval.list")
+        job = self.store.get(review_job_id, actor)
+        records = self.store.database.publish_approvals_for_review(actor, review_job_id)
+        self._audit(
+            actor,
+            "publication.approval.list",
+            "review_job",
+            review_job_id,
+            "allow",
+            repository_id=str(job["repository_id"]),
+        )
+        return records
+
+    def list_finding_feedback(
+        self, finding_id: str, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "finding.feedback.list")
+        finding = self.store.database.finding_detail(actor, finding_id)
+        if finding is None:
+            raise JobNotFound("finding was not found")
+        self._audit(
+            actor,
+            "finding.feedback.list",
+            "finding",
+            finding_id,
+            "allow",
+            repository_id=str(finding["repository_id"]),
+        )
+        return list(finding["feedback"])
 
     def decide_finding(
         self,

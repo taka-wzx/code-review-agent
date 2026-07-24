@@ -42,6 +42,7 @@ from code_review_agent.service_core import (
     InvalidRequest,
     JobNotFound,
     MAX_DIFF_BYTES,
+    PublisherFailed,
     ReviewService,
     SCHEMA_VERSION,
     ServiceClosed,
@@ -116,8 +117,15 @@ class CredentialCreate(BaseModel):
 
 class FeedbackCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    decision: str = Field(pattern="^(accepted|rejected)$")
-    reason: str | None = Field(default=None, max_length=64)
+    decision: str = Field(pattern="^(accepted|rejected|uncertain|fixed|duplicate)$")
+    rationale: str | None = Field(default=None, max_length=512)
+    reason: str | None = Field(default=None, max_length=512)
+
+
+class PublicationDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    payload_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    nonce: str = Field(pattern="^[0-9a-f]{64}$")
 
 
 class FindingDecision(BaseModel):
@@ -313,6 +321,8 @@ def create_app(
             if isinstance(exc, ServiceClosed)
             else 413
             if isinstance(exc, PayloadTooLarge)
+            else 503
+            if isinstance(exc, PublisherFailed)
             else 400
         )
         if exc.code == "service_error":
@@ -472,6 +482,38 @@ def create_app(
         )
         return {**job, "duplicate": duplicate}
 
+    @app.get("/v1/reviews/pending-approval")
+    def list_pending_approval_reviews(request: Request) -> dict[str, Any]:
+        return {
+            "reviews": service.list_pending_approvals(
+                principal=request_principal(request)
+            )
+        }
+
+    @app.post("/v1/reviews/{review_id}/approve")
+    def approve_review(
+        request: Request, review_id: str, body: PublicationDecision
+    ) -> dict[str, Any]:
+        return service.decide_review_publication(
+            review_id,
+            decision="approved",
+            payload_sha256=body.payload_sha256,
+            nonce=body.nonce,
+            principal=request_principal(request),
+        )
+
+    @app.post("/v1/reviews/{review_id}/reject")
+    def reject_review(
+        request: Request, review_id: str, body: PublicationDecision
+    ) -> dict[str, Any]:
+        return service.decide_review_publication(
+            review_id,
+            decision="rejected",
+            payload_sha256=body.payload_sha256,
+            nonce=body.nonce,
+            principal=request_principal(request),
+        )
+
     @app.get("/v1/reviews/{review_id}")
     def get_review(request: Request, review_id: str) -> dict[str, Any]:
         return service.get(review_id, principal=request_principal(request))
@@ -494,6 +536,22 @@ def create_app(
     @app.get("/v1/findings/{finding_id}")
     def get_finding(request: Request, finding_id: str) -> dict[str, Any]:
         return service.get_finding(finding_id, principal=request_principal(request))
+
+    @app.get("/v1/reviews/{review_id}/approvals")
+    def list_review_approvals(request: Request, review_id: str) -> dict[str, Any]:
+        return {
+            "approvals": service.list_review_approvals(
+                review_id, principal=request_principal(request)
+            )
+        }
+
+    @app.get("/v1/findings/{finding_id}/feedback")
+    def list_finding_feedback(request: Request, finding_id: str) -> dict[str, Any]:
+        return {
+            "feedback": service.list_finding_feedback(
+                finding_id, principal=request_principal(request)
+            )
+        }
 
     @app.get("/v1/organizations/{organization_id}/memberships")
     def list_memberships(request: Request, organization_id: str) -> dict[str, Any]:
@@ -636,6 +694,7 @@ def create_app(
             finding_id,
             decision=body.decision,
             reason=body.reason,
+            rationale=body.rationale,
             principal=request_principal(request),
         )
 
