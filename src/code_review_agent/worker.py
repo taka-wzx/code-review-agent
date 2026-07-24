@@ -21,6 +21,7 @@ import uuid
 from sqlalchemy.exc import SQLAlchemyError
 
 from code_review_agent.database import database_url_from_env, sqlite_database_url
+from code_review_agent.context_memory import OrganizationPolicyStore, RepositoryMemoryStore
 from code_review_agent.llm import make_client
 from code_review_agent.observability import aggregate_trace, load_span_records
 from code_review_agent.service_core import (
@@ -611,7 +612,9 @@ def create_worker_from_env() -> ReviewWorker:
                 return client_model
 
             runner = DefaultReviewRunner(
-                client_factory=cached_client_factory
+                client_factory=cached_client_factory,
+                memory_store=RepositoryMemoryStore(store.database),
+                policy_store=OrganizationPolicyStore(store.database),
             )
         else:
             raise InvalidRequest("CRAG_WORKER_RUNNER must be real or fake")

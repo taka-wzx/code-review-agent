@@ -24,6 +24,13 @@ from code_review_agent.approval_publish import (
     Publisher,
 )
 from code_review_agent.database import database_url_from_env, sqlite_database_url
+from code_review_agent.context_memory import (
+    ContextMode,
+    MemorySource,
+    OrganizationPolicy,
+    OrganizationPolicyStore,
+    RepositoryMemoryStore,
+)
 from code_review_agent.identity import (
     Permission,
     PermissionDenied,
@@ -275,11 +282,17 @@ class DefaultReviewRunner:
         process_factory: Callable[..., Any] = subprocess.Popen,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        memory_store: RepositoryMemoryStore | None = None,
+        policy_store: OrganizationPolicyStore | None = None,
+        context_mode: ContextMode | str = ContextMode.HIERARCHICAL,
     ) -> None:
         self._client_factory = client_factory
         self._process_factory = process_factory
         self._clock = clock
         self._sleep = sleep
+        self._memory_store = memory_store
+        self._policy_store = policy_store
+        self._context_mode = ContextMode.parse(context_mode)
 
     @staticmethod
     def _command_environment() -> dict[str, str]:
@@ -379,7 +392,19 @@ class DefaultReviewRunner:
             client = _without_sdk_retries(client)
             budgeted_client: Any = _BudgetedClient(client, request.model_call_limit)
             tev(trace, "meta", provider=os.environ.get("LLM_PROVIDER", "deepseek"), model=model)
-            return run_review(budgeted_client, diff, request.repo_root, model, trace=trace)
+            return run_review(
+                budgeted_client,
+                diff,
+                request.repo_root,
+                model,
+                trace=trace,
+                context_mode=self._context_mode,
+                memory_store=self._memory_store,
+                policy_store=self._policy_store,
+                organization_id=request.organization_id,
+                repository_id=request.repository_id,
+                source_revision=request.head_sha,
+            )
         except BaseException as exc:
             error = (type(exc).__name__, _safe_failure(exc))
             raise
@@ -1039,6 +1064,96 @@ class ReviewService:
         actor = self._principal(principal)
         self._require(actor, Permission.READ_AUDIT, "audit.list")
         return self.store.database.list_audit_events(actor.organization_id, limit=limit)
+
+    def get_organization_policy(
+        self, *, principal: Principal | None = None
+    ) -> dict[str, Any] | None:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "organization.policy.read")
+        policy = OrganizationPolicyStore(self.store.database).active(actor.organization_id)
+        self._audit(
+            actor,
+            "organization.policy.read",
+            "organization",
+            actor.organization_id,
+            "allow",
+        )
+        if policy is None:
+            return None
+        return {
+            "organization_id": policy.organization_id,
+            "version": policy.version,
+            "severity_levels": list(policy.severity_levels),
+            "forbidden_operations": list(policy.forbidden_operations),
+            "allowed_tools": list(policy.allowed_tools),
+            "approval_threshold": policy.approval_threshold,
+            "retention_days": policy.retention_days,
+            "cost_budget_microusd": policy.cost_budget_microusd,
+            "source_sha": policy.source_sha,
+            "created_by": policy.created_by,
+            "reason": policy.reason,
+            "created_at": policy.created_at,
+            "invalidated_at": policy.invalidated_at,
+        }
+
+    def put_organization_policy(
+        self,
+        *,
+        version: str,
+        severity_levels: Iterable[str],
+        forbidden_operations: Iterable[str],
+        allowed_tools: Iterable[str],
+        approval_threshold: int,
+        retention_days: int,
+        cost_budget_microusd: int,
+        source_sha: str,
+        reason: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_POLICY, "organization.policy.write")
+        policy = OrganizationPolicy(
+            organization_id=actor.organization_id,
+            version=version,
+            severity_levels=tuple(severity_levels),
+            forbidden_operations=tuple(forbidden_operations),
+            allowed_tools=tuple(allowed_tools),
+            approval_threshold=approval_threshold,
+            retention_days=retention_days,
+            cost_budget_microusd=cost_budget_microusd,
+            created_by=actor.user_id,
+            reason=reason,
+            source_sha=source_sha,
+        )
+        policy_id = OrganizationPolicyStore(self.store.database).put(
+            policy, source_kind=MemorySource.ADMIN_CONFIG
+        )
+        self._audit(
+            actor,
+            "organization.policy.write",
+            "organization_policy",
+            policy_id,
+            "allow",
+        )
+        return self.get_organization_policy(principal=actor) or {}
+
+    def invalidate_organization_policy(
+        self, version: str, *, principal: Principal | None = None
+    ) -> None:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_POLICY, "organization.policy.invalidate")
+        changed = OrganizationPolicyStore(self.store.database).invalidate(
+            actor.organization_id, version
+        )
+        if not changed:
+            raise JobNotFound("organization policy was not found")
+        self._audit(
+            actor,
+            "organization.policy.invalidate",
+            "organization_policy",
+            version,
+            "allow",
+        )
 
     def submit_feedback(
         self,

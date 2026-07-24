@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Callable
 
+from code_review_agent.context_memory import RunContext
 from code_review_agent.llm import REQUEST_TIMEOUT
 from code_review_agent.tracelog import tev, tspan
 
@@ -52,7 +53,8 @@ def run_submit_loop(client, model: str, messages: list, *,
                      on_text_answer: str = "raise",
                      text_answer_problem: str = "",
                      text_answer_nudge: str = "",
-                     deadline=None) -> LoopResult:
+                     deadline=None,
+                     run_context: RunContext | None = None) -> LoopResult:
     """Run the loop until a validated submit, a failure, or the step cap.
 
     parse: raw submit-arguments JSON -> (payload, problems); the payload
@@ -69,6 +71,10 @@ def run_submit_loop(client, model: str, messages: list, *,
     empty_retried = False
     last_problems: list = []
     for step in range(1, max_steps + 1):
+        if run_context is not None and run_context.token_remaining <= 0:
+            run_context.record_stage(component, reason="token_budget", steps=step - 1)
+            return LoopResult(steps=step - 1, problems=last_problems,
+                              reason="token_budget")
         request_timeout = None
         if deadline is not None:
             # Take one monotonic snapshot for both the go/no-go decision and
@@ -142,16 +148,35 @@ def run_submit_loop(client, model: str, messages: list, *,
                 tool_calls=[tc.function.name for tc in tool_calls],
                 tokens_in=u.prompt_tokens, tokens_out=u.completion_tokens,
                 **cache)
+            if run_context is not None:
+                within_budget = run_context.consume_tokens(
+                    int(u.prompt_tokens) + int(u.completion_tokens)
+                )
+                run_context.record_stage(
+                    component,
+                    steps=step,
+                    tokens_in=int(u.prompt_tokens),
+                    tokens_out=int(u.completion_tokens),
+                )
+            else:
+                within_budget = True
 
         # A submit call only ends the run if its payload validates;
         # otherwise the problems are fed back as the tool result and the
         # loop continues.
+        if not within_budget:
+            if run_context is not None:
+                run_context.record_stage(component, reason="token_budget", steps=step)
+            return LoopResult(steps=step, usage=u, problems=last_problems,
+                              reason="token_budget")
         submit = next((tc for tc in tool_calls
                        if tc.function.name == submit_name), None)
         problems: list = []
         if submit is not None:
             payload, problems = parse(submit.function.arguments)
             if not problems:
+                if run_context is not None:
+                    run_context.record_stage(component, reason="ok", steps=step)
                 return LoopResult(payload=payload, steps=step, usage=u,
                                   reason="ok")
             bad_submits += 1
@@ -237,12 +262,21 @@ def run_submit_loop(client, model: str, messages: list, *,
                         tc.function.name,
                         tc.function.arguments,
                     )
+                    if run_context is not None:
+                        run_context.record_tool(component, tc.function.name, content)
                     tool_span.set_attribute(
                         "crag.tool.result_bytes",
                         len(content.encode("utf-8", errors="replace")),
                     )
             messages.append({"role": "tool", "tool_call_id": tc.id,
                              "content": content})
+        if not within_budget:
+            if run_context is not None:
+                run_context.record_stage(component, reason="token_budget", steps=step)
+            return LoopResult(steps=step, usage=u, problems=last_problems,
+                              reason="token_budget")
 
+    if run_context is not None:
+        run_context.record_stage(component, reason="step_cap", steps=max_steps)
     return LoopResult(steps=max_steps, problems=last_problems,
                       reason="step_cap")

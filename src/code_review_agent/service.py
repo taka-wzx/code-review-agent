@@ -81,6 +81,19 @@ class ServiceQuotaUpdate(BaseModel):
     model_call_limit_per_job: int | None = Field(default=None, ge=1, le=256)
 
 
+class OrganizationPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    version: str = Field(min_length=1, max_length=128)
+    severity_levels: list[str] = Field(min_length=1, max_length=16)
+    forbidden_operations: list[str] = Field(default_factory=list, max_length=64)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=64)
+    approval_threshold: int = Field(ge=1, le=100)
+    retention_days: int = Field(ge=1, le=3650)
+    cost_budget_microusd: int = Field(ge=0, le=10_000_000_000)
+    source_sha: str = Field(pattern="^[0-9a-fA-F]{7,64}$")
+    reason: str = Field(min_length=1, max_length=512)
+
+
 class MembershipCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     subject: str = Field(min_length=1, max_length=256)
@@ -621,6 +634,33 @@ def create_app(
             policy_version=body.policy_version,
             principal=principal,
         )
+
+    @app.get("/v1/organizations/{organization_id}/policy")
+    def get_organization_policy(request: Request, organization_id: str) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        policy = service.get_organization_policy(principal=principal)
+        return {"policy": policy}
+
+    @app.put("/v1/organizations/{organization_id}/policy")
+    def put_organization_policy(
+        request: Request, organization_id: str, body: OrganizationPolicyUpdate
+    ) -> dict[str, Any]:
+        principal = require_organization(request, organization_id)
+        return {
+            "policy": service.put_organization_policy(
+                principal=principal, **body.model_dump()
+            )
+        }
+
+    @app.post(
+        "/v1/organizations/{organization_id}/policy/{version}/invalidate",
+        status_code=204,
+    )
+    def invalidate_organization_policy(
+        request: Request, organization_id: str, version: str
+    ) -> None:
+        principal = require_organization(request, organization_id)
+        service.invalidate_organization_policy(version, principal=principal)
 
     @app.get("/v1/organizations/{organization_id}/service-quota")
     def get_organization_service_quota(

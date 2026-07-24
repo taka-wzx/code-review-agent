@@ -10,6 +10,7 @@ Usage (after `pip install -e .`):
     python -m code_review_agent sample.diff
 """
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -20,7 +21,14 @@ from openai import OpenAI
 import openai
 
 from code_review_agent.agentloop import run_submit_loop
-from code_review_agent.context import build_context, parse_diff
+from code_review_agent.context import CONTEXT_TOKEN_CAP, build_context_for_mode, parse_diff
+from code_review_agent.context_memory import (
+    ContextMode,
+    OrganizationPolicyStore,
+    RepositoryMemoryStore,
+    RunContext,
+    repository_source_sha,
+)
 from code_review_agent.findings import dedup_union, split_by_scope
 from code_review_agent.llm import make_client
 from code_review_agent.orchestration import (
@@ -143,7 +151,8 @@ def validate_review(review) -> list[str]:
 
 
 def _finder_pass(client, model: str, user: str, repo_root: Path, *,
-                 trace, component: str, temperature: float, deadline=None):
+                 trace, component: str, temperature: float, deadline=None,
+                 run_context: RunContext | None = None):
     """One finder conversation: fresh messages and a fresh ToolSession per
     pass (run_submit_loop mutates messages in place, and the repeat-call
     cache / miss-streak state are per-conversation by design)."""
@@ -175,36 +184,86 @@ def _finder_pass(client, model: str, user: str, repo_root: Path, *,
         label="" if component == "finder" else component,
         on_text_answer="raise",
         deadline=deadline,
+        run_context=run_context,
     )
 
 
 def build_review_input(diff_text: str, repo_root: Path,
                        use_context: bool = True,
-                       log=lambda msg: None) -> str:
+                       log=lambda msg: None,
+                       *,
+                       context_mode: ContextMode | str | None = None,
+                       run_context: RunContext | None = None,
+                       memory_store: RepositoryMemoryStore | None = None,
+                       policy_store: OrganizationPolicyStore | None = None,
+                       organization_id: str = "",
+                       repository_id: str = "",
+                       base_sha: str | None = None,
+                       context_token_cap: int = CONTEXT_TOKEN_CAP) -> str:
     """The exact user message the finder receives (and the verifier, which
     shares the finder's view). Shared with replay_verifier.py so replays
     reconstruct inputs with production code instead of a copy."""
     user = f"Review this diff:\n\n```diff\n{diff_text}\n```"
-    if use_context:
-        pack = build_context(diff_text, Path(repo_root), log=log)
+    mode = context_mode or (
+        ContextMode.CURRENT_STATIC if use_context else ContextMode.OFF
+    )
+    if ContextMode.parse(mode) is not ContextMode.OFF:
+        pack = build_context_for_mode(
+            diff_text,
+            Path(repo_root),
+            mode=mode,
+            run_context=run_context,
+            memory_store=memory_store,
+            policy_store=policy_store,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            base_sha=base_sha,
+            token_cap=context_token_cap,
+            log=log,
+        )
         if pack:
-            user += ("\n\nRepository context retrieved automatically (conventions, "
-                     "changed files in full, callers). You can still use read_file "
-                     "for anything not covered:\n\n" + pack)
+            if ContextMode.parse(mode) is ContextMode.CURRENT_STATIC:
+                user += ("\n\nRepository context retrieved automatically (conventions, "
+                         "changed files in full, callers). You can still use read_file "
+                         "for anything not covered:\n\n" + pack)
+            else:
+                user += ("\n\nRepository context retrieved automatically (trusted memory, "
+                         "policy, conventions, changed files, imports, and callers as enabled). "
+                         "You can still use read_file for anything not covered:\n\n" + pack)
     return user
 
 
 def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
                use_context: bool = True, use_verify: bool = True,
-               trace: Trace | None = None) -> dict:
+               trace: Trace | None = None, *,
+               context_mode: ContextMode | str | None = None,
+               run_context: RunContext | None = None,
+               memory_store: RepositoryMemoryStore | None = None,
+               policy_store: OrganizationPolicyStore | None = None,
+               organization_id: str = "",
+               repository_id: str = "",
+               source_revision: str | None = None,
+               context_token_cap: int = CONTEXT_TOKEN_CAP,
+               run_token_budget: int = 200_000) -> dict:
     deadline = Deadline.after(REVIEW_TIMEOUT_SECONDS)
+    mode = ContextMode.parse(context_mode or (
+        ContextMode.CURRENT_STATIC if use_context else ContextMode.OFF
+    ))
+    revision = source_revision or repository_source_sha(Path(repo_root))
+    if revision is None:
+        revision = hashlib.sha256(diff_text.encode("utf-8")).hexdigest()
+    active_context = run_context or RunContext.create(
+        diff_text, revision, run_token_budget
+    )
+    active_context.set_plan(("build_context", "finder", "verifier", "finalize"))
     with tspan(
         trace,
         "crag.stage context",
         operation="agent.stage",
         attributes={
             "crag.stage.name": "context",
-            "crag.context.enabled": use_context,
+            "crag.context.enabled": mode is not ContextMode.OFF,
+            "crag.context.mode": mode.value,
             "crag.input.diff_bytes": len(diff_text.encode("utf-8")),
         },
     ):
@@ -213,6 +272,14 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
             repo_root,
             use_context,
             log=lambda m: print(f"[context] {m}", file=sys.stderr),
+            context_mode=mode,
+            run_context=active_context,
+            memory_store=memory_store,
+            policy_store=policy_store,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            base_sha=revision,
+            context_token_cap=context_token_cap,
         )
 
     # The anchor and sampling conversations are independent and share only
@@ -221,11 +288,11 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
     anchor_outcome, sample_outcome = _run_pair(
         lambda: _finder_pass(client, model, user, repo_root, trace=trace,
                              component="finder", temperature=0.0,
-                             deadline=deadline),
+                             deadline=deadline, run_context=active_context),
         lambda: _finder_pass(client, model, user, repo_root, trace=trace,
                              component="finder2",
                              temperature=FINDER2_TEMPERATURE,
-                             deadline=deadline),
+                             deadline=deadline, run_context=active_context),
         stage="finder", trace=trace,
     )
     if anchor_outcome.error is not None:
@@ -239,6 +306,8 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
     if result.reason == "deadline":
         raise RuntimeError("review deadline exhausted before the anchor finder "
                            "submitted a valid review")
+    if result.reason == "token_budget":
+        raise RuntimeError("review run context token budget exhausted")
     if result.reason != "ok":
         raise RuntimeError(f"agent did not finish within {MAX_STEPS} steps")
 
@@ -283,6 +352,9 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         tev(trace, "finder2_failed", reason=reason2)
 
     union, n_merged = dedup_union(review.get("findings", []), extra)
+    active_context.record_stage(
+        "finder", candidates=len(union), merged=n_merged, steps=steps
+    )
     tev(trace, "finder_union", n_run1=len(review.get("findings", [])),
         n_run2=len(extra), n_merged=n_merged, n_union=len(union))
 
@@ -311,9 +383,14 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
         # "failed_open" means these findings are UNFILTERED (broken verifier
         # kept everything) -- consumers must see that, not infer it.
         review["verifier_status"] = vstatus
+        active_context.record_stage(
+            "verifier", status=vstatus, kept=len(kept), dropped=len(dropped)
+        )
     tev(trace, "review", steps=steps, findings=len(review["findings"]),
         dropped=len(review.get("dropped_findings", [])),
         out_of_scope=len(out_of_scope))
+    run_summary = active_context.close()
+    del run_summary  # RunContext is intentionally not persisted as durable memory.
     return review
 
 
@@ -389,6 +466,12 @@ def main():
                         help="Review GitHub PR #N in --repo (needs gh; check out the PR branch first)")
     parser.add_argument("--no-context", action="store_true",
                         help="Skip proactive context retrieval (ablation)")
+    parser.add_argument(
+        "--context-mode",
+        choices=[mode.value for mode in ContextMode],
+        default=ContextMode.CURRENT_STATIC.value,
+        help="Context ablation: off, current_static, or hierarchical",
+    )
     parser.add_argument("--no-verify", action="store_true",
                         help="Skip the verifier second pass (ablation)")
     parser.add_argument("--trace", metavar="PATH",
@@ -404,6 +487,9 @@ def main():
                         help="Print the gh command and review payload "
                              "without posting (requires --pr)")
     args = parser.parse_args()
+
+    if args.no_context and args.context_mode != ContextMode.CURRENT_STATIC.value:
+        parser.error("--no-context cannot be combined with an explicit --context-mode")
 
     sources = [bool(args.diff), bool(args.commit), args.uncommitted, bool(args.pr)]
     if sum(sources) != 1:
@@ -436,7 +522,9 @@ def main():
         review = run_review(client, diff_text, Path(args.repo), model,
                             use_context=not args.no_context,
                             use_verify=not args.no_verify,
-                            trace=trace)
+                            trace=trace,
+                            context_mode=(ContextMode.OFF.value if args.no_context
+                                          else args.context_mode))
     except openai.AuthenticationError as exc:
         trace_error = (type(exc).__name__, "auth")
         sys.exit("Invalid or missing API key -- check your .env / environment variable")
