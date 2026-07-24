@@ -33,6 +33,7 @@ class Permission(str, Enum):
     SUBMIT_REVIEW = "submit_review"
     SUBMIT_FEEDBACK = "submit_feedback"
     DECIDE_FINDING = "decide_finding"
+    APPROVE_PUBLICATION = "approve_publication"
     MANAGE_MEMBERS = "manage_members"
     MANAGE_REPOSITORIES = "manage_repositories"
     MANAGE_CREDENTIALS = "manage_credentials"
@@ -50,6 +51,7 @@ _ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = {
             Permission.SUBMIT_REVIEW,
             Permission.SUBMIT_FEEDBACK,
             Permission.DECIDE_FINDING,
+            Permission.APPROVE_PUBLICATION,
         }
     ),
     Role.ORG_ADMIN: frozenset(
@@ -59,6 +61,7 @@ _ROLE_PERMISSIONS: Mapping[Role, frozenset[Permission]] = {
             Permission.MANAGE_REPOSITORIES,
             Permission.MANAGE_CREDENTIALS,
             Permission.READ_AUDIT,
+            Permission.APPROVE_PUBLICATION,
         }
     ),
 }
