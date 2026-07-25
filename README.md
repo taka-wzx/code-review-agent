@@ -7,7 +7,8 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 > **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、组织/
 > 用户/RBAC、Postgres 持久 job lease、API/worker 分离、背压与限流、Finding 审批/反馈基础、
 > Alembic migration 和 canonical trace；真实 OAuth/OIDC 验签服务、完整审批 UI、真实 GitHub
-> guarded publish、跨主机 artifact store、指标聚合和云部署仍未实现。历史评测和 Phase 9C
+> 跨主机 artifact store、真实 collector/通知渠道和云部署仍未实现。Phase 9F 已增加数据库聚合
+> `/metrics`、离线 Grafana/Prometheus 资产和 SLO 合同；历史评测和 Phase 9C
 > 容量检查来自单项目数据、确定性 fakes 或 synthetic 流程，应读作工程证据，不是生产收益。
 
 ## 产品主线
@@ -55,6 +56,7 @@ repository/PR/head SHA、Finding 内容哈希和一次性审批。反馈记忆�
 - **双 Finder、双 Verifier、分歧处理**：finder 采样跑失败 fail-open 降级单跑；verifier 单 pass 失败降级单复核、双失败 fail-open 放行并在输出标注 `verifier_status`；pass 间分歧不靠模型自报置信度，直接结构化为 uncertain
 - **阶段内并行 + 全程软截止**（`orchestration.py`，Week 2）：finder 锚定/采样两跑用两个线程并行，verifier A/B 两 pass 用两个线程并行（两阶段之间仍串联）；整个 review 共享一个 300 秒 monotonic 软截止（从上下文构建前起算），截止后不再发起新的 LLM 请求，单请求 timeout 取剩余预算与原有 120s 上限的较小值；原有 fatal/降级/fail-open 语义不变
 - **Canonical trace/span**（`observability.py`、`redaction.py`、`tracelog.py`，Week 6 Phase 2）：每次 Agent Run、阶段、LLM、工具、策略、审批、沙箱、checkpoint 和终态使用同一 `crag.observability/v1alpha1` trace；记录 provider/model、可用 token、整数 micro-USD、时延、工具与 fail-open/degraded 计数；原始 Prompt、diff、工具参数/结果、stdout/stderr、异常消息和主机绝对路径在序列化前统一剔除或脱敏；旧 flat JSONL 读取兼容保留到 0.2.x
+- **生产聚合指标**（Phase 9F）：`/metrics` 从共享数据库和最终 canonical trace 聚合 Review、队列、LLM、工具、成本、审批、反馈、幂等和发布系列；label 只使用有界枚举，不含用户、仓库、Review/trace ID 或错误消息。Grafana Dashboard、Prometheus 告警和六项 SLO 定义位于 `observability/` 与 `docs/observability-slo.md`
 - **HTTP / GitHub Webhook / MCP 服务**（Week 7 + Phase 9B/9C）：FastAPI 与官方 MCP SDK 共用持久任务接口；API 只验签、授权、限流和持久提交，独立 worker 通过 Postgres lease/fencing 执行 Review；可替换 AuthBackend、短期 API token 摘要、组织/仓库 RBAC、Webhook HMAC、Host/Origin 防 DNS rebinding、版本化数据库和 canonical trace 资源形成统一边界
 - **GitHub PR 集成**（`github_review.py`）：行号映射 + 行内评论载荷构建，`--post-dry-run` 打印 `gh api` 命令与完整载荷而不发送；live post 前 fail-fast 校验
 - **离线评测与 holdout**：16 diffs / 30 埋点公开集 + 6 diffs / 7 埋点 holdout，LLM judge 结构化裁决，n 次重复跑方差归因，verifier 回放台架（改 verifier 不重跑 finder，省 ~60% 成本）

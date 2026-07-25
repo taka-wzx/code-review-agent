@@ -15,6 +15,8 @@ import time
 from typing import Any, Callable, Iterable, Mapping, Protocol
 import uuid
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from code_review_agent.agent import run_review
 from code_review_agent.approval_publish import (
     DryRunPublisher,
@@ -39,6 +41,7 @@ from code_review_agent.identity import (
     current_correlation_id,
 )
 from code_review_agent.llm import make_client
+from code_review_agent.production_metrics import ProductionMetrics
 from code_review_agent.tracelog import Trace, tev
 from code_review_agent import service_queue as durable_queue
 
@@ -441,6 +444,10 @@ class ReviewService:
         self.publisher = publisher or DryRunPublisher()
         if local_mode:
             self.store.bootstrap_local(self.registry.paths.keys())
+        self.metrics = ProductionMetrics(
+            self.store.database.engine,
+            self.store.trace_dir,
+        )
         self._lock = threading.Lock()
         self._accepting = True
         self._embedded_worker: Any | None = None
@@ -504,7 +511,30 @@ class ReviewService:
                 "deny",
                 reason_code="role_denied",
             )
+            self._metric_increment(
+                "unauthorized_operations_total",
+                {"operation": self._operation_class(action)},
+            )
             raise AuthorizationDenied("operation is not permitted") from exc
+
+    @staticmethod
+    def _operation_class(action: str) -> str:
+        if action.startswith("publication"):
+            return "publish"
+        if "approval" in action or action.startswith("finding.decide"):
+            return "approval"
+        if "feedback" in action:
+            return "feedback"
+        return "other"
+
+    def _metric_increment(
+        self, name: str, labels: Mapping[str, str] | None = None
+    ) -> None:
+        try:
+            self.metrics.increment(name, labels)
+        except (SQLAlchemyError, ValueError):
+            # Aggregate telemetry cannot grant, deny, or roll back business authority.
+            pass
 
     def _repository(
         self,
@@ -606,6 +636,8 @@ class ReviewService:
             ),
             payload=diff,
         )
+        if duplicate:
+            self._metric_increment("idempotency_hits_total")
         self._audit(
             actor,
             "review.submit",
@@ -673,6 +705,8 @@ class ReviewService:
             ),
             head_sha=head_sha,
         )
+        if duplicate:
+            self._metric_increment("idempotency_hits_total")
         self._audit(
             actor,
             "review.submit",
@@ -733,6 +767,8 @@ class ReviewService:
             ),
             head_sha=head_sha,
         )
+        if duplicate:
+            self._metric_increment("idempotency_hits_total")
         webhook_principal = Principal(
             principal_id="github-webhook",
             user_id="github-webhook",
@@ -1191,8 +1227,17 @@ class ReviewService:
         )
         return record
 
-    @staticmethod
-    def _raise_approval_error(error: PublicationError) -> None:
+    def _raise_approval_error(self, error: PublicationError) -> None:
+        reason = {
+            "approval_replayed": "replay",
+            "approval_payload_mismatch": "mismatch",
+            "approval_expired": "expired",
+            "approval_consumed": "consumed",
+        }.get(error.code, "other")
+        self._metric_increment(
+            "approval_validation_failures_total",
+            {"reason": reason},
+        )
         if error.code == "approval_not_found":
             raise JobNotFound("review job was not found") from error
         if error.code in {

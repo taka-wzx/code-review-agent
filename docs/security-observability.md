@@ -136,6 +136,20 @@ Do not add `--eval-assets`. Phase 2--3 validation does not read existing
 `eval/`, `eval/holdout/`, SWE-bench, Week 4 reporting, or Week 5 reporting
 assets.
 
+## Phase 9F aggregate metrics
+
+Phase 9F adds a global Prometheus text exporter at `/metrics` without changing
+the canonical trace schema. Durable state, usage, approval/feedback events, and
+final trace files are aggregated without tenant or identity labels. Multiple
+workers share the database and trace volume, so one designated API exporter
+produces the global view; do not sum scrapes from multiple API replicas over the
+same storage.
+
+The Grafana dashboard and Prometheus rules are offline configuration artifacts.
+They contain stable UIDs and no collector URL, notification route, local path,
+token, or credential. See `docs/observability-slo.md` for bucket rationale,
+SLO formulas, label restrictions, and incident response boundaries.
+
 ## Deterministic security suite
 
 `security_redteam/case-plan.json` remains the byte-for-byte preauthorization

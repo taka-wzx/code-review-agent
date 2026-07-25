@@ -9,7 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
-from typing import Any, AsyncIterator
+import time
+from typing import Any, AsyncIterator, Callable
 import uuid
 
 from fastapi import FastAPI, Request
@@ -23,6 +24,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from code_review_agent.database import DatabaseError
 from code_review_agent.mcp_server import create_mcp
+from code_review_agent.production_metrics import CONTENT_TYPE
 from code_review_agent.identity import (
     AuthBackend,
     AuthenticationRequired,
@@ -279,9 +281,11 @@ def create_app(
     settings: HttpSettings | None = None,
     review_service: ReviewService | None = None,
     auth_backend: AuthBackend | None = None,
+    metrics_clock: Callable[[], float] | None = None,
 ) -> FastAPI:
     http = settings or HttpSettings.from_env()
     service = review_service or create_review_service_from_env()
+    monotonic = metrics_clock or time.monotonic
     if auth_backend is None:
         if http.local_token_enabled:
             local_principal = service.store.local_principal
@@ -455,6 +459,13 @@ def create_app(
                 "database": "ready" if database_ready else "unavailable",
                 "worker": "ready" if workers > 0 else "unavailable",
             },
+        )
+
+    @app.get("/metrics")
+    def metrics() -> PlainTextResponse:
+        return PlainTextResponse(
+            service.metrics.render(),
+            media_type=CONTENT_TYPE,
         )
 
     def request_principal(request: Request) -> Principal:
@@ -750,44 +761,59 @@ def create_app(
 
     @app.post("/webhooks/github", status_code=202)
     async def github_webhook(request: Request) -> JSONResponse:
-        length = request.headers.get("content-length")
-        if length is not None:
-            try:
-                if int(length) > MAX_WEBHOOK_BYTES:
-                    raise PayloadTooLarge("webhook body is too large")
-            except ValueError as exc:
-                raise InvalidRequest("content-length is invalid") from exc
-        body = await _bounded_body(request, MAX_WEBHOOK_BYTES)
-        _webhook_signature(body, request.headers.get("x-hub-signature-256", ""), http.webhook_secret)
-        event = request.headers.get("x-github-event", "")
-        delivery = request.headers.get("x-github-delivery", "")
-        if event == "ping":
-            return JSONResponse(
-                status_code=200,
-                content={"schema_version": SCHEMA_VERSION, "status": "pong"},
-            )
-        if event != "pull_request":
-            return JSONResponse(
-                status_code=202,
-                content={"schema_version": SCHEMA_VERSION, "status": "ignored"},
-            )
-        if not delivery:
-            raise InvalidRequest("webhook delivery ID is required")
+        started = monotonic()
+        verified = False
         try:
-            payload = json.loads(body)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
-        repository, pull_request, head_sha = _webhook_fields(payload)
-        job, duplicate = await anyio.to_thread.run_sync(
-            lambda: service.submit_webhook_pr(
-                repository,
-                pull_request,
-                delivery_id=delivery,
-                correlation_id=delivery,
-                head_sha=head_sha,
+            length = request.headers.get("content-length")
+            if length is not None:
+                try:
+                    if int(length) > MAX_WEBHOOK_BYTES:
+                        raise PayloadTooLarge("webhook body is too large")
+                except ValueError as exc:
+                    raise InvalidRequest("content-length is invalid") from exc
+            body = await _bounded_body(request, MAX_WEBHOOK_BYTES)
+            _webhook_signature(
+                body,
+                request.headers.get("x-hub-signature-256", ""),
+                http.webhook_secret,
             )
-        )
-        return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})
+            verified = True
+            event = request.headers.get("x-github-event", "")
+            delivery = request.headers.get("x-github-delivery", "")
+            if event == "ping":
+                return JSONResponse(
+                    status_code=200,
+                    content={"schema_version": SCHEMA_VERSION, "status": "pong"},
+                )
+            if event != "pull_request":
+                return JSONResponse(
+                    status_code=202,
+                    content={"schema_version": SCHEMA_VERSION, "status": "ignored"},
+                )
+            if not delivery:
+                raise InvalidRequest("webhook delivery ID is required")
+            try:
+                payload = json.loads(body)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
+            repository, pull_request, head_sha = _webhook_fields(payload)
+            job, duplicate = await anyio.to_thread.run_sync(
+                lambda: service.submit_webhook_pr(
+                    repository,
+                    pull_request,
+                    delivery_id=delivery,
+                    correlation_id=delivery,
+                    head_sha=head_sha,
+                )
+            )
+            return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})
+        finally:
+            if verified:
+                try:
+                    service.metrics.observe_webhook_ack(max(0.0, monotonic() - started))
+                except (SQLAlchemyError, ValueError):
+                    # Metrics degradation cannot change webhook authority or response semantics.
+                    pass
 
     app.mount("/mcp", mcp.streamable_http_app())
     return app
