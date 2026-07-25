@@ -1,0 +1,45 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {"id": 10, "type": "row", "title": "Business Effect", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false, "panels": []},
+    {"id": 11, "type": "timeseries", "title": "Review outcomes", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 1}, "targets": [{"refId": "A", "expr": "sum by (status) (rate(review_jobs_total[5m]))", "legendFormat": "{{status}}"}]},
+    {"id": 12, "type": "stat", "title": "Completion rate", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 1}, "targets": [{"refId": "A", "expr": "sum(increase(review_jobs_total{status=~\"awaiting_approval|declined|published\"}[24h])) / clamp_min(increase(review_submissions_total[24h]), 1)"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}},
+
+    {"id": 20, "type": "row", "title": "Stability", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 8}, "collapsed": false, "panels": []},
+    {"id": 21, "type": "timeseries", "title": "Review latency p50 / p95", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 9}, "targets": [{"refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(review_duration_seconds_bucket[5m])))", "legendFormat": "p50"}, {"refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(review_duration_seconds_bucket[5m])))", "legendFormat": "p95"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}},
+    {"id": 22, "type": "timeseries", "title": "Provider failures and degraded runs", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 9}, "targets": [{"refId": "A", "expr": "sum by (status) (rate(llm_requests_total{status!=\"ok\"}[5m]))", "legendFormat": "provider {{status}}"}, {"refId": "B", "expr": "rate(degraded_total[5m])", "legendFormat": "degraded"}]},
+
+    {"id": 30, "type": "row", "title": "Quality Feedback", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16}, "collapsed": false, "panels": []},
+    {"id": 31, "type": "timeseries", "title": "Finding feedback", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 17}, "targets": [{"refId": "A", "expr": "sum by (decision) (increase(finding_feedback_total[24h]))", "legendFormat": "{{decision}}"}]},
+    {"id": 32, "type": "stat", "title": "Accepted feedback share", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 17}, "targets": [{"refId": "A", "expr": "sum(increase(finding_feedback_total{decision=\"accepted\"}[7d])) / clamp_min(sum(increase(finding_feedback_total[7d])), 1)"}], "fieldConfig": {"defaults": {"unit": "percentunit", "min": 0, "max": 1}, "overrides": []}},
+
+    {"id": 40, "type": "row", "title": "Cost", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}, "collapsed": false, "panels": []},
+    {"id": 41, "type": "timeseries", "title": "Daily model cost (CNY)", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 25}, "targets": [{"refId": "A", "expr": "increase(llm_cost_cny_total[24h])"}], "fieldConfig": {"defaults": {"unit": "currencyCNY"}, "overrides": []}},
+    {"id": 42, "type": "timeseries", "title": "Token usage", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 25}, "targets": [{"refId": "A", "expr": "sum by (type) (rate(llm_tokens_total[5m]))", "legendFormat": "{{type}}"}]},
+
+    {"id": 50, "type": "row", "title": "Queue Capacity", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32}, "collapsed": false, "panels": []},
+    {"id": 51, "type": "timeseries", "title": "Queue depth", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 33}, "targets": [{"refId": "A", "expr": "queue_depth"}]},
+    {"id": 52, "type": "timeseries", "title": "Queue wait p95", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 33}, "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(queue_wait_seconds_bucket[5m])))"}], "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}},
+
+    {"id": 60, "type": "row", "title": "Approval Safety", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 40}, "collapsed": false, "panels": []},
+    {"id": 61, "type": "timeseries", "title": "Approval decisions and publisher outcomes", "gridPos": {"h": 7, "w": 12, "x": 0, "y": 41}, "targets": [{"refId": "A", "expr": "sum by (decision) (increase(approval_decisions_total[24h]))", "legendFormat": "approval {{decision}}"}, {"refId": "B", "expr": "sum by (status) (increase(publisher_calls_total[24h]))", "legendFormat": "publisher {{status}}"}]},
+    {"id": 62, "type": "timeseries", "title": "Denied and invalid approvals", "gridPos": {"h": 7, "w": 12, "x": 12, "y": 41}, "targets": [{"refId": "A", "expr": "sum by (operation) (increase(unauthorized_operations_total[10m]))", "legendFormat": "unauthorized {{operation}}"}, {"refId": "B", "expr": "sum by (reason) (increase(approval_validation_failures_total[10m]))", "legendFormat": "approval {{reason}}"}]}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["crag", "phase9f", "production-observability"],
+  "templating": {"list": [{"name": "DS_PROMETHEUS", "type": "datasource", "query": "prometheus", "current": {}}]},
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "utc",
+  "title": "CRAG Production Observability",
+  "uid": "crag-phase9f-overview",
+  "version": 1,
+  "weekStart": "monday"
+}
