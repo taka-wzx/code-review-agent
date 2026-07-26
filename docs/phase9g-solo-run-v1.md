@@ -25,7 +25,14 @@ formal_quality_status=incomplete
 - 2 个 selected diff 的敏感模式扫描命中，选择没有替换，对应 headline 保持阻断；
 - 用户已确认 Key 文件预检通过；executor 仍须在付费前执行独立的即时预检；
 - auth-003 已获批准，Solo-only 执行器正在通过提交、hash binding 与离线门禁，尚未发出
-  真实模型请求。
+  真实模型请求；
+- auth-003 的即时 Key 预检已通过，但网络启动在 executor 执行前被租户数据外发策略阻断；
+  当前仍为 0 请求、0 Token、0 费用、无运行目录，状态固定为 `not_run_policy_blocked`；
+- 用户已允许创建仅限匿名公共 PR 输入的 auth-004。一次性无凭据探针已冻结
+  `psf/black@db2e3e7b317b40685ba4618235a8388c7c6ea5e2`：MIT、180 个候选、确定性
+  选择 5 个、0 个敏感命中、未换选。探针不是正式 materialization 或模型运行证据；
+- auth-004 的真实付费门禁仍关闭，直到官方公共来源 receipt、提交后的离线门禁和精确授权
+  SHA-256 获得真人再次批准。
 
 ## 1. 建立私有授权输入
 
@@ -119,7 +126,52 @@ python phase9g_solo_run.py preflight-auth-003 `
 `execute-auth-003-headlines` 是唯一可能发出付费请求的命令。不得在 attestation、offline
 validation、凭证预检或任一 hash binding 缺失时调用。
 
-## 5. 离线验收
+auth-003 已被租户策略判定为 `not_run_policy_blocked`，不得再次调用上述 executor，也不得用
+手工上传、改命令、关闭扫描或换 PR 的方式绕过。
+
+## 5. auth-004 匿名公共来源替代路径
+
+auth-004 不读取原私有仓库 diff。它只允许匿名 clone 冻结的 `psf/black` exact commit，且
+在选择前只读取 first-parent commit 元数据；选择后仅打开五个 selected diff。Git 环境会清除
+GitHub Token、askpass、credential helper 和额外认证 Header。此路径不是 GitHub API，也没有
+评论、Check、publish 或部署权限。
+
+实现提交并完成本节前半段离线验证后，使用尚不存在的公共来源目录和 receipt：
+
+```powershell
+$PublicSourceReceipt = Join-Path $Repo 'phase9g_solo_run\public-source-auth004.json'
+python phase9g_solo_run.py materialize-auth-004-public-source `
+  --repo-root $Repo `
+  --evidence-root $Evidence `
+  --public-receipt $PublicSourceReceipt `
+  --generated-at '<当前 UTC，格式 YYYY-MM-DDTHH:MM:SSZ>'
+python phase9g_solo_run.py validate-auth-004-public-source `
+  --receipt $PublicSourceReceipt
+```
+
+输出必须精确包含 180 个候选、5 个 selected、0 个敏感阻断、
+`anonymous_public_source=true`、`private_workspace_diff_read=false`，否则停止。失败 materialization
+必须保留，不能换源、换 PR 或覆盖。
+
+随后把输出的 source/cohort/runtime/预算摘要和拟批准时间交给真人审批。只有真人明确批准完整
+auth-004 表后，才可创建最终授权：
+
+```powershell
+python phase9g_solo_run.py initialize-auth-004 `
+  --repo-root $Repo `
+  --evidence-root $Evidence `
+  --public-source-receipt $PublicSourceReceipt `
+  --public-attestation (Join-Path $Repo 'phase9g_solo_run\auth-004-attestation.json') `
+  --approved-at '<真人明确批准后的 UTC>'
+```
+
+auth-004 继承 auth-003 的 GLM-5.2、标准 endpoint、温度 profile、零 SDK 重试、96/96、Token、
+20,000,000 micro-CNY 和同一 tariff，不得增加。正式离线回归通过并记录
+`offline-validation-auth004.json` 后，才可执行 content-free preflight。真实 executor 命令是
+`execute-auth-004-headlines`；在精确授权 SHA-256 未获批准前不得调用。租户策略仍可能拒绝
+外发，即使数据公开；这种拒绝必须记录为 policy-blocked，不能绕过。
+
+## 6. 离线验收
 
 ```powershell
 python -m unittest -v tests.test_phase9g_solo_run

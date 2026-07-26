@@ -1,9 +1,9 @@
-"""Offline materialization and hard gates for Phase 9G-Solo-Run v1.
+"""Materialization and hard gates for Phase 9G-Solo-Run v1.
 
-The module may inspect local Git metadata and, only after deterministic selection,
-read the five selected first-parent diffs. It never contacts GitHub or a model. The
-paid execution command is intentionally absent until a replacement authorization,
-endpoint, temperature profile, zero-retry runtime, and CNY tariff are hash-bound.
+The original auth-003 path is immutable and reads only its locally selected diffs.
+The auth-004 path is a separate, fail-closed alternative that anonymously acquires
+an exact public Git snapshot and sends only deterministically selected public diffs.
+Neither path may publish, deploy, call GitHub's API, or allow business/quality claims.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from typing import Any, Mapping, NoReturn, Sequence
 from openai import OpenAI
 
 import phase9g_solo as solo
-from code_review_agent import agent as review_agent
+import code_review_agent.agent as review_agent
 from code_review_agent.redaction import contains_forbidden_content, sanitize_value
 
 
@@ -51,8 +51,13 @@ EXPECTED_MODEL = "glm-5.2"
 APPROVED_AT = "2026-07-26T07:29:48Z"
 EXPIRES_AT = "2026-08-25T07:29:48Z"
 AUTH3_ID = "phase9g-solo-run-v1-auth-003"
+EXPECTED_AUTH3_AUTHORIZATION_SHA256 = (
+    "bce0e6cf8bdaa5fc0153c71a167a20eeb26a6d24d370226f77b054c519306082"
+)
+AUTH4_ID = "phase9g-solo-run-v1-auth-004"
 STANDARD_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 EXECUTOR_VERSION = "phase9g-solo-executor-v1"
+AUTH4_EXECUTOR_VERSION = "phase9g-solo-public-executor-v1"
 PER_CALL_MAX_OUTPUT_TOKENS = 2048
 REQUEST_TIMEOUT_SECONDS = 120
 AUTH3_LIMITS = {
@@ -74,6 +79,17 @@ AUTH3_TARIFF_RATES = {
     "cached_input_microcny_per_million_tokens": 2_000_000,
 }
 PR_ID_DOMAIN = b"phase9g-solo-opaque-pr-v1\0"
+PUBLIC_PR_ID_DOMAIN = b"phase9g-solo-public-pr-v1\0"
+AUTH4_PUBLIC_SOURCE_URL = "https://github.com/psf/black.git"
+AUTH4_PUBLIC_SOURCE_BRANCH = "main"
+AUTH4_PUBLIC_SOURCE_COMMIT = "db2e3e7b317b40685ba4618235a8388c7c6ea5e2"
+AUTH4_PUBLIC_SELECTION_SEED = (
+    "5e190bc14d84c2439e43e0560db7d250c4cd702cd42cf32c9746425078c8ad38"
+)
+AUTH4_PUBLIC_LICENSE = "MIT"
+AUTH4_EXPECTED_CANDIDATES = 180
+AUTH4_EXPECTED_BLOCKED = 0
+AUTH4_EXPECTED_RUNNABLE = 5
 MAX_SECRET_FILE_BYTES = 4096
 PR_PATTERNS = (
     re.compile(r"^Merge pull request #(\d+)\b"),
@@ -211,6 +227,60 @@ AUTH3_ATTESTATION_KEYS = {
     "approved_at",
     "expires_at",
     "attestation_sha256",
+}
+AUTH4_PUBLIC_SOURCE_RECEIPT_KEYS = {
+    "schema_version",
+    "phase_id",
+    "evidence_type",
+    "authorization_id",
+    "source_kind",
+    "source_locator_sha256",
+    "source_commit",
+    "source_branch",
+    "license_spdx",
+    "license_sha256",
+    "anonymous_clone",
+    "credentials_disabled",
+    "github_api_used",
+    "private_workspace_diff_read",
+    "selection_seed",
+    "window_start",
+    "window_end",
+    "candidate_prs",
+    "selected_prs",
+    "selection_log_sha256",
+    "cohort_sha256",
+    "private_artifact_index_sha256",
+    "selected_diff_secret_scan_blocked",
+    "selected_diff_total_bytes",
+    "paid_call_gate",
+    "business_claim_allowed",
+    "quality_claim_allowed",
+    "formal_quality_status",
+    "generated_at",
+    "receipt_sha256",
+}
+AUTH4_RUNTIME_KEYS = AUTH3_RUNTIME_KEYS | {
+    "public_candidate_input_only",
+    "anonymous_public_git_read",
+    "github_api_used",
+    "private_workspace_diff_read",
+    "public_source_locator_sha256",
+    "public_source_commit",
+}
+AUTH4_KEYS = AUTH3_KEYS | {
+    "public_candidate_input_only",
+    "anonymous_public_git_read",
+    "public_source_locator_sha256",
+    "public_source_commit",
+}
+AUTH4_ATTESTATION_KEYS = AUTH3_ATTESTATION_KEYS | {
+    "public_candidate_input_only",
+    "anonymous_public_git_read",
+    "github_api_used",
+    "private_workspace_diff_read",
+    "public_source_locator_sha256",
+    "public_source_commit",
 }
 HEADLINE_RECEIPT_KEYS = {
     "schema_version",
@@ -494,6 +564,104 @@ def _git_text(repo_root: Path, arguments: Sequence[str]) -> str:
         raise RunValidationError("local Git metadata is not UTF-8") from exc
 
 
+def _public_git_environment(home: Path) -> dict[str, str]:
+    """Return an environment that cannot use ambient GitHub credentials."""
+
+    env = dict(os.environ)
+    for key in list(env):
+        upper = key.upper()
+        if upper.startswith(("GIT_", "GCM_", "GH_", "GITHUB_", "SSH_")):
+            env.pop(key, None)
+    env.update(
+        {
+            "HOME": str(home),
+            "USERPROFILE": str(home),
+            "XDG_CONFIG_HOME": str(home),
+            "GIT_TERMINAL_PROMPT": "0",
+            "GCM_INTERACTIVE": "Never",
+        }
+    )
+    return env
+
+
+def _run_public_git(
+    arguments: Sequence[str],
+    *,
+    home: Path,
+    cwd: Path | None = None,
+) -> bytes:
+    command = [
+        "git",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.askPass=",
+        "-c",
+        "http.extraHeader=",
+        *arguments,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=_public_git_environment(home),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=True,
+            timeout=300,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise RunValidationError("anonymous public Git operation failed") from exc
+    return result.stdout
+
+
+def _public_git_bytes(git_dir: Path, arguments: Sequence[str]) -> bytes:
+    return _run_public_git(
+        [f"--git-dir={git_dir}", *arguments],
+        home=git_dir.parent / "empty-home",
+    )
+
+
+def _public_git_text(git_dir: Path, arguments: Sequence[str]) -> str:
+    try:
+        return _public_git_bytes(git_dir, arguments).decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise RunValidationError("anonymous public Git metadata is not UTF-8") from exc
+
+
+def _clone_auth4_public_source(staging_root: Path) -> Path:
+    home = staging_root / "empty-home"
+    git_dir = staging_root / "public.git"
+    home.mkdir(parents=True, exist_ok=False)
+    _run_public_git(
+        [
+            "clone",
+            "--bare",
+            "--filter=blob:none",
+            "--single-branch",
+            "--branch",
+            AUTH4_PUBLIC_SOURCE_BRANCH,
+            AUTH4_PUBLIC_SOURCE_URL,
+            str(git_dir),
+        ],
+        home=home,
+        cwd=staging_root,
+    )
+    if _public_git_text(git_dir, ["symbolic-ref", "--short", "HEAD"]) != (
+        AUTH4_PUBLIC_SOURCE_BRANCH
+    ):
+        _fail("anonymous public Git default branch differs from auth-004")
+    _public_git_bytes(
+        git_dir,
+        ["cat-file", "-e", f"{AUTH4_PUBLIC_SOURCE_COMMIT}^{{commit}}"],
+    )
+    _public_git_bytes(
+        git_dir,
+        ["merge-base", "--is-ancestor", AUTH4_PUBLIC_SOURCE_COMMIT, "HEAD"],
+    )
+    return git_dir
+
+
 @dataclass(frozen=True)
 class Candidate:
     commit_sha: str
@@ -516,6 +684,25 @@ def opaque_pr_id(repository_id: str, pr_number: str) -> str:
         + pr_number.encode("ascii")
     )
     return "pr-" + hashlib.sha256(material).hexdigest()[:32]
+
+
+def auth4_public_repository_id() -> str:
+    locator_hash = hashlib.sha256(AUTH4_PUBLIC_SOURCE_URL.encode("ascii")).hexdigest()
+    return "repo-public-" + locator_hash[:24]
+
+
+def auth4_public_pr_id(pr_number: str) -> str:
+    if not pr_number.isascii() or not pr_number.isdigit():
+        _fail("public opaque PR identity input is invalid")
+    material = (
+        PUBLIC_PR_ID_DOMAIN
+        + AUTH4_PUBLIC_SOURCE_COMMIT.encode("ascii")
+        + b"\n"
+        + auth4_public_repository_id().encode("ascii")
+        + b"\n"
+        + pr_number.encode("ascii")
+    )
+    return "pr-public-" + hashlib.sha256(material).hexdigest()[:32]
 
 
 def _extract_pr_number(subject: str) -> str | None:
@@ -581,6 +768,58 @@ def collect_candidates(repo_root: Path, repository_id: str) -> tuple[list[Candid
     if len(candidates) < TARGET_PRS:
         _fail("candidate ledger has fewer PRs than the frozen target")
     candidates.sort(key=lambda candidate: (candidate.merged_at, candidate.commit_sha))
+    return candidates, len(records)
+
+
+def collect_auth4_public_candidates(git_dir: Path) -> tuple[list[Candidate], int]:
+    raw = _public_git_text(
+        git_dir,
+        [
+            "log",
+            AUTH4_PUBLIC_SOURCE_COMMIT,
+            "--first-parent",
+            f"--since={WINDOW_START}",
+            "--until=2026-07-25T23:59:59Z",
+            "--format=%H%x1f%cI%x1f%s%x1e",
+        ],
+    )
+    records = [record for record in raw.split("\x1e") if record.strip()]
+    candidates: list[Candidate] = []
+    seen_numbers: set[str] = set()
+    for record in records:
+        parts = record.strip().split("\x1f", 2)
+        if len(parts) != 3:
+            _fail("public candidate metadata record is malformed")
+        commit_sha, merged_at_raw, subject = parts
+        if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+            _fail("public candidate commit identity is malformed")
+        pr_number = _extract_pr_number(subject)
+        if pr_number is None:
+            continue
+        if pr_number in seen_numbers:
+            _fail("public candidate metadata repeats a PR identity")
+        seen_numbers.add(pr_number)
+        merged_at = _utc_timestamp(merged_at_raw, "public candidate merged_at")
+        merged = _canonical_timestamp(merged_at, "public candidate merged_at")
+        if not (
+            _canonical_timestamp(WINDOW_START, "window start")
+            <= merged
+            < _canonical_timestamp(WINDOW_END, "window end")
+        ):
+            _fail("public candidate falls outside the frozen window")
+        pr_id = auth4_public_pr_id(pr_number)
+        candidates.append(
+            Candidate(
+                commit_sha=commit_sha,
+                merged_at=merged_at,
+                subject=subject,
+                pr_number=pr_number,
+                opaque_pr_id=pr_id,
+                rank_sha256=solo.selection_rank(AUTH4_PUBLIC_SELECTION_SEED, pr_id),
+            )
+        )
+    if len(candidates) != AUTH4_EXPECTED_CANDIDATES:
+        _fail("public candidate denominator differs from the frozen auth-004 source")
     return candidates, len(records)
 
 
@@ -950,6 +1189,313 @@ def materialize_selection(
         "paid_call_gate": False,
         "public_receipt_sha256": receipt["receipt_sha256"],
     }
+
+
+def _auth4_public_rows_and_map(
+    git_dir: Path,
+    candidates: Sequence[Candidate],
+    *,
+    staging_root: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], int, int]:
+    selected_ids = {
+        candidate.opaque_pr_id
+        for candidate in sorted(
+            candidates,
+            key=lambda candidate: (candidate.rank_sha256, candidate.opaque_pr_id),
+        )[:TARGET_PRS]
+    }
+    rows: list[dict[str, Any]] = []
+    private_map: list[dict[str, Any]] = []
+    cohort_entries: list[dict[str, Any]] = []
+    blocked = 0
+    total_bytes = 0
+    diff_root = staging_root / "selected-diffs"
+    diff_root.mkdir(parents=True, exist_ok=False)
+    for candidate in candidates:
+        selected = candidate.opaque_pr_id in selected_ids
+        snapshot_sha256: str | None = None
+        diff_sha256: str | None = None
+        secret_findings = 0
+        diff_bytes_count = 0
+        if selected:
+            commit_bytes = _public_git_bytes(
+                git_dir, ["cat-file", "commit", candidate.commit_sha]
+            )
+            diff_bytes = _public_git_bytes(
+                git_dir,
+                [
+                    "diff",
+                    f"{candidate.commit_sha}^1",
+                    candidate.commit_sha,
+                    "--binary",
+                    "--no-ext-diff",
+                    "--no-color",
+                ],
+            )
+            try:
+                diff_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise RunValidationError("selected public diff is not UTF-8") from exc
+            snapshot_sha256 = hashlib.sha256(commit_bytes).hexdigest()
+            diff_sha256 = hashlib.sha256(diff_bytes).hexdigest()
+            secret_findings = _potential_secret_count(diff_bytes)
+            diff_bytes_count = len(diff_bytes)
+            blocked += int(secret_findings > 0)
+            total_bytes += diff_bytes_count
+            (diff_root / f"{candidate.opaque_pr_id}.diff").write_bytes(diff_bytes)
+            cohort_entries.append(
+                {
+                    "pr_id": candidate.opaque_pr_id,
+                    "snapshot_sha256": snapshot_sha256,
+                    "diff_sha256": diff_sha256,
+                    "synthetic": False,
+                }
+            )
+        rows.append(
+            solo.with_artifact_hash(
+                {
+                    "schema_version": 1,
+                    "phase_id": RUN_PHASE_ID,
+                    "authorization_id": AUTH4_ID,
+                    "pr_id": candidate.opaque_pr_id,
+                    "merged_at": candidate.merged_at,
+                    "eligible": True,
+                    "selected": selected,
+                    "rank_sha256": candidate.rank_sha256,
+                    "snapshot_sha256": snapshot_sha256,
+                    "diff_sha256": diff_sha256,
+                    "synthetic": False,
+                    "row_sha256": "",
+                },
+                "row_sha256",
+            )
+        )
+        private_map.append(
+            {
+                "opaque_pr_id": candidate.opaque_pr_id,
+                "commit_sha": candidate.commit_sha,
+                "pr_number": candidate.pr_number,
+                "merged_at": candidate.merged_at,
+                "subject": candidate.subject,
+                "selected": selected,
+                "rank_sha256": candidate.rank_sha256,
+                "snapshot_sha256": snapshot_sha256,
+                "diff_sha256": diff_sha256,
+                "potential_secret_findings": secret_findings,
+                "diff_bytes": diff_bytes_count,
+            }
+        )
+    cohort = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "authorization_id": AUTH4_ID,
+            "solo_id": SOLO_ID,
+            "repository_id": auth4_public_repository_id(),
+            "source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+            "entries": sorted(cohort_entries, key=lambda entry: entry["pr_id"]),
+            "synthetic": False,
+            "cohort_sha256": "",
+        },
+        "cohort_sha256",
+    )
+    if len(cohort_entries) != TARGET_PRS:
+        _fail("auth-004 public selection did not produce five PRs")
+    return rows, private_map, cohort, blocked, total_bytes
+
+
+def materialize_auth4_public_source(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_receipt_path: Path,
+    generated_at: str,
+) -> dict[str, Any]:
+    repo = repo_root.resolve(strict=True)
+    evidence = evidence_root.resolve(strict=True)
+    public_receipt = public_receipt_path.resolve(strict=False)
+    if _is_within(evidence, repo) or evidence == repo:
+        _fail("auth-004 public evidence root must be outside the Git worktree")
+    if not _is_within(public_receipt, repo):
+        _fail("auth-004 public source receipt must be inside the Git worktree")
+    source_root = evidence / "auth-004-public-source"
+    staging_root = evidence / "auth-004-public-source.initializing"
+    if source_root.exists() or staging_root.exists() or public_receipt.exists():
+        _fail("auth-004 public source evidence already exists and cannot be overwritten")
+    generated = _canonical_timestamp(generated_at, "auth-004 source generated_at")
+    if not (
+        _canonical_timestamp(APPROVED_AT, "auth-002 approved_at")
+        <= generated
+        < _canonical_timestamp(EXPIRES_AT, "auth-002 expires_at")
+    ):
+        _fail("auth-004 public source materialization is outside the inherited window")
+
+    git_dir = _clone_auth4_public_source(staging_root)
+    license_bytes = _public_git_bytes(
+        git_dir, ["show", f"{AUTH4_PUBLIC_SOURCE_COMMIT}:LICENSE"]
+    )
+    try:
+        license_text = license_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RunValidationError("public source license is not UTF-8") from exc
+    if "MIT License" not in license_text or "Permission is hereby granted" not in license_text:
+        _fail("public source license differs from the frozen permissive license")
+    candidates, first_parent_commits = collect_auth4_public_candidates(git_dir)
+    rows, private_map, cohort, blocked, total_bytes = _auth4_public_rows_and_map(
+        git_dir,
+        candidates,
+        staging_root=staging_root,
+    )
+    if blocked != AUTH4_EXPECTED_BLOCKED:
+        _fail("auth-004 selected public diff scan differs from the frozen probe")
+    source_proof = {
+        "schema_version": 1,
+        "authorization_id": AUTH4_ID,
+        "source_url": AUTH4_PUBLIC_SOURCE_URL,
+        "source_branch": AUTH4_PUBLIC_SOURCE_BRANCH,
+        "source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+        "source_locator_sha256": hashlib.sha256(
+            AUTH4_PUBLIC_SOURCE_URL.encode("ascii")
+        ).hexdigest(),
+        "anonymous_clone": True,
+        "credentials_disabled": True,
+        "github_api_used": False,
+        "private_workspace_diff_read": False,
+        "license_spdx": AUTH4_PUBLIC_LICENSE,
+        "license_sha256": hashlib.sha256(license_bytes).hexdigest(),
+        "first_parent_commits": first_parent_commits,
+        "candidate_prs": len(candidates),
+        "candidate_map_sha256": solo.sha256_value(private_map),
+        "generated_at": generated_at,
+    }
+    (staging_root / "license.public.txt").write_bytes(license_bytes)
+    artifacts: dict[str, Any] = {
+        "source_proof": source_proof,
+        "selection_log": rows,
+        "candidate_map": private_map,
+        "cohort": cohort,
+    }
+    private_index = _private_index(artifacts)
+    _write_json(staging_root / "source-proof.private.json", source_proof)
+    _write_jsonl(staging_root / "selection-log.jsonl", rows)
+    _write_json(staging_root / "candidate-map.private.json", private_map)
+    _write_json(staging_root / "cohort.json", cohort)
+    _write_json(staging_root / "artifact-index.private.json", private_index)
+    os.replace(staging_root, source_root)
+
+    receipt = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "evidence_type": solo.EVIDENCE_TYPE,
+            "authorization_id": AUTH4_ID,
+            "source_kind": "anonymous_public_git_exact_commit",
+            "source_locator_sha256": source_proof["source_locator_sha256"],
+            "source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+            "source_branch": AUTH4_PUBLIC_SOURCE_BRANCH,
+            "license_spdx": AUTH4_PUBLIC_LICENSE,
+            "license_sha256": source_proof["license_sha256"],
+            "anonymous_clone": True,
+            "credentials_disabled": True,
+            "github_api_used": False,
+            "private_workspace_diff_read": False,
+            "selection_seed": AUTH4_PUBLIC_SELECTION_SEED,
+            "window_start": WINDOW_START,
+            "window_end": WINDOW_END,
+            "candidate_prs": len(candidates),
+            "selected_prs": TARGET_PRS,
+            "selection_log_sha256": solo.sha256_value(rows),
+            "cohort_sha256": cohort["cohort_sha256"],
+            "private_artifact_index_sha256": private_index["index_sha256"],
+            "selected_diff_secret_scan_blocked": blocked,
+            "selected_diff_total_bytes": total_bytes,
+            "paid_call_gate": False,
+            "business_claim_allowed": False,
+            "quality_claim_allowed": False,
+            "formal_quality_status": "incomplete",
+            "generated_at": generated_at,
+            "receipt_sha256": "",
+        },
+        "receipt_sha256",
+    )
+    validate_auth4_public_source_receipt(receipt)
+    _write_json(public_receipt, receipt)
+    return {
+        "valid": True,
+        "authorization_id": AUTH4_ID,
+        "candidate_prs": len(candidates),
+        "selected_prs": TARGET_PRS,
+        "selected_diff_secret_scan_blocked": blocked,
+        "selected_diff_total_bytes": total_bytes,
+        "anonymous_public_source": True,
+        "private_workspace_diff_read": False,
+        "paid_call_gate": False,
+        "public_receipt_sha256": receipt["receipt_sha256"],
+    }
+
+
+def validate_auth4_public_source_receipt(raw: Any) -> dict[str, Any]:
+    receipt = _expect_dict(raw, "auth4_public_source_receipt")
+    _exact_keys(receipt, AUTH4_PUBLIC_SOURCE_RECEIPT_KEYS, "auth4_public_source_receipt")
+    if receipt["schema_version"] != 1 or receipt["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 public source receipt schema or phase is invalid")
+    if receipt["evidence_type"] != solo.EVIDENCE_TYPE or receipt["authorization_id"] != AUTH4_ID:
+        _fail("auth-004 public source receipt identity is invalid")
+    if receipt["source_kind"] != "anonymous_public_git_exact_commit":
+        _fail("auth-004 public source kind is invalid")
+    expected_locator = hashlib.sha256(AUTH4_PUBLIC_SOURCE_URL.encode("ascii")).hexdigest()
+    if receipt["source_locator_sha256"] != expected_locator:
+        _fail("auth-004 public source locator hash is invalid")
+    if (
+        receipt["source_commit"] != AUTH4_PUBLIC_SOURCE_COMMIT
+        or receipt["source_branch"] != AUTH4_PUBLIC_SOURCE_BRANCH
+        or receipt["selection_seed"] != AUTH4_PUBLIC_SELECTION_SEED
+    ):
+        _fail("auth-004 public source selection anchor is invalid")
+    if receipt["license_spdx"] != AUTH4_PUBLIC_LICENSE:
+        _fail("auth-004 public source license is invalid")
+    solo._expect_sha(receipt["license_sha256"], "auth-004 license hash")
+    for key in ("anonymous_clone", "credentials_disabled"):
+        if receipt[key] is not True:
+            _fail("auth-004 public source anonymity proof is incomplete")
+    for key in ("github_api_used", "private_workspace_diff_read", "paid_call_gate"):
+        if receipt[key] is not False:
+            _fail("auth-004 public source external boundary is invalid")
+    if receipt["window_start"] != WINDOW_START or receipt["window_end"] != WINDOW_END:
+        _fail("auth-004 public source window is invalid")
+    if (
+        receipt["candidate_prs"] != AUTH4_EXPECTED_CANDIDATES
+        or receipt["selected_prs"] != TARGET_PRS
+        or receipt["selected_diff_secret_scan_blocked"] != AUTH4_EXPECTED_BLOCKED
+    ):
+        _fail("auth-004 public source denominator is invalid")
+    if (
+        isinstance(receipt["selected_diff_total_bytes"], bool)
+        or not isinstance(receipt["selected_diff_total_bytes"], int)
+        or receipt["selected_diff_total_bytes"] <= 0
+    ):
+        _fail("auth-004 selected public diff size is invalid")
+    for key in (
+        "selection_log_sha256",
+        "cohort_sha256",
+        "private_artifact_index_sha256",
+    ):
+        solo._expect_sha(receipt[key], f"auth-004 public source {key}")
+    if receipt["business_claim_allowed"] or receipt["quality_claim_allowed"]:
+        _fail("auth-004 public source receipt cannot allow claims")
+    if receipt["formal_quality_status"] != "incomplete":
+        _fail("auth-004 formal quality status must remain incomplete")
+    generated = _canonical_timestamp(receipt["generated_at"], "auth-004 source generated_at")
+    if not (
+        _canonical_timestamp(APPROVED_AT, "auth-002 approved_at")
+        <= generated
+        < _canonical_timestamp(EXPIRES_AT, "auth-002 expires_at")
+    ):
+        _fail("auth-004 public source receipt is outside the inherited window")
+    solo.validate_artifact_hash(
+        receipt, "receipt_sha256", "auth4_public_source_receipt"
+    )
+    return receipt
 
 
 def validate_public_receipt(raw: Any) -> dict[str, Any]:
@@ -1509,6 +2055,409 @@ def initialize_auth_003(
     }
 
 
+def _auth4_approval_statement(
+    source_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        **_auth3_approval_statement(),
+        "authorization_id": AUTH4_ID,
+        "supersedes_authorization_sha256": EXPECTED_AUTH3_AUTHORIZATION_SHA256,
+        "public_candidate_input_only": True,
+        "anonymous_public_git_read": True,
+        "github_api_used": False,
+        "private_workspace_diff_read": False,
+        "public_source_locator_sha256": source_receipt["source_locator_sha256"],
+        "public_source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+        "selection_receipt_sha256": source_receipt["receipt_sha256"],
+        "cohort_sha256": source_receipt["cohort_sha256"],
+        "blocked_selected_prs": AUTH4_EXPECTED_BLOCKED,
+        "max_runnable_prs": AUTH4_EXPECTED_RUNNABLE,
+    }
+
+
+def validate_auth4_runtime(raw: Any) -> dict[str, Any]:
+    config = _expect_dict(raw, "auth4_runtime_config")
+    _exact_keys(config, AUTH4_RUNTIME_KEYS, "auth4_runtime_config")
+    if config["schema_version"] != 1 or config["executor_version"] != AUTH4_EXECUTOR_VERSION:
+        _fail("auth-004 runtime schema or executor version is invalid")
+    if not isinstance(config["executor_commit"], str) or not re.fullmatch(
+        r"[0-9a-f]{40}", config["executor_commit"]
+    ):
+        _fail("auth-004 executor commit is invalid")
+    solo._expect_sha(config["executor_source_sha256"], "auth-004 executor source hash")
+    if config["product_source_commit"] != SOURCE_COMMIT:
+        _fail("auth-004 product source commit differs from the frozen source")
+    if config["provider"] != EXPECTED_PROVIDER or config["exact_model_snapshot"] != EXPECTED_MODEL:
+        _fail("auth-004 runtime provider or model is invalid")
+    if config["endpoint_kind"] != "standard" or config["base_url"] != STANDARD_BASE_URL:
+        _fail("auth-004 runtime endpoint is invalid")
+    if config["temperature_profile"] != AUTH3_TEMPERATURE_PROFILE:
+        _fail("auth-004 runtime temperature profile is invalid")
+    if config["sdk_max_retries"] != 0:
+        _fail("auth-004 runtime must disable SDK retries")
+    if config["per_call_max_output_tokens"] != PER_CALL_MAX_OUTPUT_TOKENS:
+        _fail("auth-004 per-call output ceiling is invalid")
+    if config["request_timeout_seconds"] != REQUEST_TIMEOUT_SECONDS:
+        _fail("auth-004 request timeout is invalid")
+    if config["review_timeout_seconds"] != review_agent.REVIEW_TIMEOUT_SECONDS:
+        _fail("auth-004 review timeout is invalid")
+    if config["use_context"] is not False or config["use_verify"] is not True:
+        _fail("auth-004 context or verifier mode is invalid")
+    if config["tiebreak"] is not False:
+        _fail("auth-004 tiebreak must remain disabled")
+    if config["pr_execution"] != "sequential_with_product_stage_pairs":
+        _fail("auth-004 PR execution policy is invalid")
+    if config["selected_diff_policy"] != "block_headline_zero_call":
+        _fail("auth-004 selected-diff policy is invalid")
+    if config["max_runnable_prs"] != AUTH4_EXPECTED_RUNNABLE:
+        _fail("auth-004 runnable PR count is invalid")
+    if (
+        config["public_candidate_input_only"] is not True
+        or config["anonymous_public_git_read"] is not True
+        or config["github_api_used"] is not False
+        or config["private_workspace_diff_read"] is not False
+    ):
+        _fail("auth-004 public-source runtime boundary is invalid")
+    expected_locator = hashlib.sha256(AUTH4_PUBLIC_SOURCE_URL.encode("ascii")).hexdigest()
+    if (
+        config["public_source_locator_sha256"] != expected_locator
+        or config["public_source_commit"] != AUTH4_PUBLIC_SOURCE_COMMIT
+    ):
+        _fail("auth-004 public source runtime binding is invalid")
+    for key in ("selection_receipt_sha256", "cohort_sha256"):
+        solo._expect_sha(config[key], f"auth-004 runtime {key}")
+    return config
+
+
+def validate_auth4(
+    raw: Any,
+    *,
+    runtime_config: Mapping[str, Any],
+    tariff: Mapping[str, Any],
+    source_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    authorization = _expect_dict(raw, "auth4_authorization")
+    _exact_keys(authorization, AUTH4_KEYS, "auth4_authorization")
+    if authorization["schema_version"] != 1 or authorization["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 schema or phase is invalid")
+    if authorization["authorization_id"] != AUTH4_ID:
+        _fail("auth-004 authorization ID is invalid")
+    if authorization["supersedes_authorization_sha256"] != EXPECTED_AUTH3_AUTHORIZATION_SHA256:
+        _fail("auth-004 does not bind the immutable auth-003")
+    solo._expect_identifier(authorization["participant_id"], "auth-004 participant ID")
+    if authorization["repository_ids"] != [auth4_public_repository_id()]:
+        _fail("auth-004 repository identity is invalid")
+    solo._expect_identifier(authorization["approved_by"], "auth-004 approver ID")
+    approved_at = _canonical_timestamp(authorization["approved_at"], "auth-004 approved_at")
+    expires_at = _canonical_timestamp(authorization["expires_at"], "auth-004 expires_at")
+    source_generated = _canonical_timestamp(
+        str(source_receipt.get("generated_at")), "auth-004 source generated_at"
+    )
+    if (
+        expires_at <= approved_at
+        or authorization["expires_at"] != EXPIRES_AT
+        or approved_at < source_generated
+    ):
+        _fail("auth-004 authorization approval window is invalid")
+    if authorization["provider"] != EXPECTED_PROVIDER or authorization["exact_model_snapshot"] != EXPECTED_MODEL:
+        _fail("auth-004 provider or model is invalid")
+    runtime = validate_auth4_runtime(runtime_config)
+    if authorization["runtime_config_sha256"] != solo.sha256_value(runtime):
+        _fail("auth-004 runtime hash is invalid")
+    validated_tariff = validate_tariff(tariff)
+    if authorization["tariff_sha256"] != validated_tariff["tariff_sha256"]:
+        _fail("auth-004 tariff hash is invalid")
+    public_source = validate_auth4_public_source_receipt(source_receipt)
+    if authorization["selection_receipt_sha256"] != public_source["receipt_sha256"]:
+        _fail("auth-004 public selection receipt binding is invalid")
+    if authorization["cohort_sha256"] != public_source["cohort_sha256"]:
+        _fail("auth-004 public cohort binding is invalid")
+    if authorization["temperature_profile"] != AUTH3_TEMPERATURE_PROFILE:
+        _fail("auth-004 temperature profile is invalid")
+    if authorization["sdk_max_retries"] != 0:
+        _fail("auth-004 must disable SDK retries")
+    for key, expected in AUTH3_LIMITS.items():
+        if authorization[key] != expected:
+            _fail(f"auth-004 {key} ceiling is invalid")
+    for key in ("real_paid_calls", "read_selected_raw_diff"):
+        if authorization[key] is not True:
+            _fail("auth-004 paid-call or public-diff authority is missing")
+    for key in ("real_github_api", "github_publish", "staging_deploy"):
+        if authorization[key] is not False:
+            _fail("auth-004 external operation authority is invalid")
+    if (
+        authorization["public_candidate_input_only"] is not True
+        or authorization["anonymous_public_git_read"] is not True
+    ):
+        _fail("auth-004 public-source authority is invalid")
+    if (
+        authorization["public_source_locator_sha256"]
+        != public_source["source_locator_sha256"]
+        or authorization["public_source_commit"] != AUTH4_PUBLIC_SOURCE_COMMIT
+    ):
+        _fail("auth-004 public source authority binding is invalid")
+    if authorization["selected_diff_policy"] != "block_headline_zero_call":
+        _fail("auth-004 selected-diff policy is invalid")
+    if (
+        authorization["blocked_selected_prs"] != AUTH4_EXPECTED_BLOCKED
+        or authorization["max_runnable_prs"] != AUTH4_EXPECTED_RUNNABLE
+    ):
+        _fail("auth-004 blocked/runnable PR counts are invalid")
+    if authorization["approval_statement_sha256"] != solo.sha256_value(
+        _auth4_approval_statement(public_source)
+    ):
+        _fail("auth-004 approval statement hash is invalid")
+    solo.validate_artifact_hash(
+        authorization, "authorization_sha256", "auth4_authorization"
+    )
+    return authorization
+
+
+def validate_auth4_attestation(raw: Any) -> dict[str, Any]:
+    attestation = _expect_dict(raw, "auth4_attestation")
+    _exact_keys(attestation, AUTH4_ATTESTATION_KEYS, "auth4_attestation")
+    if attestation["schema_version"] != 1 or attestation["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 attestation schema or phase is invalid")
+    if attestation["authorization_id"] != AUTH4_ID:
+        _fail("auth-004 attestation ID is invalid")
+    for key in (
+        "authorization_sha256",
+        "runtime_config_sha256",
+        "tariff_sha256",
+        "selection_receipt_sha256",
+        "cohort_sha256",
+        "public_source_locator_sha256",
+    ):
+        solo._expect_sha(attestation[key], f"auth-004 attestation {key}")
+    if attestation["endpoint_kind"] != "standard":
+        _fail("auth-004 attestation endpoint is invalid")
+    if attestation["provider"] != EXPECTED_PROVIDER or attestation["exact_model_snapshot"] != EXPECTED_MODEL:
+        _fail("auth-004 attestation provider or model is invalid")
+    if attestation["temperature_profile"] != AUTH3_TEMPERATURE_PROFILE:
+        _fail("auth-004 attestation temperature profile is invalid")
+    if attestation["sdk_max_retries"] != 0:
+        _fail("auth-004 attestation retry policy is invalid")
+    for key, expected in AUTH3_LIMITS.items():
+        if attestation[key] != expected:
+            _fail(f"auth-004 attestation {key} is invalid")
+    if (
+        attestation["blocked_selected_prs"] != AUTH4_EXPECTED_BLOCKED
+        or attestation["max_runnable_prs"] != AUTH4_EXPECTED_RUNNABLE
+    ):
+        _fail("auth-004 attestation selected-PR policy is invalid")
+    if (
+        attestation["public_candidate_input_only"] is not True
+        or attestation["anonymous_public_git_read"] is not True
+        or attestation["github_api_used"] is not False
+        or attestation["private_workspace_diff_read"] is not False
+        or attestation["public_source_commit"] != AUTH4_PUBLIC_SOURCE_COMMIT
+    ):
+        _fail("auth-004 attestation public-source boundary is invalid")
+    if attestation["authorization_complete"] is not True:
+        _fail("auth-004 attestation must mark authorization complete")
+    if attestation["paid_call_gate"] is not False:
+        _fail("auth-004 attestation cannot open the dynamic paid-call gate")
+    if attestation["paid_call_blockers"] != [
+        "credential_preflight_pending",
+        "offline_validation_pending",
+    ]:
+        _fail("auth-004 attestation blockers are invalid")
+    if attestation["business_claim_allowed"] or attestation["quality_claim_allowed"]:
+        _fail("auth-004 attestation cannot allow business or quality claims")
+    if attestation["formal_quality_status"] != "incomplete":
+        _fail("auth-004 attestation formal quality status is invalid")
+    approved = _canonical_timestamp(
+        attestation["approved_at"], "auth-004 attestation approved_at"
+    )
+    expires = _canonical_timestamp(
+        attestation["expires_at"], "auth-004 attestation expires_at"
+    )
+    if attestation["expires_at"] != EXPIRES_AT or expires <= approved:
+        _fail("auth-004 attestation approval window is invalid")
+    solo.validate_artifact_hash(attestation, "attestation_sha256", "auth4_attestation")
+    return attestation
+
+
+def initialize_auth_004(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    public_attestation_path: Path,
+    approved_at: str,
+) -> dict[str, Any]:
+    repo = repo_root.resolve(strict=True)
+    evidence = evidence_root.resolve(strict=True)
+    public_attestation = public_attestation_path.resolve(strict=False)
+    if _is_within(evidence, repo) or evidence == repo:
+        _fail("private evidence root must be outside the Git worktree")
+    if not _is_within(public_attestation, repo):
+        _fail("auth-004 public attestation must be inside the Git worktree")
+    auth4_root = evidence / "auth-004"
+    if auth4_root.exists() or public_attestation.exists():
+        _fail("auth-004 evidence already exists and cannot be overwritten")
+    if _git_text(repo, ["status", "--porcelain", "--", "phase9g_solo_run.py"]):
+        _fail("auth-004 executor source must be committed before authorization")
+    executor_commit = _git_text(repo, ["rev-parse", "HEAD"])
+    public_source = validate_auth4_public_source_receipt(
+        solo.load_json(public_source_receipt_path)
+    )
+    selection = _load_auth4_public_selection(evidence)
+    cohort = selection["cohort"]
+    if cohort["cohort_sha256"] != public_source["cohort_sha256"]:
+        _fail("auth-004 private/public cohort hashes differ")
+    auth3_bundle = _load_auth3_bundle(evidence)
+    auth3 = auth3_bundle["authorization"]
+    if auth3["authorization_sha256"] != EXPECTED_AUTH3_AUTHORIZATION_SHA256:
+        _fail("auth-004 predecessor auth-003 hash is invalid")
+    approved = _canonical_timestamp(approved_at, "auth-004 approved_at")
+    source_generated = _canonical_timestamp(
+        public_source["generated_at"], "auth-004 source generated_at"
+    )
+    if approved < source_generated:
+        _fail("auth-004 approval predates exact public source materialization")
+    if approved >= _canonical_timestamp(EXPIRES_AT, "auth-004 expires_at"):
+        _fail("auth-004 approval is outside the inherited authorization window")
+
+    tariff = dict(auth3_bundle["tariff"])
+    validate_tariff(tariff)
+    runtime_config = {
+        "schema_version": 1,
+        "executor_version": AUTH4_EXECUTOR_VERSION,
+        "executor_commit": executor_commit,
+        "executor_source_sha256": _sha256_file(repo / "phase9g_solo_run.py"),
+        "product_source_commit": SOURCE_COMMIT,
+        "provider": EXPECTED_PROVIDER,
+        "exact_model_snapshot": EXPECTED_MODEL,
+        "endpoint_kind": "standard",
+        "base_url": STANDARD_BASE_URL,
+        "temperature_profile": dict(AUTH3_TEMPERATURE_PROFILE),
+        "sdk_max_retries": 0,
+        "per_call_max_output_tokens": PER_CALL_MAX_OUTPUT_TOKENS,
+        "request_timeout_seconds": REQUEST_TIMEOUT_SECONDS,
+        "review_timeout_seconds": review_agent.REVIEW_TIMEOUT_SECONDS,
+        "use_context": False,
+        "use_verify": True,
+        "tiebreak": False,
+        "pr_execution": "sequential_with_product_stage_pairs",
+        "selected_diff_policy": "block_headline_zero_call",
+        "max_runnable_prs": AUTH4_EXPECTED_RUNNABLE,
+        "selection_receipt_sha256": public_source["receipt_sha256"],
+        "cohort_sha256": cohort["cohort_sha256"],
+        "public_candidate_input_only": True,
+        "anonymous_public_git_read": True,
+        "github_api_used": False,
+        "private_workspace_diff_read": False,
+        "public_source_locator_sha256": public_source["source_locator_sha256"],
+        "public_source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+    }
+    validate_auth4_runtime(runtime_config)
+    authorization = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "authorization_id": AUTH4_ID,
+            "supersedes_authorization_sha256": auth3["authorization_sha256"],
+            "participant_id": auth3["participant_id"],
+            "repository_ids": [auth4_public_repository_id()],
+            "approved_by": auth3["approved_by"],
+            "approved_at": approved_at,
+            "expires_at": EXPIRES_AT,
+            "provider": EXPECTED_PROVIDER,
+            "exact_model_snapshot": EXPECTED_MODEL,
+            "runtime_config_sha256": solo.sha256_value(runtime_config),
+            "tariff_sha256": tariff["tariff_sha256"],
+            "selection_receipt_sha256": public_source["receipt_sha256"],
+            "cohort_sha256": cohort["cohort_sha256"],
+            "temperature_profile": dict(AUTH3_TEMPERATURE_PROFILE),
+            "sdk_max_retries": 0,
+            **AUTH3_LIMITS,
+            "real_paid_calls": True,
+            "read_selected_raw_diff": True,
+            "real_github_api": False,
+            "github_publish": False,
+            "staging_deploy": False,
+            "selected_diff_policy": "block_headline_zero_call",
+            "blocked_selected_prs": AUTH4_EXPECTED_BLOCKED,
+            "max_runnable_prs": AUTH4_EXPECTED_RUNNABLE,
+            "public_candidate_input_only": True,
+            "anonymous_public_git_read": True,
+            "public_source_locator_sha256": public_source["source_locator_sha256"],
+            "public_source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+            "approval_statement_sha256": solo.sha256_value(
+                _auth4_approval_statement(public_source)
+            ),
+            "authorization_sha256": "",
+        },
+        "authorization_sha256",
+    )
+    validate_auth4(
+        authorization,
+        runtime_config=runtime_config,
+        tariff=tariff,
+        source_receipt=public_source,
+    )
+    attestation = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "authorization_id": AUTH4_ID,
+            "authorization_sha256": authorization["authorization_sha256"],
+            "runtime_config_sha256": authorization["runtime_config_sha256"],
+            "tariff_sha256": tariff["tariff_sha256"],
+            "selection_receipt_sha256": public_source["receipt_sha256"],
+            "cohort_sha256": cohort["cohort_sha256"],
+            "endpoint_kind": "standard",
+            "provider": EXPECTED_PROVIDER,
+            "exact_model_snapshot": EXPECTED_MODEL,
+            "temperature_profile": dict(AUTH3_TEMPERATURE_PROFILE),
+            "sdk_max_retries": 0,
+            **AUTH3_LIMITS,
+            "blocked_selected_prs": AUTH4_EXPECTED_BLOCKED,
+            "max_runnable_prs": AUTH4_EXPECTED_RUNNABLE,
+            "public_candidate_input_only": True,
+            "anonymous_public_git_read": True,
+            "github_api_used": False,
+            "private_workspace_diff_read": False,
+            "public_source_locator_sha256": public_source["source_locator_sha256"],
+            "public_source_commit": AUTH4_PUBLIC_SOURCE_COMMIT,
+            "authorization_complete": True,
+            "paid_call_gate": False,
+            "paid_call_blockers": [
+                "credential_preflight_pending",
+                "offline_validation_pending",
+            ],
+            "business_claim_allowed": False,
+            "quality_claim_allowed": False,
+            "formal_quality_status": "incomplete",
+            "approved_at": approved_at,
+            "expires_at": EXPIRES_AT,
+            "attestation_sha256": "",
+        },
+        "attestation_sha256",
+    )
+    validate_auth4_attestation(attestation)
+    auth4_root.mkdir(parents=True, exist_ok=False)
+    _write_json(auth4_root / "tariff.json", tariff)
+    _write_json(auth4_root / "runtime-config.json", runtime_config)
+    _write_json(auth4_root / "authorization.json", authorization)
+    _write_json(public_attestation, attestation)
+    return {
+        "valid": True,
+        "authorization_id": AUTH4_ID,
+        "authorization_sha256": authorization["authorization_sha256"],
+        "runtime_config_sha256": authorization["runtime_config_sha256"],
+        "tariff_sha256": tariff["tariff_sha256"],
+        "selected_prs": TARGET_PRS,
+        "blocked_selected_prs": AUTH4_EXPECTED_BLOCKED,
+        "max_runnable_prs": AUTH4_EXPECTED_RUNNABLE,
+        "public_candidate_input_only": True,
+        "private_workspace_diff_read": False,
+        "paid_call_gate": False,
+        "stable_ids_disclosed": False,
+    }
+
+
 @dataclass(frozen=True)
 class ActualUsage:
     logical_calls: int = 0
@@ -1785,12 +2734,199 @@ def _load_private_selection(evidence_root: Path) -> dict[str, Any]:
     }
 
 
+def _load_auth4_public_selection(evidence_root: Path) -> dict[str, Any]:
+    source_root = evidence_root / "auth-004-public-source"
+    rows = _load_jsonl(source_root / "selection-log.jsonl")
+    cohort = solo.load_json(source_root / "cohort.json")
+    candidate_map = solo.load_json(source_root / "candidate-map.private.json")
+    source_proof = solo.load_json(source_root / "source-proof.private.json")
+    private_index = solo.load_json(source_root / "artifact-index.private.json")
+    if not isinstance(source_proof, dict):
+        _fail("auth-004 private source proof is invalid")
+    if (
+        source_proof.get("authorization_id") != AUTH4_ID
+        or source_proof.get("source_url") != AUTH4_PUBLIC_SOURCE_URL
+        or source_proof.get("source_branch") != AUTH4_PUBLIC_SOURCE_BRANCH
+        or source_proof.get("source_commit") != AUTH4_PUBLIC_SOURCE_COMMIT
+        or source_proof.get("license_spdx") != AUTH4_PUBLIC_LICENSE
+        or source_proof.get("candidate_prs") != AUTH4_EXPECTED_CANDIDATES
+        or source_proof.get("anonymous_clone") is not True
+        or source_proof.get("credentials_disabled") is not True
+        or source_proof.get("github_api_used") is not False
+        or source_proof.get("private_workspace_diff_read") is not False
+    ):
+        _fail("auth-004 private source proof boundary is invalid")
+    expected_locator = hashlib.sha256(AUTH4_PUBLIC_SOURCE_URL.encode("ascii")).hexdigest()
+    if source_proof.get("source_locator_sha256") != expected_locator:
+        _fail("auth-004 private source locator hash is invalid")
+    solo._expect_sha(source_proof.get("license_sha256"), "auth-004 private license hash")
+    if _sha256_file(source_root / "license.public.txt") != source_proof["license_sha256"]:
+        _fail("auth-004 private license file hash is invalid")
+    _canonical_timestamp(str(source_proof.get("generated_at")), "auth-004 source generated_at")
+    if not isinstance(candidate_map, list) or not all(
+        isinstance(row, dict) for row in candidate_map
+    ):
+        _fail("auth-004 private candidate map is invalid")
+    if len(candidate_map) != AUTH4_EXPECTED_CANDIDATES or len(rows) != len(candidate_map):
+        _fail("auth-004 private candidate denominator is invalid")
+    if source_proof.get("candidate_map_sha256") != solo.sha256_value(candidate_map):
+        _fail("auth-004 private candidate map hash is invalid")
+    row_by_id: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        solo.validate_artifact_hash(row, "row_sha256", "auth-004 selection row")
+        pr_id = row.get("pr_id")
+        if not isinstance(pr_id, str) or pr_id in row_by_id:
+            _fail("auth-004 selection row identity is invalid")
+        if (
+            row.get("schema_version") != 1
+            or row.get("phase_id") != RUN_PHASE_ID
+            or row.get("authorization_id") != AUTH4_ID
+            or row.get("eligible") is not True
+            or row.get("synthetic") is not False
+            or not isinstance(row.get("selected"), bool)
+        ):
+            _fail("auth-004 selection row boundary is invalid")
+        row_by_id[pr_id] = row
+    candidate_by_id: dict[str, dict[str, Any]] = {}
+    for private_row in candidate_map:
+        pr_number = private_row.get("pr_number")
+        pr_id = private_row.get("opaque_pr_id")
+        commit_sha = private_row.get("commit_sha")
+        if (
+            not isinstance(pr_number, str)
+            or not isinstance(pr_id, str)
+            or not isinstance(commit_sha, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", commit_sha)
+            or pr_id != auth4_public_pr_id(pr_number)
+            or pr_id in candidate_by_id
+        ):
+            _fail("auth-004 private candidate identity is invalid")
+        expected_rank = solo.selection_rank(AUTH4_PUBLIC_SELECTION_SEED, pr_id)
+        public_row = row_by_id.get(pr_id)
+        if (
+            private_row.get("rank_sha256") != expected_rank
+            or public_row is None
+            or public_row.get("rank_sha256") != expected_rank
+            or public_row.get("merged_at") != private_row.get("merged_at")
+            or public_row.get("selected") is not private_row.get("selected")
+            or public_row.get("snapshot_sha256") != private_row.get("snapshot_sha256")
+            or public_row.get("diff_sha256") != private_row.get("diff_sha256")
+        ):
+            _fail("auth-004 private/public candidate binding is invalid")
+        selected = private_row.get("selected") is True
+        if selected:
+            for key in ("snapshot_sha256", "diff_sha256"):
+                solo._expect_sha(private_row.get(key), f"auth-004 selected {key}")
+        elif (
+            private_row.get("snapshot_sha256") is not None
+            or private_row.get("diff_sha256") is not None
+            or private_row.get("potential_secret_findings") != 0
+            or private_row.get("diff_bytes") != 0
+        ):
+            _fail("auth-004 unselected candidate contains diff-derived evidence")
+        candidate_by_id[pr_id] = private_row
+    if set(row_by_id) != set(candidate_by_id):
+        _fail("auth-004 candidate identity sets differ")
+    expected_selected_ids = {
+        pr_id
+        for pr_id, _rank in sorted(
+            (
+                (pr_id, str(row["rank_sha256"]))
+                for pr_id, row in candidate_by_id.items()
+            ),
+            key=lambda item: (item[1], item[0]),
+        )[:TARGET_PRS]
+    }
+    selected_rows = [row for row in rows if row.get("selected") is True]
+    if len(selected_rows) != TARGET_PRS:
+        _fail("auth-004 private selected denominator is invalid")
+    selected_ids = {row["pr_id"] for row in selected_rows}
+    if selected_ids != expected_selected_ids:
+        _fail("auth-004 selected set differs from the frozen ranking")
+    entries = cohort.get("entries")
+    if not isinstance(entries, list) or len(entries) != TARGET_PRS:
+        _fail("auth-004 private cohort entries are invalid")
+    if {entry.get("pr_id") for entry in entries if isinstance(entry, dict)} != selected_ids:
+        _fail("auth-004 private cohort selected set is invalid")
+    if cohort.get("authorization_id") != AUTH4_ID or cohort.get("source_commit") != (
+        AUTH4_PUBLIC_SOURCE_COMMIT
+    ):
+        _fail("auth-004 private cohort source binding is invalid")
+    solo.validate_artifact_hash(cohort, "cohort_sha256", "auth-004 cohort")
+    artifacts: dict[str, Any] = {
+        "source_proof": source_proof,
+        "selection_log": rows,
+        "candidate_map": candidate_map,
+        "cohort": cohort,
+    }
+    expected_index = _private_index(artifacts)
+    if private_index != expected_index:
+        _fail("auth-004 private artifact index is invalid")
+    diff_root = source_root / "selected-diffs"
+    blocked = 0
+    total_bytes = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            _fail("auth-004 private cohort entry is invalid")
+        pr_id = entry["pr_id"]
+        private_row = candidate_by_id.get(pr_id)
+        if private_row is None or private_row.get("selected") is not True:
+            _fail("auth-004 private selected mapping is invalid")
+        if (
+            entry.get("snapshot_sha256") != private_row.get("snapshot_sha256")
+            or entry.get("diff_sha256") != private_row.get("diff_sha256")
+            or entry.get("synthetic") is not False
+        ):
+            _fail("auth-004 private cohort content binding is invalid")
+        diff_path = diff_root / f"{pr_id}.diff"
+        if _sha256_file(diff_path) != entry["diff_sha256"]:
+            _fail("auth-004 selected public diff hash is invalid")
+        diff_bytes = diff_path.read_bytes()
+        findings = _potential_secret_count(diff_bytes)
+        if findings != private_row.get("potential_secret_findings"):
+            _fail("auth-004 selected public diff scan is invalid")
+        blocked += int(findings > 0)
+        total_bytes += len(diff_bytes)
+    if blocked != AUTH4_EXPECTED_BLOCKED:
+        _fail("auth-004 selected public diff block count is invalid")
+    return {
+        "selection_log": rows,
+        "cohort": cohort,
+        "candidate_map": candidate_map,
+        "source_proof": source_proof,
+        "diff_root": diff_root,
+        "blocked_selected_prs": blocked,
+        "selected_diff_total_bytes": total_bytes,
+    }
+
+
 def _load_auth3_bundle(evidence_root: Path) -> dict[str, Any]:
     auth3_root = evidence_root / "auth-003"
     runtime_config = solo.load_json(auth3_root / "runtime-config.json")
     tariff = solo.load_json(auth3_root / "tariff.json")
     authorization = solo.load_json(auth3_root / "authorization.json")
     validate_auth3(authorization, runtime_config=runtime_config, tariff=tariff)
+    return {
+        "authorization": authorization,
+        "runtime_config": runtime_config,
+        "tariff": tariff,
+    }
+
+
+def _load_auth4_bundle(
+    evidence_root: Path,
+    source_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    auth4_root = evidence_root / "auth-004"
+    runtime_config = solo.load_json(auth4_root / "runtime-config.json")
+    tariff = solo.load_json(auth4_root / "tariff.json")
+    authorization = solo.load_json(auth4_root / "authorization.json")
+    validate_auth4(
+        authorization,
+        runtime_config=runtime_config,
+        tariff=tariff,
+        source_receipt=source_receipt,
+    )
     return {
         "authorization": authorization,
         "runtime_config": runtime_config,
@@ -1877,6 +3013,89 @@ def preflight_auth_003(
         "provider": EXPECTED_PROVIDER,
         "model": EXPECTED_MODEL,
         "sdk_max_retries": 0,
+        "paid_call_gate": True,
+        "secret_disclosed": False,
+        "checked_at": instant_text,
+    }
+
+
+def preflight_auth_004(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    public_attestation_path: Path,
+    environment: Mapping[str, str] | None = None,
+    at: str | None = None,
+) -> dict[str, Any]:
+    repo = repo_root.resolve(strict=True)
+    evidence = evidence_root.resolve(strict=True)
+    if _is_within(evidence, repo):
+        _fail("private evidence root must be outside the Git worktree")
+    source_receipt = validate_auth4_public_source_receipt(
+        solo.load_json(public_source_receipt_path)
+    )
+    selection = _load_auth4_public_selection(evidence)
+    if selection["cohort"]["cohort_sha256"] != source_receipt["cohort_sha256"]:
+        _fail("auth-004 public/private source selection differs")
+    if selection["selected_diff_total_bytes"] != source_receipt["selected_diff_total_bytes"]:
+        _fail("auth-004 public/private selected diff size differs")
+    bundle = _load_auth4_bundle(evidence, source_receipt)
+    authorization = bundle["authorization"]
+    runtime = bundle["runtime_config"]
+    attestation = validate_auth4_attestation(solo.load_json(public_attestation_path))
+    if attestation["authorization_sha256"] != authorization["authorization_sha256"]:
+        _fail("auth-004 attestation differs from private authorization")
+    for key in (
+        "runtime_config_sha256",
+        "tariff_sha256",
+        "selection_receipt_sha256",
+        "cohort_sha256",
+        "public_source_locator_sha256",
+        "public_source_commit",
+        "approved_at",
+        "expires_at",
+    ):
+        expected = (
+            authorization[key]
+            if key in authorization
+            else runtime[key]
+        )
+        if attestation[key] != expected:
+            _fail(f"auth-004 attestation {key} differs from private evidence")
+    instant_text = at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    instant = _canonical_timestamp(instant_text, "auth-004 preflight time")
+    if not (
+        _canonical_timestamp(authorization["approved_at"], "auth-004 approved_at")
+        <= instant
+        < _canonical_timestamp(authorization["expires_at"], "auth-004 expires_at")
+    ):
+        _fail("auth-004 is not active")
+    if _sha256_file(repo / "phase9g_solo_run.py") != runtime["executor_source_sha256"]:
+        _fail("working executor source differs from the auth-004 hash")
+    committed_source = _git_bytes(
+        repo,
+        ["show", f"{runtime['executor_commit']}:phase9g_solo_run.py"],
+    )
+    if hashlib.sha256(committed_source).hexdigest() != runtime["executor_source_sha256"]:
+        _fail("auth-004 executor commit does not contain the authorized source")
+    if _git_text(repo, ["status", "--porcelain", "--", "phase9g_solo_run.py"]):
+        _fail("working auth-004 executor source has uncommitted changes")
+    _auth3_credential_value(environment=environment, repo_root=repo)
+    return {
+        "valid": True,
+        "authorization_id": AUTH4_ID,
+        "authorization_sha256": authorization["authorization_sha256"],
+        "runtime_config_sha256": authorization["runtime_config_sha256"],
+        "credential_source_ready": True,
+        "endpoint_kind": "standard",
+        "provider": EXPECTED_PROVIDER,
+        "model": EXPECTED_MODEL,
+        "sdk_max_retries": 0,
+        "public_candidate_input_only": True,
+        "anonymous_public_git_read": True,
+        "github_api_used": False,
+        "private_workspace_diff_read": False,
         "paid_call_gate": True,
         "secret_disclosed": False,
         "checked_at": instant_text,
@@ -2188,6 +3407,60 @@ def record_offline_validation(
     }
 
 
+def record_offline_validation_auth4(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    output_path: Path,
+    validated_at: str,
+) -> dict[str, Any]:
+    repo = repo_root.resolve(strict=True)
+    output = output_path.resolve(strict=False)
+    if not _is_within(output, repo):
+        _fail("auth-004 offline validation receipt must be inside the Git worktree")
+    if output.exists():
+        _fail("auth-004 offline validation receipt already exists and cannot be overwritten")
+    source_receipt = validate_auth4_public_source_receipt(
+        solo.load_json(public_source_receipt_path)
+    )
+    bundle = _load_auth4_bundle(evidence_root.resolve(strict=True), source_receipt)
+    runtime = bundle["runtime_config"]
+    if _sha256_file(repo / "phase9g_solo_run.py") != runtime["executor_source_sha256"]:
+        _fail("offline validation executor hash differs from auth-004")
+    receipt = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "executor_commit": runtime["executor_commit"],
+            "executor_source_sha256": runtime["executor_source_sha256"],
+            "runtime_config_sha256": bundle["authorization"]["runtime_config_sha256"],
+            "dedicated_tests_passed": True,
+            "synthetic_gate_passed": True,
+            "solo_bundle_passed": True,
+            "ruff_passed": True,
+            "mypy_passed": True,
+            "scripts_verify_passed": True,
+            "pip_check_passed": True,
+            "diff_check_passed": True,
+            "external_calls_made": False,
+            "validated_at": validated_at,
+            "validation_sha256": "",
+        },
+        "validation_sha256",
+    )
+    validate_offline_validation(receipt)
+    _write_json(output, receipt)
+    return {
+        "valid": True,
+        "authorization_id": AUTH4_ID,
+        "executor_commit": runtime["executor_commit"],
+        "runtime_config_sha256": bundle["authorization"]["runtime_config_sha256"],
+        "external_calls_made": False,
+        "paid_call_gate": False,
+    }
+
+
 def validate_headline_receipt_set(
     receipts: Sequence[Mapping[str, Any]],
     *,
@@ -2203,7 +3476,18 @@ def validate_headline_receipt_set(
         _fail("headline receipt authorization binding is invalid")
     if any(receipt["runtime_config_sha256"] != authorization["runtime_config_sha256"] for receipt in validated):
         _fail("headline receipt runtime binding is invalid")
-    if sum(receipt["error_category"] == "selected_diff_secret_scan_hit" for receipt in validated) != 2:
+    expected_blocked = authorization.get("blocked_selected_prs")
+    if (
+        isinstance(expected_blocked, bool)
+        or not isinstance(expected_blocked, int)
+        or expected_blocked < 0
+        or expected_blocked > TARGET_PRS
+    ):
+        _fail("headline receipt authorization block count is invalid")
+    if sum(
+        receipt["error_category"] == "selected_diff_secret_scan_hit"
+        for receipt in validated
+    ) != expected_blocked:
         _fail("headline receipt secret-scan failure count is invalid")
     actual_totals = {
         "logical_calls": sum(receipt["logical_calls"] for receipt in validated),
@@ -2252,12 +3536,22 @@ def validate_public_run_receipt(raw: Any) -> dict[str, Any]:
         "private_run_index_sha256",
     ):
         solo._expect_sha(receipt[key], f"public run receipt {key}")
-    if receipt["selected_prs"] != 5 or receipt["blocked_zero_call_headlines"] != 2:
-        _fail("public run receipt selected/blocked denominator is invalid")
-    if receipt["runnable_headlines"] != 3 or receipt["headline_attempts"] != 5:
+    if receipt["selected_prs"] != TARGET_PRS or receipt["headline_attempts"] != TARGET_PRS:
+        _fail("public run receipt selected/headline denominator is invalid")
+    blocked = receipt["blocked_zero_call_headlines"]
+    runnable = receipt["runnable_headlines"]
+    if (
+        isinstance(blocked, bool)
+        or not isinstance(blocked, int)
+        or blocked < 0
+        or blocked > TARGET_PRS
+        or isinstance(runnable, bool)
+        or not isinstance(runnable, int)
+        or runnable != TARGET_PRS - blocked
+    ):
         _fail("public run receipt runnable/headline denominator is invalid")
     statuses = receipt["headline_status_counts"]
-    if not isinstance(statuses, dict) or sum(statuses.values()) != 5:
+    if not isinstance(statuses, dict) or sum(statuses.values()) != TARGET_PRS:
         _fail("public run receipt status denominator is invalid")
     actual = receipt["actual_usage"]
     reserved = receipt["reserved_budget"]
@@ -2302,7 +3596,7 @@ def validate_public_run_receipt(raw: Any) -> dict[str, Any]:
     return receipt
 
 
-def _finalize_auth3_run(
+def _finalize_run(
     *,
     run_root: Path,
     public_run: Path,
@@ -2312,9 +3606,17 @@ def _finalize_auth3_run(
     authorization: Mapping[str, Any],
     tariff: Mapping[str, Any],
     selection_receipt: Mapping[str, Any],
+    blocked_headlines: int,
+    runnable_headlines: int,
 ) -> dict[str, Any]:
     if public_run.exists() or (run_root / "run-index.private.json").exists():
         _fail("final run evidence already exists and cannot be overwritten")
+    if (
+        blocked_headlines + runnable_headlines != TARGET_PRS
+        or authorization.get("blocked_selected_prs") != blocked_headlines
+        or authorization.get("max_runnable_prs") != runnable_headlines
+    ):
+        _fail("final run denominator differs from the authorization")
     validated = validate_headline_receipt_set(
         receipts,
         cohort=cohort,
@@ -2369,10 +3671,10 @@ def _finalize_auth3_run(
             "tariff_sha256": tariff["tariff_sha256"],
             "selection_receipt_sha256": selection_receipt["receipt_sha256"],
             "cohort_sha256": cohort["cohort_sha256"],
-            "selected_prs": 5,
-            "blocked_zero_call_headlines": 2,
-            "runnable_headlines": 3,
-            "headline_attempts": 5,
+            "selected_prs": TARGET_PRS,
+            "blocked_zero_call_headlines": blocked_headlines,
+            "runnable_headlines": runnable_headlines,
+            "headline_attempts": TARGET_PRS,
             "headline_status_counts": dict(sorted(status_counts.items())),
             "actual_usage": actual_usage,
             "reserved_budget": reserved_budget,
@@ -2396,9 +3698,9 @@ def _finalize_auth3_run(
     _write_json(public_run, public_receipt)
     return {
         "valid": True,
-        "selected_prs": 5,
-        "blocked_zero_call_headlines": 2,
-        "runnable_headlines": 3,
+        "selected_prs": TARGET_PRS,
+        "blocked_zero_call_headlines": blocked_headlines,
+        "runnable_headlines": runnable_headlines,
         "headline_status_counts": dict(sorted(status_counts.items())),
         "actual_usage": actual_usage,
         "actual_usage_known": public_receipt["actual_usage_known"],
@@ -2411,12 +3713,13 @@ def _finalize_auth3_run(
     }
 
 
-def execute_auth3_headlines(
+def _execute_headlines(
     *,
+    authorization_revision: str,
     repo_root: Path,
     evidence_root: Path,
     public_selection_receipt_path: Path,
-    public_auth3_attestation_path: Path,
+    public_attestation_path: Path,
     offline_validation_path: Path,
     public_run_receipt_path: Path,
     environment: Mapping[str, str] | None = None,
@@ -2428,35 +3731,64 @@ def execute_auth3_headlines(
     public_run = public_run_receipt_path.resolve(strict=False)
     if not _is_within(public_run, repo):
         _fail("public run receipt must be inside the Git worktree")
-    run_root = evidence / "run-auth003-001"
-    staging_root = evidence / "run-auth003-001.initializing"
+    if authorization_revision not in {"auth-003", "auth-004"}:
+        _fail("run authorization revision is invalid")
+    run_suffix = authorization_revision.replace("-", "")
+    run_root = evidence / f"run-{run_suffix}-001"
+    staging_root = evidence / f"run-{run_suffix}-001.initializing"
     if run_root.exists() or staging_root.exists() or public_run.exists():
-        _fail("auth-003 run evidence already exists and cannot be overwritten")
-    selection_receipt = validate_public_receipt(solo.load_json(public_selection_receipt_path))
-    selection = _load_private_selection(evidence)
+        _fail(f"{authorization_revision} run evidence already exists and cannot be overwritten")
+    if authorization_revision == "auth-003":
+        selection_receipt = validate_public_receipt(
+            solo.load_json(public_selection_receipt_path)
+        )
+        selection = _load_private_selection(evidence)
+        bundle = _load_auth3_bundle(evidence)
+        attestation = validate_auth3_attestation(solo.load_json(public_attestation_path))
+        diff_root = evidence / "selected-diffs"
+        expected_blocked = 2
+        expected_runnable = 3
+    else:
+        selection_receipt = validate_auth4_public_source_receipt(
+            solo.load_json(public_selection_receipt_path)
+        )
+        selection = _load_auth4_public_selection(evidence)
+        bundle = _load_auth4_bundle(evidence, selection_receipt)
+        attestation = validate_auth4_attestation(solo.load_json(public_attestation_path))
+        diff_root = selection["diff_root"]
+        expected_blocked = AUTH4_EXPECTED_BLOCKED
+        expected_runnable = AUTH4_EXPECTED_RUNNABLE
     cohort = selection["cohort"]
-    auth3_bundle = _load_auth3_bundle(evidence)
-    authorization = auth3_bundle["authorization"]
-    runtime = auth3_bundle["runtime_config"]
-    tariff = auth3_bundle["tariff"]
-    attestation = validate_auth3_attestation(solo.load_json(public_auth3_attestation_path))
+    authorization = bundle["authorization"]
+    runtime = bundle["runtime_config"]
+    tariff = bundle["tariff"]
     offline = validate_offline_validation(solo.load_json(offline_validation_path))
     if selection_receipt["cohort_sha256"] != cohort["cohort_sha256"]:
         _fail("selection receipt differs from the private cohort")
     if attestation["authorization_sha256"] != authorization["authorization_sha256"]:
-        _fail("auth-003 public/private authorization hashes differ")
+        _fail(f"{authorization_revision} public/private authorization hashes differ")
     if offline["runtime_config_sha256"] != authorization["runtime_config_sha256"]:
         _fail("offline validation differs from the authorized runtime")
     if offline["executor_source_sha256"] != runtime["executor_source_sha256"]:
         _fail("offline validation differs from the authorized executor")
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    preflight = preflight_auth_003(
-        repo_root=repo,
-        evidence_root=evidence,
-        public_attestation_path=public_auth3_attestation_path,
-        environment=environment,
-        at=checked_at,
-    )
+    if authorization_revision == "auth-003":
+        preflight = preflight_auth_003(
+            repo_root=repo,
+            evidence_root=evidence,
+            public_attestation_path=public_attestation_path,
+            environment=environment,
+            at=checked_at,
+        )
+    else:
+        preflight = preflight_auth_004(
+            repo_root=repo,
+            evidence_root=evidence,
+            public_source_receipt_path=public_selection_receipt_path,
+            public_attestation_path=public_attestation_path,
+            environment=environment,
+            at=checked_at,
+        )
 
     selected_ids = [entry["pr_id"] for entry in cohort["entries"]]
     candidate_by_id = {
@@ -2470,7 +3802,7 @@ def execute_auth3_headlines(
     runnable_ids: list[str] = []
     for pr_id in selected_ids:
         row = candidate_by_id[pr_id]
-        diff_path = evidence / "selected-diffs" / f"{pr_id}.diff"
+        diff_path = diff_root / f"{pr_id}.diff"
         if _sha256_file(diff_path) != row["diff_sha256"]:
             _fail("selected diff hash differs from the frozen cohort")
         diff_bytes = diff_path.read_bytes()
@@ -2481,8 +3813,8 @@ def execute_auth3_headlines(
             blocked_ids.append(pr_id)
         else:
             runnable_ids.append(pr_id)
-    if len(blocked_ids) != 2 or len(runnable_ids) != 3:
-        _fail("selected diff block/runnable counts differ from auth-003")
+    if len(blocked_ids) != expected_blocked or len(runnable_ids) != expected_runnable:
+        _fail(f"selected diff block/runnable counts differ from {authorization_revision}")
 
     credential = _auth3_credential_value(environment=environment, repo_root=repo)
     raw_client = OpenAI(
@@ -2569,9 +3901,7 @@ def execute_auth3_headlines(
         review_packet: list[dict[str, Any]] = []
         caught: BaseException | None = None
         try:
-            diff_bytes = (
-                evidence / "selected-diffs" / f"{pr_id}.diff"
-            ).read_bytes()
+            diff_bytes = (diff_root / f"{pr_id}.diff").read_bytes()
             try:
                 diff_text = diff_bytes.decode("utf-8")
             except UnicodeDecodeError as exc:
@@ -2677,7 +4007,7 @@ def execute_auth3_headlines(
 
     if interrupted is not None:
         raise interrupted
-    return _finalize_auth3_run(
+    return _finalize_run(
         run_root=run_root,
         public_run=public_run,
         registrations=registrations,
@@ -2686,11 +4016,58 @@ def execute_auth3_headlines(
         authorization=authorization,
         tariff=tariff,
         selection_receipt=selection_receipt,
+        blocked_headlines=expected_blocked,
+        runnable_headlines=expected_runnable,
     )
 
 
-def recover_interrupted_auth3_run(
+def execute_auth3_headlines(
     *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_selection_receipt_path: Path,
+    public_auth3_attestation_path: Path,
+    offline_validation_path: Path,
+    public_run_receipt_path: Path,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    return _execute_headlines(
+        authorization_revision="auth-003",
+        repo_root=repo_root,
+        evidence_root=evidence_root,
+        public_selection_receipt_path=public_selection_receipt_path,
+        public_attestation_path=public_auth3_attestation_path,
+        offline_validation_path=offline_validation_path,
+        public_run_receipt_path=public_run_receipt_path,
+        environment=environment,
+    )
+
+
+def execute_auth4_headlines(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    public_auth4_attestation_path: Path,
+    offline_validation_path: Path,
+    public_run_receipt_path: Path,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    return _execute_headlines(
+        authorization_revision="auth-004",
+        repo_root=repo_root,
+        evidence_root=evidence_root,
+        public_selection_receipt_path=public_source_receipt_path,
+        public_attestation_path=public_auth4_attestation_path,
+        offline_validation_path=offline_validation_path,
+        public_run_receipt_path=public_run_receipt_path,
+        environment=environment,
+    )
+
+
+def _recover_interrupted_run(
+    *,
+    authorization_revision: str,
     repo_root: Path,
     evidence_root: Path,
     public_selection_receipt_path: Path,
@@ -2700,23 +4077,41 @@ def recover_interrupted_auth3_run(
     evidence = evidence_root.resolve(strict=True)
     if _is_within(evidence, repo):
         _fail("private evidence root must be outside the Git worktree")
-    run_root = evidence / "run-auth003-001"
-    staging_root = evidence / "run-auth003-001.initializing"
+    if authorization_revision not in {"auth-003", "auth-004"}:
+        _fail("recovery authorization revision is invalid")
+    run_suffix = authorization_revision.replace("-", "")
+    run_root = evidence / f"run-{run_suffix}-001"
+    staging_root = evidence / f"run-{run_suffix}-001.initializing"
     public_run = public_run_receipt_path.resolve(strict=False)
     if not run_root.exists() and staging_root.is_dir():
         if not (staging_root / "registrations.json").is_file() or not (
             staging_root / "preflight.json"
         ).is_file():
-            _fail("auth-003 initialization was interrupted before headline registration")
+            _fail(
+                f"{authorization_revision} initialization was interrupted before headline registration"
+            )
         os.replace(staging_root, run_root)
     if not run_root.is_dir():
-        _fail("no interrupted auth-003 run exists")
+        _fail(f"no interrupted {authorization_revision} run exists")
     if public_run.exists() or (run_root / "run-index.private.json").exists():
-        _fail("auth-003 run is already finalized")
-    selection_receipt = validate_public_receipt(solo.load_json(public_selection_receipt_path))
-    selection = _load_private_selection(evidence)
+        _fail(f"{authorization_revision} run is already finalized")
+    if authorization_revision == "auth-003":
+        selection_receipt = validate_public_receipt(
+            solo.load_json(public_selection_receipt_path)
+        )
+        selection = _load_private_selection(evidence)
+        bundle = _load_auth3_bundle(evidence)
+        expected_blocked = 2
+        expected_runnable = 3
+    else:
+        selection_receipt = validate_auth4_public_source_receipt(
+            solo.load_json(public_selection_receipt_path)
+        )
+        selection = _load_auth4_public_selection(evidence)
+        bundle = _load_auth4_bundle(evidence, selection_receipt)
+        expected_blocked = AUTH4_EXPECTED_BLOCKED
+        expected_runnable = AUTH4_EXPECTED_RUNNABLE
     cohort = selection["cohort"]
-    bundle = _load_auth3_bundle(evidence)
     authorization = bundle["authorization"]
     runtime = bundle["runtime_config"]
     tariff = bundle["tariff"]
@@ -2735,6 +4130,17 @@ def recover_interrupted_auth3_run(
     selected = {entry["pr_id"] for entry in cohort["entries"]}
     if {row["pr_id"] for row in registrations} != selected:
         _fail("interrupted run registrations differ from the cohort")
+    blocked_registrations = sum(
+        row.get("initial_disposition") == "blocked_zero_call" for row in registrations
+    )
+    pending_registrations = sum(
+        row.get("initial_disposition") == "pending_paid_call" for row in registrations
+    )
+    if (
+        blocked_registrations != expected_blocked
+        or pending_registrations != expected_runnable
+    ):
+        _fail("interrupted run registration dispositions are invalid")
     receipts_path = run_root / "headline-receipts.jsonl"
     receipts = _load_jsonl(receipts_path) if receipts_path.exists() else []
     for receipt in receipts:
@@ -2836,7 +4242,7 @@ def recover_interrupted_auth3_run(
         )
         _append_jsonl(receipts_path, receipt)
         receipts.append(receipt)
-    return _finalize_auth3_run(
+    return _finalize_run(
         run_root=run_root,
         public_run=public_run,
         registrations=registrations,
@@ -2845,6 +4251,40 @@ def recover_interrupted_auth3_run(
         authorization=authorization,
         tariff=tariff,
         selection_receipt=selection_receipt,
+        blocked_headlines=expected_blocked,
+        runnable_headlines=expected_runnable,
+    )
+
+
+def recover_interrupted_auth3_run(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_selection_receipt_path: Path,
+    public_run_receipt_path: Path,
+) -> dict[str, Any]:
+    return _recover_interrupted_run(
+        authorization_revision="auth-003",
+        repo_root=repo_root,
+        evidence_root=evidence_root,
+        public_selection_receipt_path=public_selection_receipt_path,
+        public_run_receipt_path=public_run_receipt_path,
+    )
+
+
+def recover_interrupted_auth4_run(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    public_run_receipt_path: Path,
+) -> dict[str, Any]:
+    return _recover_interrupted_run(
+        authorization_revision="auth-004",
+        repo_root=repo_root,
+        evidence_root=evidence_root,
+        public_selection_receipt_path=public_source_receipt_path,
+        public_run_receipt_path=public_run_receipt_path,
     )
 
 
@@ -2871,7 +4311,7 @@ def validate_synthetic() -> dict[str, Any]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Materialize and validate Phase 9G-Solo-Run evidence without network calls"
+        description="Materialize, validate, and gate Phase 9G-Solo-Run evidence"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     initialize = commands.add_parser("initialize-auth-002")
@@ -2883,6 +4323,17 @@ def _build_parser() -> argparse.ArgumentParser:
     initialize_auth3.add_argument("--selection-receipt", required=True)
     initialize_auth3.add_argument("--public-attestation", required=True)
     initialize_auth3.add_argument("--approved-at", required=True)
+    public_source_auth4 = commands.add_parser("materialize-auth-004-public-source")
+    public_source_auth4.add_argument("--repo-root", required=True)
+    public_source_auth4.add_argument("--evidence-root", required=True)
+    public_source_auth4.add_argument("--public-receipt", required=True)
+    public_source_auth4.add_argument("--generated-at", required=True)
+    initialize_auth4 = commands.add_parser("initialize-auth-004")
+    initialize_auth4.add_argument("--repo-root", required=True)
+    initialize_auth4.add_argument("--evidence-root", required=True)
+    initialize_auth4.add_argument("--public-source-receipt", required=True)
+    initialize_auth4.add_argument("--public-attestation", required=True)
+    initialize_auth4.add_argument("--approved-at", required=True)
     materialize = commands.add_parser("materialize-selection")
     materialize.add_argument("--repo-root", required=True)
     materialize.add_argument("--private-root", required=True)
@@ -2892,8 +4343,14 @@ def _build_parser() -> argparse.ArgumentParser:
     materialize.add_argument("--generated-at", required=True)
     validate_receipt = commands.add_parser("validate-public-receipt")
     validate_receipt.add_argument("--receipt", required=True)
+    validate_public_source_auth4 = commands.add_parser(
+        "validate-auth-004-public-source"
+    )
+    validate_public_source_auth4.add_argument("--receipt", required=True)
     validate_attestation = commands.add_parser("validate-auth-003-attestation")
     validate_attestation.add_argument("--attestation", required=True)
+    validate_attestation_auth4 = commands.add_parser("validate-auth-004-attestation")
+    validate_attestation_auth4.add_argument("--attestation", required=True)
     credential = commands.add_parser("preflight-credential")
     credential.add_argument("--authorization", required=True)
     credential.add_argument("--runtime-config", required=True)
@@ -2902,11 +4359,22 @@ def _build_parser() -> argparse.ArgumentParser:
     credential_auth3.add_argument("--repo-root", required=True)
     credential_auth3.add_argument("--evidence-root", required=True)
     credential_auth3.add_argument("--public-attestation", required=True)
+    credential_auth4 = commands.add_parser("preflight-auth-004")
+    credential_auth4.add_argument("--repo-root", required=True)
+    credential_auth4.add_argument("--evidence-root", required=True)
+    credential_auth4.add_argument("--public-source-receipt", required=True)
+    credential_auth4.add_argument("--public-attestation", required=True)
     record_validation = commands.add_parser("record-offline-validation")
     record_validation.add_argument("--repo-root", required=True)
     record_validation.add_argument("--evidence-root", required=True)
     record_validation.add_argument("--output", required=True)
     record_validation.add_argument("--validated-at", required=True)
+    record_validation_auth4 = commands.add_parser("record-offline-validation-auth-004")
+    record_validation_auth4.add_argument("--repo-root", required=True)
+    record_validation_auth4.add_argument("--evidence-root", required=True)
+    record_validation_auth4.add_argument("--public-source-receipt", required=True)
+    record_validation_auth4.add_argument("--output", required=True)
+    record_validation_auth4.add_argument("--validated-at", required=True)
     execute_auth3 = commands.add_parser("execute-auth-003-headlines")
     execute_auth3.add_argument("--repo-root", required=True)
     execute_auth3.add_argument("--evidence-root", required=True)
@@ -2914,6 +4382,13 @@ def _build_parser() -> argparse.ArgumentParser:
     execute_auth3.add_argument("--public-attestation", required=True)
     execute_auth3.add_argument("--offline-validation", required=True)
     execute_auth3.add_argument("--public-run-receipt", required=True)
+    execute_auth4 = commands.add_parser("execute-auth-004-headlines")
+    execute_auth4.add_argument("--repo-root", required=True)
+    execute_auth4.add_argument("--evidence-root", required=True)
+    execute_auth4.add_argument("--public-source-receipt", required=True)
+    execute_auth4.add_argument("--public-attestation", required=True)
+    execute_auth4.add_argument("--offline-validation", required=True)
+    execute_auth4.add_argument("--public-run-receipt", required=True)
     validate_run = commands.add_parser("validate-public-run-receipt")
     validate_run.add_argument("--receipt", required=True)
     recover_auth3 = commands.add_parser("recover-interrupted-auth-003")
@@ -2921,6 +4396,11 @@ def _build_parser() -> argparse.ArgumentParser:
     recover_auth3.add_argument("--evidence-root", required=True)
     recover_auth3.add_argument("--selection-receipt", required=True)
     recover_auth3.add_argument("--public-run-receipt", required=True)
+    recover_auth4 = commands.add_parser("recover-interrupted-auth-004")
+    recover_auth4.add_argument("--repo-root", required=True)
+    recover_auth4.add_argument("--evidence-root", required=True)
+    recover_auth4.add_argument("--public-source-receipt", required=True)
+    recover_auth4.add_argument("--public-run-receipt", required=True)
     commands.add_parser("validate-synthetic")
     return parser
 
@@ -2941,6 +4421,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 public_attestation_path=Path(args.public_attestation),
                 approved_at=args.approved_at,
             )
+        elif args.command == "materialize-auth-004-public-source":
+            result = materialize_auth4_public_source(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_receipt_path=Path(args.public_receipt),
+                generated_at=args.generated_at,
+            )
+        elif args.command == "initialize-auth-004":
+            result = initialize_auth_004(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
+                public_attestation_path=Path(args.public_attestation),
+                approved_at=args.approved_at,
+            )
         elif args.command == "materialize-selection":
             result = materialize_selection(
                 repo_root=Path(args.repo_root),
@@ -2958,12 +4453,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "selected_prs": receipt["selected_prs"],
                 "paid_call_gate": False,
             }
+        elif args.command == "validate-auth-004-public-source":
+            receipt = validate_auth4_public_source_receipt(solo.load_json(args.receipt))
+            result = {
+                "valid": True,
+                "authorization_id": AUTH4_ID,
+                "candidate_prs": receipt["candidate_prs"],
+                "selected_prs": receipt["selected_prs"],
+                "anonymous_public_source": True,
+                "private_workspace_diff_read": False,
+                "paid_call_gate": False,
+            }
         elif args.command == "validate-auth-003-attestation":
             attestation = validate_auth3_attestation(solo.load_json(args.attestation))
             result = {
                 "valid": True,
                 "authorization_id": attestation["authorization_id"],
                 "authorization_complete": True,
+                "paid_call_gate": False,
+            }
+        elif args.command == "validate-auth-004-attestation":
+            attestation = validate_auth4_attestation(solo.load_json(args.attestation))
+            result = {
+                "valid": True,
+                "authorization_id": attestation["authorization_id"],
+                "authorization_complete": True,
+                "public_candidate_input_only": True,
                 "paid_call_gate": False,
             }
         elif args.command == "preflight-credential":
@@ -2978,10 +4493,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                 evidence_root=Path(args.evidence_root),
                 public_attestation_path=Path(args.public_attestation),
             )
+        elif args.command == "preflight-auth-004":
+            result = preflight_auth_004(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
+                public_attestation_path=Path(args.public_attestation),
+            )
         elif args.command == "record-offline-validation":
             result = record_offline_validation(
                 repo_root=Path(args.repo_root),
                 evidence_root=Path(args.evidence_root),
+                output_path=Path(args.output),
+                validated_at=args.validated_at,
+            )
+        elif args.command == "record-offline-validation-auth-004":
+            result = record_offline_validation_auth4(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
                 output_path=Path(args.output),
                 validated_at=args.validated_at,
             )
@@ -2991,6 +4521,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 evidence_root=Path(args.evidence_root),
                 public_selection_receipt_path=Path(args.selection_receipt),
                 public_auth3_attestation_path=Path(args.public_attestation),
+                offline_validation_path=Path(args.offline_validation),
+                public_run_receipt_path=Path(args.public_run_receipt),
+            )
+        elif args.command == "execute-auth-004-headlines":
+            result = execute_auth4_headlines(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
+                public_auth4_attestation_path=Path(args.public_attestation),
                 offline_validation_path=Path(args.offline_validation),
                 public_run_receipt_path=Path(args.public_run_receipt),
             )
@@ -3010,6 +4549,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repo_root=Path(args.repo_root),
                 evidence_root=Path(args.evidence_root),
                 public_selection_receipt_path=Path(args.selection_receipt),
+                public_run_receipt_path=Path(args.public_run_receipt),
+            )
+        elif args.command == "recover-interrupted-auth-004":
+            result = recover_interrupted_auth4_run(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
                 public_run_receipt_path=Path(args.public_run_receipt),
             )
         else:

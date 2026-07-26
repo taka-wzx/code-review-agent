@@ -321,3 +321,86 @@ quality_claim_allowed=false
 formal_quality_status=incomplete
 model_quality_status=not_measured
 ```
+
+## Amendment 2: auth-004 anonymous-public-source alternative
+
+Status: **public source approved; exact paid authorization remains closed pending a
+post-materialization human hash approval**
+
+Approved scope date: 2026-07-26
+
+The auth-003 executor passed its credential preflight, but the Codex tenant policy
+rejected the network launch before the shell or executor started because auth-003
+would disclose selected private-workspace diffs to an external GLM/BigModel endpoint.
+The rejection happened before any provider request, run directory, receipt, Token, or
+cost existed. Auth-003 remains immutable with status `not_run_policy_blocked`; it must
+not be retried, relabelled, or represented as a model failure.
+
+The user then explicitly approved creation of `phase9g-solo-run-v1-auth-004` with
+candidate input restricted to anonymously verifiable public PR data. This approval
+permits the offline/public-read implementation and materialization below. It does not
+yet constitute the final post-materialization approval of an exact authorization
+SHA-256, so no auth-004 paid call may occur from this amendment alone.
+
+The single frozen public source is:
+
+```text
+source_kind=anonymous_public_git_exact_commit
+repository=psf/black
+license=MIT
+branch=main
+source_commit=db2e3e7b317b40685ba4618235a8388c7c6ea5e2
+window=[2026-01-01T00:00:00Z, 2026-07-26T00:00:00Z)
+selection_seed=5e190bc14d84c2439e43e0560db7d250c4cd702cd42cf32c9746425078c8ad38
+candidate_prs=180
+selected_prs=5
+selected_diff_secret_scan_blocked=0
+replacement_after_scan=false
+```
+
+`psf/black` is not one of the repositories registered by this repository's Formal
+Quality or Verifier evidence contracts. The probe used an anonymous credential-free
+partial clone, verified the exact commit and MIT license, and opened only the five
+lowest-ranked selected diffs. It did not use GitHub's API, cookies, a GitHub token, the
+private Solo repository, any unselected diff content, or a model. The official
+materializer must reproduce all denominators and hashes exactly or fail closed; probe
+results are not run evidence.
+
+Auth-004 inherits, without increasing, the auth-003 model authority:
+
+```text
+provider=glm
+exact_model_snapshot=glm-5.2
+endpoint_kind=standard
+temperature_profile=0.01/0.70/0.01/0.01
+sdk_max_retries=0
+max_logical_calls=96
+max_http_attempts=96
+max_input_tokens=1750000
+max_output_tokens=200000
+max_cost_microcny=20000000
+input/output/cached_input micro-CNY per million=8000000/28000000/2000000
+```
+
+The executor remains sequential, uses the product Finder/Verifier stage pairs with
+context disabled and an empty read-tool root, retains no Prompt or response content in
+traces, and has no publish/deploy/GitHub API authority. Five public selected diffs are
+runnable subject to the unchanged cumulative ceilings; budget exhaustion or any new
+secret-scan mismatch becomes an immutable headline failure rather than a replacement.
+
+Before auth-004 can make a provider request, all of the following are conjunctive:
+
+1. committed executor source and full offline acceptance;
+2. exact anonymous public materialization receipt and private hash cross-checks;
+3. a separately created auth-004 authorization/runtime/tariff bundle and sanitized
+   attestation;
+4. explicit human approval after seeing the exact source, runtime, ceilings, expiry,
+   and canonical authorization SHA-256;
+5. a fresh repository-external Key preflight;
+6. a fresh tenant data-egress approval. Tenant policy may still refuse the external
+   call; such refusal remains `not_run_policy_blocked` and is never worked around.
+
+Auth-004 public-PR observations cannot be backfilled into the private-repository
+auth-003 denominator and do not establish a Business Pilot, product benefit, model
+quality, Precision/Recall/F1, Formal Quality, or generalization claim. Permanent claim
+values remain false/incomplete/not measured.
