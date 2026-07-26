@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9g-solo-exploratory-v1",
+  "authorization_id": null,
+  "participant_id": null,
+  "participant_confirmed_real": null,
+  "repository_ids": [],
+  "pr_count": null,
+  "selection_rule": "lowest deterministic eligible ranks before output inspection",
+  "mode": "shadow",
+  "model": {
+    "provider": null,
+    "exact_model_snapshot": null,
+    "runtime_config_sha256": null,
+    "temperature": null,
+    "max_logical_calls": null,
+    "max_http_attempts": null,
+    "max_input_tokens": null,
+    "max_output_tokens": null,
+    "max_cost_microcny": null,
+    "real_paid_calls": null,
+    "read_raw_diff": null
+  },
+  "retention": {
+    "data_days": null,
+    "feedback_days": null,
+    "raw_trace_days": null
+  },
+  "external_operations": {
+    "staging_deploy": false,
+    "deployment_target": null,
+    "real_github_api": false,
+    "create_comments_or_checks": false,
+    "github_publish": false
+  },
+  "approved_by": null,
+  "approved_at": null,
+  "expires_at": null,
+  "synthetic": false,
+  "authorization_sha256": ""
+}

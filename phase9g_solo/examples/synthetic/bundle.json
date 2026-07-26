@@ -1,0 +1,11 @@
+{
+  "business_claim_allowed": false,
+  "evidence_type": "single_participant_exploratory",
+  "expected_bundle_sha256": "099bc94eb46baf979b88f34b7eeafd3f6f5d9b2e08fe913169d9954a769874e1",
+  "exploratory_summary_allowed": false,
+  "fixture": "built_in_synthetic_v1",
+  "fixture_sha256": "4abcdc59ed529b9b171d9e4fdc16ef2a91baefb01967b835e1e373f55ef5825c",
+  "phase_id": "phase9g-solo-exploratory-v1",
+  "quality_claim_allowed": false,
+  "schema_version": 1
+}

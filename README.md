@@ -17,6 +17,13 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 > 未产生真人反馈或质量数字。操作与下一步授权表见
 > [`docs/phase9g-real-pilot.md`](docs/phase9g-real-pilot.md)，冻结合同见
 > [`docs/plans/phase9g-real-pilot.md`](docs/plans/phase9g-real-pilot.md)。
+>
+> **Phase 9G-Solo Exploratory v1** 另行提供单一真人、5--10 个 PR、仅 shadow 的探索性
+> 工作流协议。它永久保持 `business_claim_allowed=false`、`quality_claim_allowed=false` 和
+> `formal_quality_status=incomplete`，不能替代 3--5 人 Pilot 或 A/B/C 真人质量评测。当前仅完成
+> 离线工具和 synthetic 门禁，尚未授权真实运行。操作手册见
+> [`docs/phase9g-solo-exploratory-v1.md`](docs/phase9g-solo-exploratory-v1.md)，冻结合同见
+> [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)。
 
 ## 产品主线
 
