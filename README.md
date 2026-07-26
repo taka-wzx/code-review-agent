@@ -25,9 +25,10 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 > 命中已按协议保留选择并阻断对应 headline。auth-003 已批准标准 GLM-5.2、正温度 profile、
 > 零 SDK 重试和 96/96 调用上限；其 Key 预检通过后，外部调用仍在 executor 启动前被租户数据
 > 外发策略阻断，因此保持 0 请求/Token/费用和 `not_run_policy_blocked`。用户随后允许创建只接受
-> 匿名可验证公共 PR 输入的 auth-004；已冻结 MIT 公共源的 exact commit，并由 180 个候选
-> 确定性选择 5 个、0 个敏感命中且未换选。auth-004 仍没有真实模型调用或反馈，精确授权
-> SHA-256、离线门禁、即时 Key 预检和租户外发审批缺一不可。
+> 匿名可验证公共 PR 输入的 auth-004；MIT 公共源的 exact commit 已正式物化，180 个候选
+> 确定性选择 5 个、0 个敏感命中且未换选，公共 receipt 绑定 15,103 个 diff bytes。auth-004
+> 仍没有真实模型调用或反馈，精确授权 SHA-256、离线门禁、即时 Key 预检和租户外发审批
+> 缺一不可。
 > 准备协议见
 > [`docs/phase9g-solo-exploratory-v1.md`](docs/phase9g-solo-exploratory-v1.md)，冻结合同见
 > [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)；运行状态和

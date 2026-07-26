@@ -19,7 +19,7 @@ The auth-003 provider launch was rejected by tenant data-egress policy before th
 executor started, so it produced zero requests, Tokens, cost, or run evidence and
 remains `not_run_policy_blocked`.
 
-`public-source-auth004.json`, when present, binds an anonymous credential-free
+`public-source-auth004.json` binds an anonymous credential-free
 public Git clone, exact public commit, MIT license, complete candidate denominator,
 deterministic five-PR selection, selected-diff hashes, and a declaration that no
 private workspace diff or GitHub API was used. It contains no PR number, title,

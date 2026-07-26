@@ -324,8 +324,8 @@ model_quality_status=not_measured
 
 ## Amendment 2: auth-004 anonymous-public-source alternative
 
-Status: **public source approved; exact paid authorization remains closed pending a
-post-materialization human hash approval**
+Status: **public source materialized and validated; exact paid authorization remains
+closed pending a post-materialization human hash approval**
 
 Approved scope date: 2026-07-26
 
@@ -365,6 +365,14 @@ lowest-ranked selected diffs. It did not use GitHub's API, cookies, a GitHub tok
 private Solo repository, any unselected diff content, or a model. The official
 materializer must reproduce all denominators and hashes exactly or fail closed; probe
 results are not run evidence.
+
+The committed-source materializer subsequently reproduced the frozen public source at
+`2026-07-26T11:10:36Z`: 180 candidates, five selected public diffs, zero secret-scan
+blocks, 15,103 exact diff bytes, and no private-workspace diff read. The sanitized
+receipt hash is
+`0916821a9c4fb7a8c0ce47cadb7abed02115a87868c46954c14b5a35c00a932c`.
+This is source/cohort evidence only; it made no model request and leaves the paid gate
+false.
 
 Auth-004 inherits, without increasing, the auth-003 model authority:
 

@@ -28,11 +28,13 @@ formal_quality_status=incomplete
   真实模型请求；
 - auth-003 的即时 Key 预检已通过，但网络启动在 executor 执行前被租户数据外发策略阻断；
   当前仍为 0 请求、0 Token、0 费用、无运行目录，状态固定为 `not_run_policy_blocked`；
-- 用户已允许创建仅限匿名公共 PR 输入的 auth-004。一次性无凭据探针已冻结
+- 用户已允许创建仅限匿名公共 PR 输入的 auth-004。一次性无凭据探针冻结了
   `psf/black@db2e3e7b317b40685ba4618235a8388c7c6ea5e2`：MIT、180 个候选、确定性
-  选择 5 个、0 个敏感命中、未换选。探针不是正式 materialization 或模型运行证据；
-- auth-004 的真实付费门禁仍关闭，直到官方公共来源 receipt、提交后的离线门禁和精确授权
-  SHA-256 获得真人再次批准。
+  选择 5 个、0 个敏感命中、未换选；正式 materializer 已复算相同集合并生成
+  `phase9g_solo_run/public-source-auth004.json`，绑定 15,103 个 exact diff bytes，receipt
+  SHA-256 为 `0916821a...00a932c`；
+- 上述正式物化没有调用模型，auth-004 的真实付费门禁仍关闭，直到提交后的离线门禁和精确
+  授权 SHA-256 获得真人再次批准。
 
 ## 1. 建立私有授权输入
 
