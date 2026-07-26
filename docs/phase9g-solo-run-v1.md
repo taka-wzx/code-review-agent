@@ -34,7 +34,16 @@ formal_quality_status=incomplete
   `phase9g_solo_run/public-source-auth004.json`，绑定 15,103 个 exact diff bytes，receipt
   SHA-256 为 `0916821a...00a932c`；
 - 上述正式物化没有调用模型，auth-004 的真实付费门禁仍关闭，直到提交后的离线门禁和精确
-  授权 SHA-256 获得真人再次批准。
+  授权 SHA-256 获得真人再次批准；
+- 用户已批准 auth-004 的完整公共来源、运行配置、预算、tariff、留存和到期字段。仓库外
+  canonical bundle 与已脱敏 attestation 已生成，固定
+  `authorization_sha256=cd10de893731c941d018d13d16fefa4d6276992791b9078fe509ec4d7f2dfaf8`、
+  `runtime_config_sha256=ee6161c3216d7d68e7fef60bb24558e866d83955a47b3a5a48a0abdc3ba886fd`
+  和 `tariff_sha256=76db838b4eaa2119bf0cabc34ba6b302264b013343abb5dc19a5ce168fc67f20`；
+- 完整离线门禁已经通过并由 `phase9g_solo_run/offline-validation-auth004.json` 绑定，
+  `validation_sha256=c95a17023540c0b54519379ad8f944a6354bd7334c0881a2ca6b3b377be0aa11`。
+  当前仍为 0 请求、0 Token、0 费用；下一步必须先由真人再次明确确认上述 canonical
+  authorization SHA-256，之后才可进行即时 Key preflight 和单独的数据外发审批。
 
 ## 1. 建立私有授权输入
 
