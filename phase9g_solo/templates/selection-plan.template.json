@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9g-solo-exploratory-v1",
+  "solo_id": "<stable-solo-id>",
+  "seed": "<derived-sha256-seed>",
+  "seed_derivation": {
+    "method": "sha256_source_commit_v1",
+    "source_commit": "<40-character-solo-contract-merge-commit>"
+  },
+  "selection_window": {
+    "start": "<YYYY-MM-DDTHH:MM:SSZ>",
+    "end": "<YYYY-MM-DDTHH:MM:SSZ>"
+  },
+  "repository_ids": [
+    "<opaque-repository-id>"
+  ],
+  "target_prs": null,
+  "exclusion_reasons": [
+    "outside_scope",
+    "not_reproducible",
+    "authorization_missing"
+  ],
+  "generated_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+  "synthetic": false,
+  "plan_sha256": ""
+}

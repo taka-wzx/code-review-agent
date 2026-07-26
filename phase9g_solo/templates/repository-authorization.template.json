@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9g-solo-exploratory-v1",
+  "solo_id": "<stable-solo-id>",
+  "generated_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+  "repositories": [
+    {
+      "repository_id": "<opaque-repository-id>",
+      "locator_sha256": "<sha256-of-external-repository-locator>",
+      "authorized_by": "<stable-human-repository-authorizer-id>",
+      "authorized_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+      "authorization_expires_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+      "raw_diff_read_authorized": null,
+      "real_github_api_authorized": false,
+      "publish_mode": "shadow",
+      "publication_authorized": false,
+      "data_retention_days": null,
+      "repository_sha256": ""
+    }
+  ],
+  "synthetic": false,
+  "manifest_sha256": ""
+}

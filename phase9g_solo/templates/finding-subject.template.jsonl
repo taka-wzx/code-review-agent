@@ -1,0 +1,1 @@
+{"schema_version":1,"solo_id":"<stable-solo-id>","pr_id":"<opaque-pr-id>","review_id":"<stable-review-id>","finding_id":"<stable-finding-id>","finding_sha256":"<sha256-of-sanitized-finding>","evidence_sha256":"<sha256-of-sanitized-evidence>","feedback_eligible":null,"synthetic":false,"subject_sha256":""}
