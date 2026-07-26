@@ -1,0 +1,18 @@
+{
+  "dedicated_tests_passed": true,
+  "diff_check_passed": true,
+  "executor_commit": "cf0c035925e645bd72f00446cafdf8edd7807008",
+  "executor_source_sha256": "33b89d32b2cee687cf7b9d36cf3eb98633770b22887e822368812ec3b0a67895",
+  "external_calls_made": false,
+  "mypy_passed": true,
+  "phase_id": "phase9g-solo-run-v1",
+  "pip_check_passed": true,
+  "ruff_passed": true,
+  "runtime_config_sha256": "cadeb10491cb33ef076293a5bf4fd1b464362cdce379d52de2144cec88800cdf",
+  "schema_version": 1,
+  "scripts_verify_passed": true,
+  "solo_bundle_passed": true,
+  "synthetic_gate_passed": true,
+  "validated_at": "2026-07-26T09:52:15Z",
+  "validation_sha256": "680f5814ba1b05049d57117c6e149ca55e404901b9e6a309e212213cc75ff63a"
+}

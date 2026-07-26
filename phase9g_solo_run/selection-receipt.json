@@ -1,0 +1,33 @@
+{
+  "authorization_sha256": "365ba325a31645f40610c8bf9cf32b21e071fb7109163955384468084d2bcc89",
+  "business_claim_allowed": false,
+  "candidate_prs": 8,
+  "cohort_sha256": "368a7e97053630776fa9612791f32bf93d68eba678dcdb058e00075cc0b9090c",
+  "evidence_type": "single_participant_exploratory",
+  "formal_quality_status": "incomplete",
+  "generated_at": "2026-07-26T08:03:31Z",
+  "paid_call_blockers": [
+    "auth_003_missing",
+    "endpoint_kind_missing",
+    "tariff_missing",
+    "temperature_profile_mismatch",
+    "sdk_retry_policy_mismatch",
+    "selected_diff_secret_scan_hit"
+  ],
+  "paid_call_gate": false,
+  "participant_manifest_sha256": "afef9f90b9b0d7dd3724d1795182c5567e66a7740e954c2e714a87cd18562305",
+  "phase_id": "phase9g-solo-run-v1",
+  "private_artifact_index_sha256": "a9ba9a9b6c3b7fd1da390564e31792e1df1b1d184cafe73f3a01319fd23c858e",
+  "quality_claim_allowed": false,
+  "receipt_sha256": "2df4310313d76e13c6774b7e972db511efac5e3a3e901ed7af74cfb90b7891da",
+  "repository_manifest_sha256": "34a32e211117761aa8c4646f022a45979aae660bdc53d70f1905d286d9738a66",
+  "schema_version": 1,
+  "selected_diff_secret_scan_blocked": 2,
+  "selected_prs": 5,
+  "selection_log_sha256": "85a03bcfa496ac1e6a287856416c146dbcffe7a0da56be3802edb18892db7644",
+  "selection_plan_sha256": "df4359c44c1850c19d1b71d73ce73b7f6c4586848418870cd976cdad36bfd8bf",
+  "selection_seed": "4520d525e3673de85dda5c12144ed6cd32bf26da34e3892e518e7ed089e7f52f",
+  "source_commit": "a79b77e9e7e3792dd46cea4d6415c18ddcc54bb4",
+  "window_end": "2026-07-26T00:00:00Z",
+  "window_start": "2026-01-01T00:00:00Z"
+}
