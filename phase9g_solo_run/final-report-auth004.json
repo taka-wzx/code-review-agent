@@ -1,0 +1,78 @@
+{
+  "active_review_seconds": {
+    "count": 5,
+    "max": 0,
+    "median": 0,
+    "min": 0,
+    "total": 0
+  },
+  "actual_usage": {
+    "cached_input_tokens": 113920,
+    "cost_microcny": 1727156,
+    "http_attempts": 59,
+    "input_tokens": 135781,
+    "logical_calls": 59,
+    "output_tokens": 47301
+  },
+  "authorization_sha256": "cd10de893731c941d018d13d16fefa4d6276992791b9078fe509ec4d7f2dfaf8",
+  "claim_gates": {
+    "business_claim_allowed": false,
+    "exploratory_summary_allowed": true,
+    "formal_quality_status": "incomplete",
+    "model_quality_status": "not_measured",
+    "quality_claim_allowed": false
+  },
+  "diagnostic_attempts": 0,
+  "error_category_counts": {
+    "provider_or_pipeline_RuntimeError": 5
+  },
+  "evidence_type": "single_participant_exploratory",
+  "feedback_eligible_findings": 0,
+  "feedback_missing": 0,
+  "feedback_responses": 0,
+  "feedback_status": "complete_no_eligible_findings",
+  "generated_at": "2026-07-26T12:14:46Z",
+  "headline_completion_rate": 0.0,
+  "headline_latency_seconds": {
+    "count": 5,
+    "max": 99.190278,
+    "median": 81.037228,
+    "min": 62.304456,
+    "total": 412.902398
+  },
+  "headline_status_counts": {
+    "failed": 5
+  },
+  "paused_review_seconds": {
+    "count": 5,
+    "max": 0,
+    "median": 0,
+    "min": 0,
+    "total": 0
+  },
+  "phase_id": "phase9g-solo-run-v1",
+  "private_evidence_index_sha256": "a90137a8d013a9ee17c80534a7a75b1f3c18a3389924f42e7cf40134d3a737fe",
+  "public_run_receipt_sha256": "1c413b0bab5f32678291bbf274aae1a68385fbf387b009a5bfa3aaf8aa02fd20",
+  "report_sha256": "00f2003643d8d8393721dd95fe2da6cccfc0e195e5bf642dda1730bc054df5d9",
+  "reserved_budget": {
+    "cost_microcny": 8253048,
+    "http_attempts": 59,
+    "input_tokens": 608719,
+    "logical_calls": 59,
+    "output_tokens": 120832
+  },
+  "retention": {
+    "data_retain_until": "2026-08-25T12:14:46Z",
+    "feedback_retain_until": "2026-08-25T12:14:46Z",
+    "raw_trace_retain_until_max": "2026-08-02T11:53:44Z"
+  },
+  "runtime_config_sha256": "ee6161c3216d7d68e7fef60bb24558e866d83955a47b3a5a48a0abdc3ba886fd",
+  "schema_version": 1,
+  "selection_receipt_sha256": "0916821a9c4fb7a8c0ce47cadb7abed02115a87868c46954c14b5a35c00a932c",
+  "successful_reruns_after_failure": 0,
+  "wording": {
+    "observation": "single-participant exploratory observation",
+    "quality_statement": "model quality not measured",
+    "run_outcome": "five of five headline attempts failed"
+  }
+}

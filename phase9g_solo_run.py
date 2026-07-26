@@ -17,6 +17,7 @@ import math
 import os
 from pathlib import Path
 import re
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -359,6 +360,76 @@ OFFLINE_VALIDATION_KEYS = {
     "external_calls_made",
     "validated_at",
     "validation_sha256",
+}
+ZERO_REVIEW_RECORD_KEYS = {
+    "schema_version",
+    "phase_id",
+    "authorization_sha256",
+    "pr_id",
+    "session_id",
+    "recorded_at",
+    "active_seconds",
+    "paused_seconds",
+    "completed_by_human",
+    "record_sha256",
+}
+AUTH4_HUMAN_OBSERVATION_KEYS = {
+    "schema_version",
+    "phase_id",
+    "authorization_sha256",
+    "participant_id",
+    "participant_confirmed_real",
+    "confirmation_statement_sha256",
+    "feedback_eligible_findings",
+    "feedback_responses",
+    "feedback_status",
+    "review_times",
+    "recorded_at",
+    "observation_sha256",
+}
+AUTH4_FINAL_REPORT_KEYS = {
+    "schema_version",
+    "phase_id",
+    "evidence_type",
+    "authorization_sha256",
+    "runtime_config_sha256",
+    "selection_receipt_sha256",
+    "public_run_receipt_sha256",
+    "headline_status_counts",
+    "headline_completion_rate",
+    "feedback_eligible_findings",
+    "feedback_responses",
+    "feedback_missing",
+    "feedback_status",
+    "active_review_seconds",
+    "paused_review_seconds",
+    "headline_latency_seconds",
+    "actual_usage",
+    "reserved_budget",
+    "error_category_counts",
+    "diagnostic_attempts",
+    "successful_reruns_after_failure",
+    "wording",
+    "claim_gates",
+    "retention",
+    "generated_at",
+    "private_evidence_index_sha256",
+    "report_sha256",
+}
+AUTH4_FINAL_BUNDLE_KEYS = {
+    "schema_version",
+    "phase_id",
+    "authorization",
+    "runtime_config",
+    "tariff",
+    "public_source_receipt",
+    "public_cohort",
+    "public_run_receipt",
+    "registrations",
+    "headline_receipts",
+    "human_observation",
+    "final_report",
+    "bundle_sha256",
 }
 
 
@@ -4288,6 +4359,547 @@ def recover_interrupted_auth4_run(
     )
 
 
+def _distribution(values: Sequence[int | float]) -> dict[str, int | float | None]:
+    if not values:
+        return {"count": 0, "min": None, "median": None, "max": None, "total": 0}
+    return {
+        "count": len(values),
+        "min": min(values),
+        "median": statistics.median(values),
+        "max": max(values),
+        "total": sum(values),
+    }
+
+
+def _zero_review_confirmation_statement(
+    authorization_sha256: str, public_run_receipt_sha256: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "statement": "auth-004-five-headlines-zero-findings-zero-human-review-v1",
+        "authorization_sha256": authorization_sha256,
+        "public_run_receipt_sha256": public_run_receipt_sha256,
+        "headline_count": TARGET_PRS,
+        "active_seconds_each": 0,
+        "paused_seconds_each": 0,
+        "completed_by_human": True,
+    }
+
+
+def _validate_zero_review_record(
+    raw: Any, *, authorization_sha256: str, selected_prs: set[str]
+) -> dict[str, Any]:
+    record = _expect_dict(raw, "zero_review_record")
+    _exact_keys(record, ZERO_REVIEW_RECORD_KEYS, "zero_review_record")
+    if record["schema_version"] != 1 or record["phase_id"] != RUN_PHASE_ID:
+        _fail("zero-review record schema or phase is invalid")
+    if record["authorization_sha256"] != authorization_sha256:
+        _fail("zero-review record authorization binding is invalid")
+    if record["pr_id"] not in selected_prs:
+        _fail("zero-review record references a PR outside the cohort")
+    solo._expect_identifier(record["session_id"], "zero-review session ID")
+    _canonical_timestamp(record["recorded_at"], "zero-review recorded_at")
+    if record["active_seconds"] != 0 or record["paused_seconds"] != 0:
+        _fail("zero-review finalization requires exact zero-second records")
+    if record["completed_by_human"] is not True:
+        _fail("zero-review record must be completed by the human participant")
+    solo.validate_artifact_hash(record, "record_sha256", "zero_review_record")
+    return record
+
+
+def validate_auth4_human_observation(
+    raw: Any,
+    *,
+    authorization: Mapping[str, Any],
+    cohort: Mapping[str, Any],
+    public_run_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    observation = _expect_dict(raw, "auth4_human_observation")
+    _exact_keys(observation, AUTH4_HUMAN_OBSERVATION_KEYS, "auth4_human_observation")
+    if observation["schema_version"] != 1 or observation["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 human observation schema or phase is invalid")
+    if observation["authorization_sha256"] != authorization["authorization_sha256"]:
+        _fail("auth-004 human observation authorization binding is invalid")
+    if observation["participant_id"] != authorization["participant_id"]:
+        _fail("auth-004 human observation belongs to a foreign participant")
+    if observation["participant_confirmed_real"] is not True:
+        _fail("auth-004 human observation requires one confirmed real participant")
+    if observation["feedback_eligible_findings"] != 0:
+        _fail("zero-review finalization requires zero eligible Findings")
+    if observation["feedback_responses"] != []:
+        _fail("zero eligible Findings require an empty feedback response set")
+    if observation["feedback_status"] != "complete_no_eligible_findings":
+        _fail("auth-004 zero-Finding feedback status is invalid")
+    recorded_at = _canonical_timestamp(observation["recorded_at"], "human recorded_at")
+    if recorded_at < _canonical_timestamp(public_run_receipt["generated_at"], "run generated_at"):
+        _fail("human observation cannot precede the completed run")
+    expected_confirmation = solo.sha256_value(
+        _zero_review_confirmation_statement(
+            authorization["authorization_sha256"], public_run_receipt["receipt_sha256"]
+        )
+    )
+    if observation["confirmation_statement_sha256"] != expected_confirmation:
+        _fail("human zero-review confirmation binding is invalid")
+    selected = {entry["pr_id"] for entry in cohort["entries"]}
+    rows_raw = observation["review_times"]
+    if not isinstance(rows_raw, list) or len(rows_raw) != TARGET_PRS:
+        _fail("human zero-review records do not cover the complete denominator")
+    rows = [
+        _validate_zero_review_record(
+            row,
+            authorization_sha256=authorization["authorization_sha256"],
+            selected_prs=selected,
+        )
+        for row in rows_raw
+    ]
+    if {row["pr_id"] for row in rows} != selected:
+        _fail("human zero-review records repeat or omit selected PRs")
+    if len({row["session_id"] for row in rows}) != TARGET_PRS:
+        _fail("human zero-review session IDs are not unique")
+    if any(row["recorded_at"] != observation["recorded_at"] for row in rows):
+        _fail("human zero-review timestamps are inconsistent")
+    solo.validate_artifact_hash(observation, "observation_sha256", "auth4_human_observation")
+    return observation
+
+
+def _auth4_private_evidence_index(
+    *,
+    authorization: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    tariff: Mapping[str, Any],
+    source_receipt: Mapping[str, Any],
+    public_cohort: Mapping[str, Any],
+    public_run_receipt: Mapping[str, Any],
+    registrations: Sequence[Mapping[str, Any]],
+    receipts: Sequence[Mapping[str, Any]],
+    observation: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "authorization_sha256": authorization["authorization_sha256"],
+        "runtime_config_sha256": solo.sha256_value(runtime),
+        "tariff_sha256": tariff["tariff_sha256"],
+        "selection_receipt_sha256": source_receipt["receipt_sha256"],
+        "cohort_sha256": public_cohort["cohort_sha256"],
+        "public_run_receipt_sha256": public_run_receipt["receipt_sha256"],
+        "registrations_sha256": solo.sha256_value(list(registrations)),
+        "headline_receipts_sha256": solo.sha256_value(list(receipts)),
+        "human_observation_sha256": observation["observation_sha256"],
+    }
+
+
+def _validate_legacy_private_run_index(raw: Any) -> dict[str, Any]:
+    index = _expect_dict(raw, "auth4_private_run_index")
+    stored = index.get("index_sha256")
+    solo._expect_sha(stored, "auth-004 private run index hash")
+    unhashed = {key: value for key, value in index.items() if key != "index_sha256"}
+    if solo.sha256_value(unhashed) != stored:
+        _fail("auth4_private_run_index hash mismatch")
+    return index
+
+
+def _build_auth4_final_report(
+    *,
+    authorization: Mapping[str, Any],
+    source_receipt: Mapping[str, Any],
+    public_run_receipt: Mapping[str, Any],
+    receipts: Sequence[Mapping[str, Any]],
+    observation: Mapping[str, Any],
+    private_evidence_index_sha256: str,
+    generated_at: str,
+) -> dict[str, Any]:
+    generated = _canonical_timestamp(generated_at, "auth-004 final report generated_at")
+    if generated < _canonical_timestamp(observation["recorded_at"], "human recorded_at"):
+        _fail("auth-004 final report cannot precede the human observation")
+    statuses = Counter(receipt["status"] for receipt in receipts)
+    errors = Counter(
+        receipt["error_category"]
+        for receipt in receipts
+        if receipt["error_category"] is not None
+    )
+    completed = statuses["completed"]
+    retention = {
+        "data_retain_until": _retention_timestamp(generated_at, 30),
+        "feedback_retain_until": _retention_timestamp(generated_at, 30),
+        "raw_trace_retain_until_max": max(
+            receipt["raw_trace_retain_until"] for receipt in receipts
+        ),
+    }
+    return solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "evidence_type": solo.EVIDENCE_TYPE,
+            "authorization_sha256": authorization["authorization_sha256"],
+            "runtime_config_sha256": authorization["runtime_config_sha256"],
+            "selection_receipt_sha256": source_receipt["receipt_sha256"],
+            "public_run_receipt_sha256": public_run_receipt["receipt_sha256"],
+            "headline_status_counts": dict(sorted(statuses.items())),
+            "headline_completion_rate": completed / TARGET_PRS,
+            "feedback_eligible_findings": 0,
+            "feedback_responses": 0,
+            "feedback_missing": 0,
+            "feedback_status": "complete_no_eligible_findings",
+            "active_review_seconds": _distribution([0] * TARGET_PRS),
+            "paused_review_seconds": _distribution([0] * TARGET_PRS),
+            "headline_latency_seconds": _distribution(
+                [receipt["latency_seconds"] for receipt in receipts]
+            ),
+            "actual_usage": dict(public_run_receipt["actual_usage"]),
+            "reserved_budget": dict(public_run_receipt["reserved_budget"]),
+            "error_category_counts": dict(sorted(errors.items())),
+            "diagnostic_attempts": 0,
+            "successful_reruns_after_failure": 0,
+            "wording": {
+                "observation": "single-participant exploratory observation",
+                "quality_statement": "model quality not measured",
+                "run_outcome": "five of five headline attempts failed",
+            },
+            "claim_gates": {
+                "exploratory_summary_allowed": True,
+                "business_claim_allowed": False,
+                "quality_claim_allowed": False,
+                "formal_quality_status": "incomplete",
+                "model_quality_status": "not_measured",
+            },
+            "retention": retention,
+            "generated_at": generated_at,
+            "private_evidence_index_sha256": private_evidence_index_sha256,
+            "report_sha256": "",
+        },
+        "report_sha256",
+    )
+
+
+def validate_auth4_final_report(raw: Any) -> dict[str, Any]:
+    report = _expect_dict(raw, "auth4_final_report")
+    _exact_keys(report, AUTH4_FINAL_REPORT_KEYS, "auth4_final_report")
+    if report["schema_version"] != 1 or report["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 final report schema or phase is invalid")
+    if report["evidence_type"] != solo.EVIDENCE_TYPE:
+        _fail("auth-004 final report evidence type is invalid")
+    for key in (
+        "authorization_sha256",
+        "runtime_config_sha256",
+        "selection_receipt_sha256",
+        "public_run_receipt_sha256",
+        "private_evidence_index_sha256",
+    ):
+        solo._expect_sha(report[key], f"auth-004 final report {key}")
+    statuses = report["headline_status_counts"]
+    if statuses != {"failed": TARGET_PRS} or report["headline_completion_rate"] != 0:
+        _fail("auth-004 final report must preserve the five failed headlines")
+    if any(
+        report[key] != 0
+        for key in ("feedback_eligible_findings", "feedback_responses", "feedback_missing")
+    ):
+        _fail("auth-004 final report feedback denominator is invalid")
+    if report["feedback_status"] != "complete_no_eligible_findings":
+        _fail("auth-004 final report feedback status is invalid")
+    for key in ("active_review_seconds", "paused_review_seconds"):
+        if report[key] != {"count": TARGET_PRS, "min": 0, "median": 0, "max": 0, "total": 0}:
+            _fail("auth-004 final report must preserve human-confirmed zero review time")
+    if report["diagnostic_attempts"] != 0 or report["successful_reruns_after_failure"] != 0:
+        _fail("auth-004 final report cannot contain a rerun")
+    if report["wording"] != {
+        "observation": "single-participant exploratory observation",
+        "quality_statement": "model quality not measured",
+        "run_outcome": "five of five headline attempts failed",
+    }:
+        _fail("auth-004 final report wording is invalid")
+    if report["claim_gates"] != {
+        "exploratory_summary_allowed": True,
+        "business_claim_allowed": False,
+        "quality_claim_allowed": False,
+        "formal_quality_status": "incomplete",
+        "model_quality_status": "not_measured",
+    }:
+        _fail("auth-004 final report claim gates are invalid")
+    retention = report["retention"]
+    if not isinstance(retention, dict) or set(retention) != {
+        "data_retain_until",
+        "feedback_retain_until",
+        "raw_trace_retain_until_max",
+    }:
+        _fail("auth-004 final report retention is invalid")
+    for key, value in retention.items():
+        _canonical_timestamp(value, f"auth-004 final report retention {key}")
+    _canonical_timestamp(report["generated_at"], "auth-004 final report generated_at")
+    if contains_forbidden_content(report):
+        _fail("auth-004 final public report contains forbidden content")
+    solo.validate_artifact_hash(report, "report_sha256", "auth4_final_report")
+    return report
+
+
+def validate_auth4_final_bundle(raw: Any) -> dict[str, Any]:
+    bundle = _expect_dict(raw, "auth4_final_bundle")
+    _exact_keys(bundle, AUTH4_FINAL_BUNDLE_KEYS, "auth4_final_bundle")
+    if bundle["schema_version"] != 1 or bundle["phase_id"] != RUN_PHASE_ID:
+        _fail("auth-004 final bundle schema or phase is invalid")
+    source = validate_auth4_public_source_receipt(bundle["public_source_receipt"])
+    authorization = validate_auth4(
+        bundle["authorization"],
+        runtime_config=bundle["runtime_config"],
+        tariff=bundle["tariff"],
+        source_receipt=source,
+    )
+    public_run = validate_public_run_receipt(bundle["public_run_receipt"])
+    if public_run["authorization_sha256"] != authorization["authorization_sha256"]:
+        _fail("auth-004 final bundle run authorization binding is invalid")
+    cohort = _expect_dict(bundle["public_cohort"], "auth4_final_bundle.public_cohort")
+    solo.validate_artifact_hash(cohort, "cohort_sha256", "auth4_public_cohort")
+    if cohort["cohort_sha256"] != source["cohort_sha256"]:
+        _fail("auth-004 final bundle cohort differs from the public source receipt")
+    entries = cohort.get("entries")
+    if not isinstance(entries, list) or len(entries) != TARGET_PRS:
+        _fail("auth-004 final bundle cohort denominator is invalid")
+    selected_prs = {entry["pr_id"] for entry in entries}
+    if len(selected_prs) != TARGET_PRS:
+        _fail("auth-004 final bundle cohort PR identities are invalid")
+    receipts = validate_headline_receipt_set(
+        bundle["headline_receipts"], cohort=cohort, authorization=authorization
+    )
+    if Counter(receipt["status"] for receipt in receipts) != Counter({"failed": TARGET_PRS}):
+        _fail("auth-004 final bundle must preserve all failed headlines")
+    actual_usage = {
+        "logical_calls": sum(receipt["logical_calls"] for receipt in receipts),
+        "http_attempts": sum(receipt["http_attempts"] for receipt in receipts),
+        "input_tokens": sum(receipt["input_tokens"] for receipt in receipts),
+        "output_tokens": sum(receipt["output_tokens"] for receipt in receipts),
+        "cached_input_tokens": sum(receipt["cached_input_tokens"] for receipt in receipts),
+        "cost_microcny": sum(receipt["cost_microcny"] for receipt in receipts),
+    }
+    reserved_budget = {
+        "logical_calls": sum(receipt["logical_calls"] for receipt in receipts),
+        "http_attempts": sum(receipt["http_attempts"] for receipt in receipts),
+        "input_tokens": sum(receipt["reserved_input_tokens"] for receipt in receipts),
+        "output_tokens": sum(receipt["reserved_output_tokens"] for receipt in receipts),
+        "cost_microcny": sum(receipt["reserved_cost_microcny"] for receipt in receipts),
+    }
+    if public_run["actual_usage"] != actual_usage or public_run["reserved_budget"] != reserved_budget:
+        _fail("auth-004 final bundle usage differs from headline receipts")
+    if public_run["headline_status_counts"] != {"failed": TARGET_PRS}:
+        _fail("auth-004 final bundle public status differs from headlines")
+    registrations = bundle["registrations"]
+    if not isinstance(registrations, list) or len(registrations) != TARGET_PRS:
+        _fail("auth-004 final bundle registrations are incomplete")
+    for registration in registrations:
+        if not isinstance(registration, dict):
+            _fail("auth-004 final bundle registration is invalid")
+        solo.validate_artifact_hash(registration, "registration_sha256", "headline_registration")
+    if {registration["pr_id"] for registration in registrations} != selected_prs:
+        _fail("auth-004 final bundle registrations differ from headlines")
+    observation = validate_auth4_human_observation(
+        bundle["human_observation"],
+        authorization=authorization,
+        cohort=cohort,
+        public_run_receipt=public_run,
+    )
+    index = _auth4_private_evidence_index(
+        authorization=authorization,
+        runtime=bundle["runtime_config"],
+        tariff=bundle["tariff"],
+        source_receipt=source,
+        public_cohort=cohort,
+        public_run_receipt=public_run,
+        registrations=registrations,
+        receipts=receipts,
+        observation=observation,
+    )
+    index_sha = solo.sha256_value(index)
+    report = validate_auth4_final_report(bundle["final_report"])
+    expected = _build_auth4_final_report(
+        authorization=authorization,
+        source_receipt=source,
+        public_run_receipt=public_run,
+        receipts=receipts,
+        observation=observation,
+        private_evidence_index_sha256=index_sha,
+        generated_at=report["generated_at"],
+    )
+    if report != expected:
+        _fail("auth-004 final report differs from recomputed private evidence")
+    solo.validate_artifact_hash(bundle, "bundle_sha256", "auth4_final_bundle")
+    return bundle
+
+
+def finalize_auth4_zero_review(
+    *,
+    repo_root: Path,
+    evidence_root: Path,
+    public_source_receipt_path: Path,
+    public_run_receipt_path: Path,
+    public_report_path: Path,
+    recorded_at: str,
+    human_zero_review_confirmed: bool,
+    finalization_revision: int = 1,
+) -> dict[str, Any]:
+    if not human_zero_review_confirmed:
+        _fail("auth-004 zero-review finalization requires explicit human confirmation")
+    repo = repo_root.resolve(strict=True)
+    evidence = evidence_root.resolve(strict=True)
+    if _is_within(evidence, repo) or evidence == repo:
+        _fail("auth-004 final evidence root must remain outside the Git worktree")
+    public_report = public_report_path.resolve(strict=False)
+    if not _is_within(public_report, repo):
+        _fail("auth-004 final public report must be inside the Git worktree")
+    if finalization_revision not in {1, 2}:
+        _fail("auth-004 finalization revision is invalid")
+    suffix = f"{finalization_revision:03d}"
+    final_root = evidence / f"final-auth004-{suffix}"
+    staging_root = evidence / f"final-auth004-{suffix}.initializing"
+    if final_root.exists() or staging_root.exists() or public_report.exists():
+        _fail("auth-004 final evidence already exists and cannot be overwritten")
+    recorded = _canonical_timestamp(recorded_at, "auth-004 human recorded_at")
+    if not (
+        _canonical_timestamp(APPROVED_AT, "auth-002 approved_at")
+        <= recorded
+        < _canonical_timestamp(EXPIRES_AT, "auth-004 expires_at")
+    ):
+        _fail("auth-004 human observation is outside the authorization window")
+    source = validate_auth4_public_source_receipt(solo.load_json(public_source_receipt_path))
+    auth4_bundle = _load_auth4_bundle(evidence, source)
+    authorization = auth4_bundle["authorization"]
+    runtime = auth4_bundle["runtime_config"]
+    tariff = auth4_bundle["tariff"]
+    public_run = validate_public_run_receipt(solo.load_json(public_run_receipt_path))
+    if public_run["feedback_eligible_findings"] != 0:
+        _fail("zero-review finalization refuses a run with feedback-eligible Findings")
+    run_root = evidence / "run-auth004-001"
+    private_run_index = _validate_legacy_private_run_index(
+        solo.load_json(run_root / "run-index.private.json")
+    )
+    if private_run_index["index_sha256"] != public_run["private_run_index_sha256"]:
+        _fail("auth-004 public/private run index binding is invalid")
+    registrations = solo.load_json(run_root / "registrations.json")
+    if private_run_index.get("registrations_sha256") != solo.sha256_value(registrations):
+        _fail("auth-004 private run index registrations binding is invalid")
+    raw_receipts = _load_jsonl(run_root / "headline-receipts.jsonl")
+    if private_run_index.get("headline_receipts_sha256") != solo.sha256_value(raw_receipts):
+        _fail("auth-004 private run index headline binding is invalid")
+    findings_path = run_root / "feedback-packet.private.jsonl"
+    finding_subjects = _load_jsonl(findings_path) if findings_path.exists() else []
+    if private_run_index.get("finding_subjects_sha256") != solo.sha256_value(finding_subjects):
+        _fail("auth-004 private run index Finding binding is invalid")
+    if finding_subjects:
+        _fail("zero-review finalization refuses non-empty Finding evidence")
+    public_selection = _load_auth4_public_selection(evidence)
+    public_cohort = public_selection["cohort"]
+    receipts = validate_headline_receipt_set(
+        raw_receipts,
+        cohort=public_cohort,
+        authorization=authorization,
+    )
+    if Counter(receipt["status"] for receipt in receipts) != Counter({"failed": TARGET_PRS}):
+        _fail("zero-review finalization is frozen to the five failed auth-004 headlines")
+    ordered_prs = [receipt["pr_id"] for receipt in receipts]
+    review_times = []
+    for index, pr_id in enumerate(ordered_prs, start=1):
+        review_times.append(
+            solo.with_artifact_hash(
+                {
+                    "schema_version": 1,
+                    "phase_id": RUN_PHASE_ID,
+                    "authorization_sha256": authorization["authorization_sha256"],
+                    "pr_id": pr_id,
+                    "session_id": f"auth004-zero-review-session-{index}",
+                    "recorded_at": recorded_at,
+                    "active_seconds": 0,
+                    "paused_seconds": 0,
+                    "completed_by_human": True,
+                    "record_sha256": "",
+                },
+                "record_sha256",
+            )
+        )
+    observation = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "authorization_sha256": authorization["authorization_sha256"],
+            "participant_id": authorization["participant_id"],
+            "participant_confirmed_real": True,
+            "confirmation_statement_sha256": solo.sha256_value(
+                _zero_review_confirmation_statement(
+                    authorization["authorization_sha256"], public_run["receipt_sha256"]
+                )
+            ),
+            "feedback_eligible_findings": 0,
+            "feedback_responses": [],
+            "feedback_status": "complete_no_eligible_findings",
+            "review_times": review_times,
+            "recorded_at": recorded_at,
+            "observation_sha256": "",
+        },
+        "observation_sha256",
+    )
+    validate_auth4_human_observation(
+        observation,
+        authorization=authorization,
+        cohort=public_cohort,
+        public_run_receipt=public_run,
+    )
+    evidence_index = _auth4_private_evidence_index(
+        authorization=authorization,
+        runtime=runtime,
+        tariff=tariff,
+        source_receipt=source,
+        public_cohort=public_cohort,
+        public_run_receipt=public_run,
+        registrations=registrations,
+        receipts=receipts,
+        observation=observation,
+    )
+    report = _build_auth4_final_report(
+        authorization=authorization,
+        source_receipt=source,
+        public_run_receipt=public_run,
+        receipts=receipts,
+        observation=observation,
+        private_evidence_index_sha256=solo.sha256_value(evidence_index),
+        generated_at=recorded_at,
+    )
+    bundle = solo.with_artifact_hash(
+        {
+            "schema_version": 1,
+            "phase_id": RUN_PHASE_ID,
+            "authorization": authorization,
+            "runtime_config": runtime,
+            "tariff": tariff,
+            "public_source_receipt": source,
+            "public_cohort": public_cohort,
+            "public_run_receipt": public_run,
+            "registrations": registrations,
+            "headline_receipts": receipts,
+            "human_observation": observation,
+            "final_report": report,
+            "bundle_sha256": "",
+        },
+        "bundle_sha256",
+    )
+    validate_auth4_final_bundle(bundle)
+    staging_root.mkdir(parents=True, exist_ok=False)
+    _write_json(staging_root / "human-observation.private.json", observation)
+    _write_json(staging_root / "evidence-index.private.json", evidence_index)
+    _write_json(staging_root / "bundle.private.json", bundle)
+    os.replace(staging_root, final_root)
+    _write_json(public_report, report)
+    return {
+        "valid": True,
+        "selected_prs": TARGET_PRS,
+        "headline_status_counts": {"failed": TARGET_PRS},
+        "feedback_eligible_findings": 0,
+        "feedback_status": "complete_no_eligible_findings",
+        "active_review_seconds": 0,
+        "cost_microcny": public_run["actual_usage"]["cost_microcny"],
+        "exploratory_summary_allowed": True,
+        "business_claim_allowed": False,
+        "quality_claim_allowed": False,
+        "formal_quality_status": "incomplete",
+        "report_sha256": report["report_sha256"],
+        "bundle_sha256": bundle["bundle_sha256"],
+    }
+
+
 def validate_synthetic() -> dict[str, Any]:
     limits = BudgetLimits(2, 2, 100, 50, 1000)
     ledger = BudgetLedger(limits)
@@ -4401,6 +5013,19 @@ def _build_parser() -> argparse.ArgumentParser:
     recover_auth4.add_argument("--evidence-root", required=True)
     recover_auth4.add_argument("--public-source-receipt", required=True)
     recover_auth4.add_argument("--public-run-receipt", required=True)
+    finalize_auth4 = commands.add_parser("finalize-auth-004-zero-review")
+    finalize_auth4.add_argument("--repo-root", required=True)
+    finalize_auth4.add_argument("--evidence-root", required=True)
+    finalize_auth4.add_argument("--public-source-receipt", required=True)
+    finalize_auth4.add_argument("--public-run-receipt", required=True)
+    finalize_auth4.add_argument("--public-report", required=True)
+    finalize_auth4.add_argument("--recorded-at", required=True)
+    finalize_auth4.add_argument("--revision", type=int, choices=(1, 2), default=1)
+    finalize_auth4.add_argument("--human-zero-review-confirmed", action="store_true")
+    validate_final_report = commands.add_parser("validate-auth-004-final-report")
+    validate_final_report.add_argument("--report", required=True)
+    validate_final_bundle = commands.add_parser("validate-auth-004-final-bundle")
+    validate_final_bundle.add_argument("--bundle", required=True)
     commands.add_parser("validate-synthetic")
     return parser
 
@@ -4558,6 +5183,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 public_source_receipt_path=Path(args.public_source_receipt),
                 public_run_receipt_path=Path(args.public_run_receipt),
             )
+        elif args.command == "finalize-auth-004-zero-review":
+            result = finalize_auth4_zero_review(
+                repo_root=Path(args.repo_root),
+                evidence_root=Path(args.evidence_root),
+                public_source_receipt_path=Path(args.public_source_receipt),
+                public_run_receipt_path=Path(args.public_run_receipt),
+                public_report_path=Path(args.public_report),
+                recorded_at=args.recorded_at,
+                human_zero_review_confirmed=args.human_zero_review_confirmed,
+                finalization_revision=args.revision,
+            )
+        elif args.command == "validate-auth-004-final-report":
+            report = validate_auth4_final_report(solo.load_json(args.report))
+            result = {
+                "valid": True,
+                "headline_status_counts": report["headline_status_counts"],
+                "feedback_status": report["feedback_status"],
+                "exploratory_summary_allowed": True,
+                "business_claim_allowed": False,
+                "quality_claim_allowed": False,
+                "formal_quality_status": "incomplete",
+            }
+        elif args.command == "validate-auth-004-final-bundle":
+            bundle = validate_auth4_final_bundle(solo.load_json(args.bundle))
+            result = {
+                "valid": True,
+                "bundle_sha256": bundle["bundle_sha256"],
+                "headline_status_counts": bundle["final_report"]["headline_status_counts"],
+                "business_claim_allowed": False,
+                "quality_claim_allowed": False,
+                "formal_quality_status": "incomplete",
+            }
         else:
             result = validate_synthetic()
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False))

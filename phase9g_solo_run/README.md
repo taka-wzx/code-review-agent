@@ -3,7 +3,8 @@
 This directory may contain only sanitized, hash-bound public receipts for the
 single-participant exploratory run. It must never contain stable participant or
 repository IDs, repository locators, PR numbers or titles, raw diffs, source text,
-prompts, credentials, token values, host paths, human feedback, or raw traces.
+prompts, credentials, raw Token content, host paths, human feedback text, or raw traces.
+Aggregate Token counts and integer micro-CNY totals are allowed when hash-bound.
 
 `selection-receipt.json`, when present, proves only that the frozen local metadata
 cohort was materialized and that five selected diffs were hashed. It permanently
@@ -28,6 +29,12 @@ locator, source text, or diff. `auth-004-attestation.json` and
 human authorization, inherited model ceilings, committed executor, and offline
 gates. None of these artifacts alone authorizes a provider call.
 
-`run-receipt.json`, when present, contains only aggregate headline, usage, cost,
-failure-denominator, and pending-human-feedback evidence. Model output and
-feedback packets remain outside Git.
+`run-auth004-001.json` contains only aggregate headline, usage, cost,
+failure-denominator, and pending-human-feedback evidence. The first
+`final-report-auth004.json` is retained as a superseded validator-gap record.
+`final-report-auth004-v2.json` is canonical: it additionally binds the exact public
+cohort entries and private run-index components to the human-confirmed zero Review time
+and completed zero-eligible-Finding feedback denominator. The immutable transition is
+recorded by `finalization-auth004-audit.json`. Both reports truthfully record five
+failed headlines and do not claim model quality or Business Pilot success. Model output
+and private human records remain outside Git.

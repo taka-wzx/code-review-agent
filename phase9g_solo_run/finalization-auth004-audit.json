@@ -1,0 +1,25 @@
+{
+  "audit_sha256": "6b7de41fab9e713d10ea1b1f2e0782ba1fae557af0466f2120f3c14d8fd22eac",
+  "authorization_sha256": "cd10de893731c941d018d13d16fefa4d6276992791b9078fe509ec4d7f2dfaf8",
+  "business_claim_allowed": false,
+  "canonical_bundle_sha256": "b76b35da978b6cef5a8de681b849755607f43985c04b5ed45f9a52eaec04e619",
+  "canonical_finalization_revision": 2,
+  "canonical_finalization_status": "valid",
+  "canonical_report_sha256": "c8cded85d2f49182bcb5482e32b324f1cf2e307757f3507946fe042342b7cd2b",
+  "first_bundle_sha256": "93adaf868ea0dc67dbddf849880e941ec66c6e6e216c146b860f3d3a2883514c",
+  "first_finalization_revision": 1,
+  "first_finalization_status": "superseded_validator_gap",
+  "first_report_sha256": "00f2003643d8d8393721dd95fe2da6cccfc0e195e5bf642dda1730bc054df5d9",
+  "formal_quality_status": "incomplete",
+  "generated_at": "2026-07-26T12:26:15Z",
+  "headline_status_counts": {
+    "failed": 5
+  },
+  "human_observation_reused": true,
+  "model_calls_repeated": false,
+  "phase_id": "phase9g-solo-run-v1",
+  "public_run_receipt_sha256": "1c413b0bab5f32678291bbf274aae1a68385fbf387b009a5bfa3aaf8aa02fd20",
+  "quality_claim_allowed": false,
+  "schema_version": 1,
+  "validator_gap": "public cohort entries and private run-index component hashes were not cross-checked"
+}

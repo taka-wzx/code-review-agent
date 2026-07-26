@@ -1,0 +1,43 @@
+{
+  "actual_usage": {
+    "cached_input_tokens": 113920,
+    "cost_microcny": 1727156,
+    "http_attempts": 59,
+    "input_tokens": 135781,
+    "logical_calls": 59,
+    "output_tokens": 47301
+  },
+  "actual_usage_known": true,
+  "authorization_sha256": "cd10de893731c941d018d13d16fefa4d6276992791b9078fe509ec4d7f2dfaf8",
+  "blocked_zero_call_headlines": 0,
+  "business_claim_allowed": false,
+  "cohort_sha256": "003875313f44afc3b5fed872228a64f597bcd57b59f4cf3a83a388ef4cbe677a",
+  "evidence_type": "single_participant_exploratory",
+  "feedback_eligible_findings": 0,
+  "feedback_responses": 0,
+  "feedback_status": "pending_human",
+  "formal_quality_status": "incomplete",
+  "generated_at": "2026-07-26T11:53:44Z",
+  "headline_attempts": 5,
+  "headline_status_counts": {
+    "failed": 5
+  },
+  "model_quality_status": "not_measured",
+  "phase_id": "phase9g-solo-run-v1",
+  "private_run_index_sha256": "1dbb4a060474fc965ab206b4615a71b549582189540089cbc87aac547d086835",
+  "quality_claim_allowed": false,
+  "receipt_sha256": "1c413b0bab5f32678291bbf274aae1a68385fbf387b009a5bfa3aaf8aa02fd20",
+  "reserved_budget": {
+    "cost_microcny": 8253048,
+    "http_attempts": 59,
+    "input_tokens": 608719,
+    "logical_calls": 59,
+    "output_tokens": 120832
+  },
+  "runnable_headlines": 5,
+  "runtime_config_sha256": "ee6161c3216d7d68e7fef60bb24558e866d83955a47b3a5a48a0abdc3ba886fd",
+  "schema_version": 1,
+  "selected_prs": 5,
+  "selection_receipt_sha256": "0916821a9c4fb7a8c0ce47cadb7abed02115a87868c46954c14b5a35c00a932c",
+  "tariff_sha256": "76db838b4eaa2119bf0cabc34ba6b302264b013343abb5dc19a5ce168fc67f20"
+}

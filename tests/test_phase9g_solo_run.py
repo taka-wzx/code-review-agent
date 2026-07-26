@@ -164,8 +164,10 @@ class Phase9GSoloRunTests(unittest.TestCase):
         )
 
     @classmethod
-    def auth4_runtime(cls) -> dict[str, object]:
-        source = cls.auth4_public_source_receipt()
+    def auth4_runtime(
+        cls, source: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        source = source or cls.auth4_public_source_receipt()
         return {
             "schema_version": 1,
             "executor_version": run.AUTH4_EXECUTOR_VERSION,
@@ -196,6 +198,57 @@ class Phase9GSoloRunTests(unittest.TestCase):
             "public_source_locator_sha256": source["source_locator_sha256"],
             "public_source_commit": run.AUTH4_PUBLIC_SOURCE_COMMIT,
         }
+
+    @classmethod
+    def auth4_authorization(
+        cls,
+        *,
+        source: dict[str, object] | None = None,
+        runtime: dict[str, object] | None = None,
+        tariff: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        source = source or cls.auth4_public_source_receipt()
+        runtime = runtime or cls.auth4_runtime(source)
+        tariff = tariff or cls.auth3_tariff()
+        return solo.with_artifact_hash(
+            {
+                "schema_version": 1,
+                "phase_id": run.RUN_PHASE_ID,
+                "authorization_id": run.AUTH4_ID,
+                "supersedes_authorization_sha256": run.EXPECTED_AUTH3_AUTHORIZATION_SHA256,
+                "participant_id": "synthetic-participant",
+                "repository_ids": [run.auth4_public_repository_id()],
+                "approved_by": "synthetic-approver",
+                "approved_at": "2026-07-26T11:05:00Z",
+                "expires_at": run.EXPIRES_AT,
+                "provider": run.EXPECTED_PROVIDER,
+                "exact_model_snapshot": run.EXPECTED_MODEL,
+                "runtime_config_sha256": solo.sha256_value(runtime),
+                "tariff_sha256": tariff["tariff_sha256"],
+                "selection_receipt_sha256": source["receipt_sha256"],
+                "cohort_sha256": source["cohort_sha256"],
+                "temperature_profile": dict(run.AUTH3_TEMPERATURE_PROFILE),
+                "sdk_max_retries": 0,
+                **run.AUTH3_LIMITS,
+                "real_paid_calls": True,
+                "read_selected_raw_diff": True,
+                "real_github_api": False,
+                "github_publish": False,
+                "staging_deploy": False,
+                "selected_diff_policy": "block_headline_zero_call",
+                "blocked_selected_prs": run.AUTH4_EXPECTED_BLOCKED,
+                "max_runnable_prs": run.AUTH4_EXPECTED_RUNNABLE,
+                "public_candidate_input_only": True,
+                "anonymous_public_git_read": True,
+                "public_source_locator_sha256": source["source_locator_sha256"],
+                "public_source_commit": run.AUTH4_PUBLIC_SOURCE_COMMIT,
+                "approval_statement_sha256": solo.sha256_value(
+                    run._auth4_approval_statement(source)
+                ),
+                "authorization_sha256": "",
+            },
+            "authorization_sha256",
+        )
 
     def test_frozen_selection_seed_matches_source_commit(self) -> None:
         self.assertEqual(
@@ -1350,6 +1403,237 @@ class Phase9GSoloRunTests(unittest.TestCase):
         self.assertFalse(result["business_claim_allowed"])
         self.assertFalse(result["quality_claim_allowed"])
         self.assertEqual(result["formal_quality_status"], "incomplete")
+
+    def test_auth4_zero_review_finalizer_preserves_failed_denominator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            evidence = root / "evidence"
+            run_root = evidence / "run-auth004-001"
+            repo.mkdir()
+            run_root.mkdir(parents=True)
+            pr_ids = [f"public-pr-{index}" for index in range(1, 6)]
+            cohort = solo.with_artifact_hash(
+                {
+                    "solo_id": "synthetic-public-solo",
+                    "entries": [{"pr_id": pr_id} for pr_id in pr_ids],
+                    "cohort_sha256": "",
+                },
+                "cohort_sha256",
+            )
+            source = self.auth4_public_source_receipt()
+            source = solo.with_artifact_hash(
+                {**source, "cohort_sha256": cohort["cohort_sha256"]},
+                "receipt_sha256",
+            )
+            runtime = self.auth4_runtime(source)
+            tariff = self.auth3_tariff()
+            authorization = self.auth4_authorization(
+                source=source, runtime=runtime, tariff=tariff
+            )
+            registrations = [
+                solo.with_artifact_hash(
+                    {
+                        "schema_version": 1,
+                        "phase_id": run.RUN_PHASE_ID,
+                        "pr_id": pr_id,
+                        "attempt_number": 1,
+                        "headline": True,
+                        "registered_at": "2026-07-26T11:10:00Z",
+                        "initial_disposition": "pending_paid_call",
+                        "registration_sha256": "",
+                    },
+                    "registration_sha256",
+                )
+                for pr_id in pr_ids
+            ]
+            receipts = []
+            for index, pr_id in enumerate(pr_ids, start=1):
+                completed_at = f"2026-07-26T11:{20 + index:02d}:10Z"
+                receipts.append(
+                    run._sealed_headline_receipt(
+                        {
+                            "schema_version": 1,
+                            "phase_id": run.RUN_PHASE_ID,
+                            "solo_id": cohort["solo_id"],
+                            "run_id": f"synthetic-auth4-{index}-attempt-1",
+                            "pr_id": pr_id,
+                            "attempt_number": 1,
+                            "headline": True,
+                            "authorization_sha256": authorization["authorization_sha256"],
+                            "runtime_config_sha256": authorization["runtime_config_sha256"],
+                            "temperature_profile_sha256": solo.sha256_value(
+                                runtime["temperature_profile"]
+                            ),
+                            "status": "failed",
+                            "started_at": f"2026-07-26T11:{20 + index:02d}:00Z",
+                            "completed_at": completed_at,
+                            "logical_calls": 0,
+                            "http_attempts": 0,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cached_input_tokens": 0,
+                            "cost_microcny": 0,
+                            "actual_usage_known": True,
+                            "reserved_input_tokens": 0,
+                            "reserved_output_tokens": 0,
+                            "reserved_cost_microcny": 0,
+                            "latency_seconds": 10,
+                            "error_category": "provider_or_pipeline_RuntimeError",
+                            "feedback_eligible_finding_ids": [],
+                            "review_sha256": None,
+                            "raw_trace_sha256": f"{index:064x}",
+                            "raw_trace_retain_until": run._retention_timestamp(
+                                completed_at, 7
+                            ),
+                        }
+                    )
+                )
+            private_index = {
+                "schema_version": 1,
+                "phase_id": run.RUN_PHASE_ID,
+                "registrations_sha256": solo.sha256_value(registrations),
+                "headline_receipts_sha256": solo.sha256_value(receipts),
+                "finding_subjects_sha256": solo.sha256_value([]),
+                "preflight_sha256": "a" * 64,
+            }
+            private_index["index_sha256"] = solo.sha256_value(private_index)
+            public_run = solo.with_artifact_hash(
+                {
+                    "schema_version": 1,
+                    "phase_id": run.RUN_PHASE_ID,
+                    "evidence_type": solo.EVIDENCE_TYPE,
+                    "authorization_sha256": authorization["authorization_sha256"],
+                    "runtime_config_sha256": authorization["runtime_config_sha256"],
+                    "tariff_sha256": tariff["tariff_sha256"],
+                    "selection_receipt_sha256": source["receipt_sha256"],
+                    "cohort_sha256": source["cohort_sha256"],
+                    "selected_prs": 5,
+                    "blocked_zero_call_headlines": 0,
+                    "runnable_headlines": 5,
+                    "headline_attempts": 5,
+                    "headline_status_counts": {"failed": 5},
+                    "actual_usage": {
+                        "logical_calls": 0,
+                        "http_attempts": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "cost_microcny": 0,
+                    },
+                    "reserved_budget": {
+                        "logical_calls": 0,
+                        "http_attempts": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "cost_microcny": 0,
+                    },
+                    "actual_usage_known": True,
+                    "feedback_eligible_findings": 0,
+                    "feedback_responses": 0,
+                    "feedback_status": "pending_human",
+                    "business_claim_allowed": False,
+                    "quality_claim_allowed": False,
+                    "formal_quality_status": "incomplete",
+                    "model_quality_status": "not_measured",
+                    "generated_at": "2026-07-26T11:30:00Z",
+                    "private_run_index_sha256": private_index["index_sha256"],
+                    "receipt_sha256": "",
+                },
+                "receipt_sha256",
+            )
+            source_path = repo / "source.json"
+            run_path = repo / "run.json"
+            report_path = repo / "final-report.json"
+            source_path.write_text(run.json.dumps(source), encoding="utf-8")
+            run_path.write_text(run.json.dumps(public_run), encoding="utf-8")
+            (run_root / "registrations.json").write_text(
+                run.json.dumps(registrations), encoding="utf-8"
+            )
+            (run_root / "headline-receipts.jsonl").write_text(
+                "".join(run.json.dumps(receipt) + "\n" for receipt in receipts),
+                encoding="utf-8",
+            )
+            (run_root / "run-index.private.json").write_text(
+                run.json.dumps(private_index), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(run.RunValidationError, "explicit human confirmation"):
+                run.finalize_auth4_zero_review(
+                    repo_root=repo,
+                    evidence_root=evidence,
+                    public_source_receipt_path=source_path,
+                    public_run_receipt_path=run_path,
+                    public_report_path=report_path,
+                    recorded_at="2026-07-26T11:40:00Z",
+                    human_zero_review_confirmed=False,
+                )
+            with (
+                mock.patch.object(
+                    run,
+                    "_load_auth4_bundle",
+                    return_value={
+                        "authorization": authorization,
+                        "runtime_config": runtime,
+                        "tariff": tariff,
+                    },
+                ),
+                mock.patch.object(
+                    run,
+                    "_load_auth4_public_selection",
+                    return_value={"cohort": cohort},
+                ),
+            ):
+                result = run.finalize_auth4_zero_review(
+                    repo_root=repo,
+                    evidence_root=evidence,
+                    public_source_receipt_path=source_path,
+                    public_run_receipt_path=run_path,
+                    public_report_path=report_path,
+                    recorded_at="2026-07-26T11:40:00Z",
+                    human_zero_review_confirmed=True,
+                )
+            self.assertEqual(result["headline_status_counts"], {"failed": 5})
+            self.assertEqual(result["feedback_status"], "complete_no_eligible_findings")
+            self.assertEqual(result["active_review_seconds"], 0)
+            self.assertTrue(result["exploratory_summary_allowed"])
+            self.assertFalse(result["business_claim_allowed"])
+            report = run.validate_auth4_final_report(solo.load_json(report_path))
+            self.assertEqual(report["headline_completion_rate"], 0)
+            public_text = report_path.read_text(encoding="utf-8")
+            self.assertNotIn("synthetic-participant", public_text)
+            self.assertTrue(all(pr_id not in public_text for pr_id in pr_ids))
+            tampered_report = {
+                **report,
+                "claim_gates": {**report["claim_gates"], "business_claim_allowed": True},
+            }
+            tampered_report = solo.with_artifact_hash(tampered_report, "report_sha256")
+            with self.assertRaisesRegex(run.RunValidationError, "claim gates"):
+                run.validate_auth4_final_report(tampered_report)
+            bundle_path = evidence / "final-auth004-001" / "bundle.private.json"
+            bundle = run.validate_auth4_final_bundle(solo.load_json(bundle_path))
+            tampered_cohort = {
+                **bundle["public_cohort"],
+                "entries": [
+                    {**bundle["public_cohort"]["entries"][0], "pr_id": "foreign-pr"},
+                    *bundle["public_cohort"]["entries"][1:],
+                ],
+            }
+            tampered_cohort = solo.with_artifact_hash(tampered_cohort, "cohort_sha256")
+            tampered_bundle = solo.with_artifact_hash(
+                {**bundle, "public_cohort": tampered_cohort}, "bundle_sha256"
+            )
+            with self.assertRaisesRegex(run.RunValidationError, "public source receipt"):
+                run.validate_auth4_final_bundle(tampered_bundle)
+            with self.assertRaisesRegex(run.RunValidationError, "already exists"):
+                run.finalize_auth4_zero_review(
+                    repo_root=repo,
+                    evidence_root=evidence,
+                    public_source_receipt_path=source_path,
+                    public_run_receipt_path=run_path,
+                    public_report_path=report_path,
+                    recorded_at="2026-07-26T11:40:00Z",
+                    human_zero_review_confirmed=True,
+                )
 
 
 if __name__ == "__main__":

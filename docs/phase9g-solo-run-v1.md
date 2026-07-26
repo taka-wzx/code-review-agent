@@ -42,8 +42,26 @@ formal_quality_status=incomplete
   和 `tariff_sha256=76db838b4eaa2119bf0cabc34ba6b302264b013343abb5dc19a5ce168fc67f20`；
 - 完整离线门禁已经通过并由 `phase9g_solo_run/offline-validation-auth004.json` 绑定，
   `validation_sha256=c95a17023540c0b54519379ad8f944a6354bd7334c0881a2ca6b3b377be0aa11`。
-  当前仍为 0 请求、0 Token、0 费用；下一步必须先由真人再次明确确认上述 canonical
-  authorization SHA-256，之后才可进行即时 Key preflight 和单独的数据外发审批。
+  真人随后明确确认 canonical authorization SHA-256，Key preflight 和单独的数据外发审批
+  均已通过；
+- auth-004 真实运行生成五个不可替换的 attempt-1 headline，结果为 5 个 `failed`、0 个
+  completed，稳定错误类别均为 `provider_or_pipeline_RuntimeError`。累计 59 logical calls、
+  59 HTTP attempts、135,781 input Tokens、47,301 output Tokens、113,920 cached-input Tokens，
+  成本 1,727,156 micro-CNY；没有重跑或诊断 attempt；
+- 运行产生 0 个 feedback-eligible Finding。真人参与者明确确认没有额外人工 PR Review，五条
+  Review 时间均为 active=0、paused=0；完整仓库外 bundle 和脱敏最终报告已复算通过。
+  `exploratory_summary_allowed=true` 只允许如实报告这次单人失败观察，不是成功门禁；Business、
+  model quality 和 Formal Quality 结论仍分别为 false、not measured 和 incomplete；
+- finalizer 是运行后的离线证据工具；加入它后工作树中的 `phase9g_solo_run.py` 不再等于已授权
+  executor source hash。auth-004 已完成且不可重跑，任何后续 paid-call preflight 必须因此
+  fail closed，不能重新封存、重新授权或复用本次 cohort 来覆盖五个失败 headline；
+- 首次 final bundle 通过了当时验证器，但逐文件审计发现它只绑定 cohort hash，未内嵌复核五个
+  cohort 条目，也未交叉复核 private run-index 组件，因此标为
+  `superseded_validator_gap`，不删除、不改写。revision 2 在没有新模型调用的情况下复用同一
+  真人 observation，并加入上述交叉校验；canonical bundle/report SHA-256 分别为
+  `b76b35da978b6cef5a8de681b849755607f43985c04b5ed45f9a52eaec04e619` 和
+  `c8cded85d2f49182bcb5482e32b324f1cf2e307757f3507946fe042342b7cd2b`。转换审计收据为
+  `phase9g_solo_run/finalization-auth004-audit.json`，原 revision 1 仍可见但不得作为 canonical。
 
 ## 1. 建立私有授权输入
 
@@ -198,3 +216,28 @@ git diff --check
 本阶段的公共结果只能写成“single-participant exploratory observation”和“model quality not
 measured”。不得生成或暗示 Precision/Recall/F1、Bootstrap CI、多人采用率、生产力提升、
 Business Pilot 成功或 Formal Quality 完成。
+
+## 7. auth-004 零 Finding 真人收尾
+
+只有当真实运行精确产生五个 headline、五个均失败、0 个 feedback-eligible Finding，且真人
+参与者明确确认五条 active/paused 时间均为 0 时，才允许使用以下一次性 finalizer。它不联网、
+不调用模型、不允许覆盖，也不会在公共报告中写入参与者、PR、Prompt、diff、响应或路径：
+
+```powershell
+$Evidence = Join-Path $env:TEMP 'phase9g-solo-run-v1-evidence-001'
+$RecordedAt = '<真人确认后的当前 UTC，格式 YYYY-MM-DDTHH:MM:SSZ>'
+python phase9g_solo_run.py finalize-auth-004-zero-review `
+  --repo-root . `
+  --evidence-root $Evidence `
+  --public-source-receipt phase9g_solo_run/public-source-auth004.json `
+  --public-run-receipt phase9g_solo_run/run-auth004-001.json `
+  --public-report phase9g_solo_run/final-report-auth004-v2.json `
+  --recorded-at $RecordedAt `
+  --revision 2 `
+  --human-zero-review-confirmed
+```
+
+随后必须分别运行 `validate-auth-004-final-bundle` 和
+`validate-auth-004-final-report`。本次最终公共报告固定 `headline_status_counts={failed: 5}`、
+`headline_completion_rate=0`、0 Finding、0 秒人工 Review 和 `model quality not measured`；不得
+将 `exploratory_summary_allowed=true` 解释为目标达成或产品/模型质量成功。
