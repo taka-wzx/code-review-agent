@@ -20,10 +20,13 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 >
 > **Phase 9G-Solo Exploratory v1** 另行提供单一真人、5--10 个 PR、仅 shadow 的探索性
 > 工作流协议。它永久保持 `business_claim_allowed=false`、`quality_claim_allowed=false` 和
-> `formal_quality_status=incomplete`，不能替代 3--5 人 Pilot 或 A/B/C 真人质量评测。当前仅完成
-> 离线工具和 synthetic 门禁，尚未授权真实运行。操作手册见
+> `formal_quality_status=incomplete`，不能替代 3--5 人 Pilot 或 A/B/C 真人质量评测。Solo-Run v1
+> 已从冻结 master 元数据物化 8 个候选并确定性选择 5 个 PR；2 个 selected diff 的敏感模式扫描
+> 命中已按协议保留选择并阻断对应 headline。当前没有真实模型调用或反馈，付费门禁仍关闭。
+> 准备协议见
 > [`docs/phase9g-solo-exploratory-v1.md`](docs/phase9g-solo-exploratory-v1.md)，冻结合同见
-> [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)。
+> [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)；运行状态和
+> 后续授权见 [`docs/phase9g-solo-run-v1.md`](docs/phase9g-solo-run-v1.md)。
 
 ## 产品主线
 
