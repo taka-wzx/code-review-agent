@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9g-real-pilot-v1",
+  "pilot_id": "<stable-pilot-id>",
+  "identity_custodian_id": "<stable-human-custodian-id>",
+  "consent_version": "<consent-version>",
+  "generated_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+  "participants": [
+    {
+      "participant_id": "<stable-pseudonymous-participant-id>",
+      "confirmed_real": null,
+      "role": "developer",
+      "consented_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+      "consent_expires_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+      "consent_scope": [
+        "business_feedback",
+        "review_time"
+      ],
+      "repository_ids": [
+        "<opaque-repository-id>"
+      ],
+      "feedback_retention_days": null,
+      "withdrawal_acknowledged": null
+    }
+  ],
+  "synthetic": false,
+  "manifest_sha256": ""
+}

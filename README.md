@@ -11,6 +11,13 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 > `/metrics`、离线 Grafana/Prometheus 资产和 SLO 合同；历史评测和 Phase 9C
 > 容量检查来自单项目数据、确定性 fakes 或 synthetic 流程，应读作工程证据，不是生产收益。
 
+> **Phase 9G-Prep（2026-07-26）** 已增加真实业务 Pilot 与正式质量评测的离线授权、选择、
+> 盲标/仲裁、gold freeze、feedback/time/receipt、预算和报告门禁。当前只有 synthetic 协议夹具，
+> `business_claim_allowed=false` 且 `quality_claim_allowed=false`；未调用真实模型/GitHub、未部署、
+> 未产生真人反馈或质量数字。操作与下一步授权表见
+> [`docs/phase9g-real-pilot.md`](docs/phase9g-real-pilot.md)，冻结合同见
+> [`docs/plans/phase9g-real-pilot.md`](docs/plans/phase9g-real-pilot.md)。
+
 ## 产品主线
 
 四类用户分别是：组织管理员负责仓库接入、shadow/guarded-publish 模式和预算；仓库维护者负责

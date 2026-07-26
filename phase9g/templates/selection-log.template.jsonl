@@ -1,0 +1,1 @@
+{"schema_version":1,"pilot_id":"<stable-pilot-id>","track":"business","role":"pilot","repository_id":"<opaque-repository-id>","pr_id":"<opaque-pr-id>","merged_at":"<YYYY-MM-DDTHH:MM:SSZ>","eligible":null,"exclusion_reason":null,"selected":null,"rank_sha256":"<sha256(seed + newline + pr_id)>","snapshot_sha256":null,"diff_sha256":null,"synthetic":false,"row_sha256":""}
