@@ -23,8 +23,9 @@ formal_quality_status=incomplete
 - 已从 8 个候选中确定性选择 5 个 PR；公共收据为
   `phase9g_solo_run/selection-receipt.json`；
 - 2 个 selected diff 的敏感模式扫描命中，选择没有替换，对应 headline 保持阻断；
-- Key 文件环境变量尚未配置，凭证预检未完成；
-- 真实付费执行器不存在，因此当前不可能误发模型请求。
+- 用户已确认 Key 文件预检通过；executor 仍须在付费前执行独立的即时预检；
+- auth-003 已获批准，Solo-only 执行器正在通过提交、hash binding 与离线门禁，尚未发出
+  真实模型请求。
 
 ## 1. 建立私有授权输入
 
@@ -85,20 +86,38 @@ python phase9g_solo_run.py preflight-credential `
 
 成功预检仍返回 `paid_call_gate=false`，不会触发 smoke request。
 
-## 4. 付费运行前仍需 auth-003
+## 4. auth-003 已批准，仍需机器门禁
 
-`auth-002` 的 temperature、30 logical calls 和 45 HTTP attempts 与现有产品 runtime 不一致。
-开始真实请求前，仓库所有者必须另行确认并哈希冻结：
+用户已批准标准 GLM-5.2 API 的 auth-003：
 
-- Key 属于哪一种已批准 endpoint 类型；
-- temperature profile（推荐按当前产品行为冻结 `0/0.7/0/0`，或明确批准全零 Solo 路径）；
-- 最大 logical calls 和 HTTP attempts；
-- SDK retries 必须为 `0`；
-- GLM-5.2 输入、输出和缓存输入的 CNY 单价及来源哈希；
-- 总 input/output token 和 `20,000,000 micro-CNY` 费用上限是否维持；
-- 独立 Solo executor 的 runtime config SHA-256。
+```text
+temperature_profile=0.01/0.70/0.01/0.01
+max_logical_calls=96
+max_http_attempts=96
+sdk_max_retries=0
+max_input_tokens=1750000
+max_output_tokens=200000
+max_cost_microcny=20000000
+price_cny_per_million=8 input / 28 output / 2 cached input
+```
 
-在这些字段齐全前，不添加、不运行真实 executor。现有工具只有离线命令。
+方案 A 将两个敏感扫描命中登记为零调用失败，只允许剩余三个 PR 运行。授权仍不会直接
+打开网络：executor 必须先提交并绑定 SHA-256，完整离线门禁必须通过，auth-003 和 tariff
+必须在仓库外物化，Key 文件必须重新预检。
+
+授权物化后可使用以下只读验证命令：
+
+```powershell
+python phase9g_solo_run.py validate-auth-003-attestation `
+  --attestation phase9g_solo_run/auth-003-attestation.json
+python phase9g_solo_run.py preflight-auth-003 `
+  --repo-root $Repo `
+  --evidence-root $Evidence `
+  --public-attestation phase9g_solo_run/auth-003-attestation.json
+```
+
+`execute-auth-003-headlines` 是唯一可能发出付费请求的命令。不得在 attestation、offline
+validation、凭证预检或任一 hash binding 缺失时调用。
 
 ## 5. 离线验收
 

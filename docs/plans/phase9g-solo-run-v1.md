@@ -249,3 +249,75 @@ This contract is frozen after creation. Any paid call, endpoint choice, tariff, 
 temperature/call/HTTP ceiling, production code change, new dependency, new writable
 path, GitHub evidence API use, publication, deployment, or broader claim requires
 explicit user approval and a hash-bound contract/authorization revision before action.
+
+## Amendment 1: auth-003 paid Solo runtime
+
+Status: **user-approved; paid calls remain gated until implementation evidence passes**
+
+Approved date: 2026-07-26
+
+The user explicitly approved the following replacement paid-runtime authority. It
+supersedes auth-002 only for paid model execution; auth-002 remains the immutable
+selection/materialization authority and the selected five-PR denominator is unchanged.
+
+```text
+authorization_id=phase9g-solo-run-v1-auth-003
+endpoint_kind=standard
+base_url=https://open.bigmodel.cn/api/paas/v4
+provider=glm
+exact_model_snapshot=glm-5.2
+temperature_profile=0.01/0.70/0.01/0.01
+sdk_max_retries=0
+max_logical_calls=96
+max_http_attempts=96
+max_input_tokens=1750000
+max_output_tokens=200000
+max_cost_microcny=20000000
+input_microcny_per_million_tokens=8000000
+output_microcny_per_million_tokens=28000000
+cached_input_microcny_per_million_tokens=2000000
+selected_diff_policy=block_headline_zero_call
+blocked_selected_prs=2
+max_runnable_prs=3
+```
+
+The profile fields, in order, are Finder anchor, Finder sampler, Verifier A, and
+Verifier B. Product zero-temperature requests are mapped to `0.01`; the sampler stays
+at `0.70`. Any other requested temperature fails before a provider side effect.
+
+The two selected secret-scan hits become immutable attempt-1 headline failures with
+zero calls, zero HTTP attempts, zero Tokens, and zero cost. They remain in the five-PR
+denominator and cannot be replaced, cleared, or rerun under auth-003. Only the three
+remaining selected PRs may make paid requests.
+
+The dedicated Solo executor additionally narrows authority as follows:
+
+- no repository context pack and no readable repository snapshot; the model receives
+  only the authorized selected diff, while read tools are rooted at an empty directory;
+- no tiebreak pass, deployment, GitHub API, comment, Check, or publication;
+- at most 2,048 output Tokens per logical request, counted within the aggregate output
+  ceiling;
+- every request reserves one logical call, one HTTP attempt, a conservative input-Token
+  upper bound, the per-call output maximum, and worst-case non-cached micro-CNY before
+  network I/O;
+- actual provider usage and cache-hit Tokens are recorded separately from conservative
+  reservations; missing usage keeps cost/reporting incomplete;
+- five attempt-1 headlines are registered before the first paid request. Process
+  interruption finalizes missing headlines as failures and never resumes or replaces
+  them.
+
+The inherited authorization expiry remains `2026-08-25T07:29:48Z`. Before the first
+paid request, auth-003 must be canonical-hash sealed outside Git, the sanitized public
+attestation must validate, the executor source must be committed and hash-bound, every
+offline gate in this contract must pass, and the repository-external credential file
+must pass a fresh content-free preflight. These are conjunctive gates; user approval by
+itself does not open network execution.
+
+Permanent claims are unchanged:
+
+```text
+business_claim_allowed=false
+quality_claim_allowed=false
+formal_quality_status=incomplete
+model_quality_status=not_measured
+```
