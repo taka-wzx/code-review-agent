@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9g-real-pilot-v1",
+  "pilot_id": "<stable-pilot-id>",
+  "seed": "<derived-sha256-seed>",
+  "seed_derivation": {
+    "method": "sha256_source_commit_v1",
+    "source_commit": "<40-character-phase9g-prep-merge-commit>"
+  },
+  "selection_window": {
+    "start": "<YYYY-MM-DDTHH:MM:SSZ>",
+    "end": "<YYYY-MM-DDTHH:MM:SSZ>"
+  },
+  "groups": [
+    {
+      "track": "business",
+      "role": "pilot",
+      "repository_id": "<opaque-repository-id>",
+      "target_prs": 20,
+      "exclusion_reasons": [
+        "outside_scope",
+        "not_reproducible",
+        "authorization_missing"
+      ]
+    }
+  ],
+  "generated_at": "<YYYY-MM-DDTHH:MM:SSZ>",
+  "synthetic": false,
+  "plan_sha256": ""
+}

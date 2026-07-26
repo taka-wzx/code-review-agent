@@ -1,0 +1,9 @@
+{
+  "business_claim_allowed": false,
+  "expected_bundle_sha256": "b1287ad50095cbaaff75a0c1e9b132528fb25f2e20fb0d53514dd642c74b390e",
+  "fixture": "built_in_synthetic_v1",
+  "fixture_sha256": "eade4d606afaf560c2d61479be71aba37de5671b86932cd0206cd1782034bda3",
+  "phase_id": "phase9g-real-pilot-v1",
+  "quality_claim_allowed": false,
+  "schema_version": 1
+}
