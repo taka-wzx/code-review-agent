@@ -106,6 +106,7 @@ class _ActiveJob:
     lease: JobLease
     thread: threading.Thread
     done: threading.Event
+    lease_lost: bool = False
 
 
 def _status_code(exc: BaseException) -> int | None:
@@ -417,7 +418,9 @@ class ReviewWorker:
     def _heartbeat_active(self) -> None:
         self._reap_done()
         with self._active_lock:
-            active_jobs = list(self._active.values())
+            active_jobs = [
+                active for active in self._active.values() if not active.lease_lost
+            ]
         for active in active_jobs:
             try:
                 refreshed = self.store.heartbeat(
@@ -425,9 +428,17 @@ class ReviewWorker:
                 )
             except LeaseLost:
                 with self._active_lock:
-                    self._active.pop(active.lease.job_id, None)
+                    current = self._active.get(active.lease.job_id)
+                    if current is active:
+                        # Fencing is lost, but the execution thread can still be
+                        # unwinding through the store. Keep its local slot until
+                        # ``done`` makes shutdown and resource cleanup safe.
+                        current.lease_lost = True
             else:
-                active.lease = refreshed
+                with self._active_lock:
+                    current = self._active.get(active.lease.job_id)
+                    if current is active:
+                        current.lease = refreshed
 
     def _reap_done(self) -> None:
         with self._active_lock:

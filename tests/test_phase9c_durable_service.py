@@ -1084,35 +1084,36 @@ class Phase9CDurableServiceTests(unittest.TestCase):
         self.assertEqual(states, [JobState.AWAITING_APPROVAL.value] * 3)
 
     def test_worker_heartbeats_are_not_delayed_by_poll_interval(self):
-        gate = threading.Event()
-        runner = RecordingRunner(gate=gate)
-        store = self.make_store()
-        service = self.make_service(store=store)
+        store = Mock()
+        store.claim.return_value = None
         worker = ReviewWorker(
             self.registry,
             store,
-            runner=runner,
             worker_id="heartbeat-scheduler",
             concurrency=1,
-            lease_seconds=1,
+            lease_seconds=10,
             heartbeat_seconds=0.1,
             poll_seconds=1.5,
             shutdown_grace_seconds=1,
         )
-        self.workers.append(worker)
-        submitted = service.submit_diff("owner/repo", diff_for(250))
-        worker.start()
-        self.assertTrue(runner.started.wait(2))
-        time.sleep(1.8)
-        job = store.get(submitted["review_id"])
-        self.assertEqual(job["attempt_count"], 1)
-        self.assertEqual(len(runner.calls), 1)
-        gate.set()
-        self.wait_state(
-            store,
-            submitted["review_id"],
-            {JobState.AWAITING_APPROVAL.value},
-        )
+
+        def stop_after_wait(timeout):
+            self.assertAlmostEqual(timeout, 0.08)
+            worker.request_shutdown()
+
+        with patch.object(
+            worker_module.time,
+            "monotonic",
+            side_effect=[100.0, 100.02, 100.02],
+        ), patch.object(
+            worker, "_start_received_reconciliation"
+        ), patch.object(
+            worker._stop, "wait", side_effect=stop_after_wait
+        ) as wait:
+            worker.run_forever()
+
+        wait.assert_called_once()
+        store.claim.assert_called_once()
 
     def test_worker_graceful_shutdown_drains_without_new_claims(self):
         gate = threading.Event()
@@ -1714,7 +1715,7 @@ class Phase9CDurableServiceTests(unittest.TestCase):
         worker.run_forever.assert_called_once()
         store.close.assert_called_once()
 
-    def test_worker_discards_active_job_after_lease_loss(self):
+    def test_worker_retains_lease_lost_job_until_execution_finishes(self):
         store = self.make_store()
         service = self.make_service(store=store)
         submitted = service.submit_diff("owner/repo", diff_for(88))
@@ -1730,12 +1731,21 @@ class Phase9CDurableServiceTests(unittest.TestCase):
             lease_seconds=10,
             heartbeat_seconds=1,
         )
+        done = threading.Event()
         active = worker_module._ActiveJob(
-            lease=lease, thread=threading.Thread(), done=threading.Event()
+            lease=lease, thread=threading.Thread(), done=done
         )
         worker._active[submitted["review_id"]] = active
-        with patch.object(store, "heartbeat", side_effect=LeaseLost("lost")):
+        with patch.object(
+            store, "heartbeat", side_effect=LeaseLost("lost")
+        ) as heartbeat:
             worker._heartbeat_active()
+            worker._heartbeat_active()
+        heartbeat.assert_called_once()
+        self.assertTrue(active.lease_lost)
+        self.assertEqual(worker._active_count(), 1)
+        done.set()
+        worker._heartbeat_active()
         self.assertEqual(worker._active_count(), 0)
 
     def test_worker_leaves_uncertain_completion_for_lease_recovery(self):
