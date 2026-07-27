@@ -25,6 +25,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from code_review_agent.database import DatabaseError
 from code_review_agent.mcp_server import create_mcp
 from code_review_agent.production_metrics import CONTENT_TYPE
+from code_review_agent.repair_service import (
+    RepairAuthorizationError,
+    RepairConflict,
+    RepairServiceError,
+    SyntheticStagingRepairService,
+    create_synthetic_staging_repair_service,
+)
 from code_review_agent.identity import (
     AuthBackend,
     AuthenticationRequired,
@@ -146,6 +153,20 @@ class PublicationDecision(BaseModel):
 class FindingDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     decision: str = Field(pattern="^(approved|rejected)$")
+
+
+class SyntheticRepairCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    repository: str = Field(min_length=1, max_length=128)
+    finding_sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    base_sha: str = Field(pattern="^[0-9a-f]{40,64}$")
+    head_sha: str = Field(pattern="^[0-9a-f]{40,64}$")
+
+
+class SyntheticRepairDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    approval_id: str = Field(pattern="^approval-[0-9a-f]{32}$")
+    checkpoint_sha256: str = Field(pattern="^[0-9a-f]{64}$")
 
 
 class PayloadTooLarge(ServiceError):
@@ -282,9 +303,15 @@ def create_app(
     review_service: ReviewService | None = None,
     auth_backend: AuthBackend | None = None,
     metrics_clock: Callable[[], float] | None = None,
+    repair_service: SyntheticStagingRepairService | None = None,
 ) -> FastAPI:
     http = settings or HttpSettings.from_env()
     service = review_service or create_review_service_from_env()
+    if repair_service is None and os.environ.get("CRAG_REPAIR_RUNTIME", ""):
+        repair_service = create_synthetic_staging_repair_service(
+            service.store.database,
+            metrics=service.metrics,
+        )
     monotonic = metrics_clock or time.monotonic
     if auth_backend is None:
         if http.local_token_enabled:
@@ -321,6 +348,7 @@ def create_app(
     app.state.review_service = service
     app.state.http_settings = http
     app.state.auth_backend = auth_backend
+    app.state.repair_service = repair_service
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
@@ -353,6 +381,26 @@ def create_app(
             status_code=status,
             content={"schema_version": SCHEMA_VERSION, "error": {"code": exc.code}},
             headers=headers,
+        )
+
+    @app.exception_handler(RepairServiceError)
+    async def repair_service_error_handler(
+        request: Request, exc: RepairServiceError
+    ) -> JSONResponse:
+        del request
+        status = (
+            404
+            if isinstance(exc, RepairAuthorizationError)
+            and exc.code == "repair_cross_organization_denied"
+            else 403
+            if isinstance(exc, RepairAuthorizationError)
+            else 409
+            if isinstance(exc, RepairConflict)
+            else 503
+        )
+        return JSONResponse(
+            status_code=status,
+            content={"schema_version": SCHEMA_VERSION, "error": {"code": exc.code}},
         )
 
     @app.exception_handler(RequestValidationError)
@@ -445,11 +493,20 @@ def create_app(
     @app.get("/readyz")
     def readyz() -> JSONResponse:
         database_ready = service.store.database_ready()
-        workers = (
-            service.store.live_worker_count(stale_seconds=http.worker_stale_seconds)
-            if database_ready
-            else 0
-        )
+        if repair_service is None:
+            workers = (
+                service.store.live_worker_count(stale_seconds=http.worker_stale_seconds)
+                if database_ready
+                else 0
+            )
+        else:
+            workers = (
+                repair_service.postgres_store.live_worker_count(
+                    stale_seconds=http.worker_stale_seconds
+                )
+                if database_ready
+                else 0
+            )
         ready = database_ready and workers > 0 and service.accepting
         return JSONResponse(
             status_code=200 if ready else 503,
@@ -458,6 +515,7 @@ def create_app(
                 "status": "ready" if ready else "not_ready",
                 "database": "ready" if database_ready else "unavailable",
                 "worker": "ready" if workers > 0 else "unavailable",
+                "migration": "ready" if database_ready else "unavailable",
             },
         )
 
@@ -479,6 +537,19 @@ def create_app(
         if principal.organization_id != organization_id:
             raise JobNotFound("organization was not found")
         return principal
+
+    def require_repair_service() -> SyntheticStagingRepairService:
+        if repair_service is None:
+            raise RepairServiceError("synthetic_staging_repair_disabled")
+        return repair_service
+
+    def authorized_repair_repository(
+        principal: Principal, identity: str
+    ) -> dict[str, Any]:
+        repository = service.store.database.authorized_repository(principal, identity)
+        if repository is None:
+            raise JobNotFound("repository was not found")
+        return repository
 
     @app.get("/v1/principal")
     def get_principal(request: Request) -> dict[str, Any]:
@@ -505,6 +576,97 @@ def create_app(
             head_sha=body.head_sha,
         )
         return {**job, "duplicate": duplicate}
+
+    @app.post("/v1/repairs", status_code=202)
+    def create_synthetic_repair(
+        request: Request, body: SyntheticRepairCreate
+    ) -> dict[str, Any]:
+        principal = request_principal(request)
+        repository = authorized_repair_repository(principal, body.repository)
+        return require_repair_service().start_synthetic_repair(
+            organization_id=principal.organization_id,
+            repository_id=str(repository["id"]),
+            finding_sha256=body.finding_sha256,
+            base_sha=body.base_sha,
+            head_sha=body.head_sha,
+            actor=principal,
+        )
+
+    @app.get("/v1/repairs/{repair_job_id}")
+    def get_synthetic_repair(request: Request, repair_job_id: str) -> dict[str, Any]:
+        return require_repair_service().get_repair(
+            repair_job_id, actor=request_principal(request)
+        )
+
+    @app.get("/v1/repairs/{repair_job_id}/write-approval")
+    def get_write_approval_view(
+        request: Request, repair_job_id: str
+    ) -> dict[str, Any]:
+        return require_repair_service().write_approval_view(
+            repair_job_id, actor=request_principal(request)
+        )
+
+    @app.post("/v1/repairs/{repair_job_id}/write-approval/approve")
+    def approve_write(
+        request: Request, repair_job_id: str, body: SyntheticRepairDecision
+    ) -> dict[str, Any]:
+        return require_repair_service().decide_write(
+            repair_job_id,
+            actor=request_principal(request),
+            checkpoint_sha256=body.checkpoint_sha256,
+            approval_id=body.approval_id,
+            approved=True,
+        )
+
+    @app.post("/v1/repairs/{repair_job_id}/write-approval/reject")
+    def reject_write(
+        request: Request, repair_job_id: str, body: SyntheticRepairDecision
+    ) -> dict[str, Any]:
+        return require_repair_service().decide_write(
+            repair_job_id,
+            actor=request_principal(request),
+            checkpoint_sha256=body.checkpoint_sha256,
+            approval_id=body.approval_id,
+            approved=False,
+        )
+
+    @app.get("/v1/repairs/{repair_job_id}/draft-pr-approval")
+    def get_draft_pr_approval_view(
+        request: Request, repair_job_id: str
+    ) -> dict[str, Any]:
+        return require_repair_service().draft_pr_approval_view(
+            repair_job_id, actor=request_principal(request)
+        )
+
+    @app.post("/v1/repairs/{repair_job_id}/draft-pr-approval/approve")
+    def approve_draft_pr(
+        request: Request, repair_job_id: str, body: SyntheticRepairDecision
+    ) -> dict[str, Any]:
+        return require_repair_service().decide_draft_pr(
+            repair_job_id,
+            actor=request_principal(request),
+            checkpoint_sha256=body.checkpoint_sha256,
+            approval_id=body.approval_id,
+            approved=True,
+        )
+
+    @app.post("/v1/repairs/{repair_job_id}/draft-pr-approval/reject")
+    def reject_draft_pr(
+        request: Request, repair_job_id: str, body: SyntheticRepairDecision
+    ) -> dict[str, Any]:
+        return require_repair_service().decide_draft_pr(
+            repair_job_id,
+            actor=request_principal(request),
+            checkpoint_sha256=body.checkpoint_sha256,
+            approval_id=body.approval_id,
+            approved=False,
+        )
+
+    @app.get("/v1/repairs/{repair_job_id}/receipt")
+    def get_repair_receipt(request: Request, repair_job_id: str) -> dict[str, Any]:
+        return require_repair_service().redacted_receipt(
+            repair_job_id, actor=request_principal(request)
+        )
 
     @app.get("/v1/reviews/pending-approval")
     def list_pending_approval_reviews(request: Request) -> dict[str, Any]:
