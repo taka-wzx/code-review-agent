@@ -102,6 +102,104 @@ POTENTIAL_SECRET_PATTERNS = (
     re.compile(rb"(?i)authorization:\s*bearer\s+[^\s]+"),
 )
 
+SAFE_PIPELINE_STAGES = frozenset(
+    {
+        "finder_anchor",
+        "finder_sampler",
+        "verifier",
+        "headline",
+        "unknown",
+    }
+)
+SAFE_FAILURE_CODES = frozenset(
+    {
+        "none",
+        "empty_response",
+        "empty_response_after_retry",
+        "finder_step_cap",
+        "verifier_step_cap",
+        "tool_call_loop",
+        "text_only_response",
+        "malformed_tool_arguments",
+        "invalid_submit_limit",
+        "output_token_limit",
+        "abnormal_finish_reason",
+        "empty_tool_root_loop",
+        "provider_or_pipeline_runtime_error",
+        "provider_response_schema",
+        "local_budget_exhausted",
+        "local_timeout",
+        "local_budget_or_gate_refusal",
+        "provider_authentication",
+        "provider_rate_limit",
+        "provider_timeout",
+        "provider_exception",
+        "process_interrupted",
+        "selected_diff_blocked",
+        "unknown",
+    }
+)
+SAFE_FINISH_REASON_CATEGORIES = frozenset(
+    {"stop", "tool_calls", "length", "content_filter", "missing", "other"}
+)
+SAFE_RESPONSE_SHAPE_CATEGORIES = frozenset(
+    {
+        "tool_call",
+        "text_only",
+        "empty",
+        "missing_choices",
+        "multiple_choices",
+        "missing_message",
+        "malformed_tool_call",
+        "exception",
+        "not_observed",
+    }
+)
+SAFE_PROVIDER_EXCEPTION_TYPES = frozenset(
+    {
+        "none",
+        "authentication_error",
+        "rate_limit_error",
+        "timeout_error",
+        "connection_error",
+        "bad_request_error",
+        "internal_server_error",
+        "runtime_error",
+        "validation_error",
+        "other",
+    }
+)
+SAFE_FAILURE_TELEMETRY_KEYS = {
+    "pipeline_stage",
+    "stable_failure_code",
+    "finish_reason_category",
+    "response_shape_category",
+    "tool_call_present",
+    "submit_attempt_count",
+    "empty_response_count",
+    "step_count",
+    "output_limit_reached",
+    "usage_known",
+    "provider_exception_type",
+    "redaction_applied",
+}
+PHASE9H_REQUIRED_UNRESOLVED_CAUSES = frozenset(
+    {
+        "empty_response_second_failure",
+        "finder_or_verifier_step_cap",
+        "tool_call_loop",
+        "text_answer_instead_of_submit_tool",
+        "malformed_tool_arguments",
+        "invalid_submit_limit",
+        "output_token_truncation",
+        "abnormal_finish_reason",
+        "empty_read_tool_root_search_or_read_loop",
+        "pipeline_runtime_error",
+        "provider_response_schema_compatibility",
+        "local_budget_or_timeout_termination",
+    }
+)
+
 PUBLIC_RECEIPT_KEYS = {
     "schema_version",
     "phase_id",
@@ -439,6 +537,409 @@ class RunValidationError(ValueError):
 
 def _fail(message: str) -> NoReturn:
     raise RunValidationError(message)
+
+
+def _safe_pipeline_stage(request: Mapping[str, Any]) -> str:
+    tool_names: set[str] = set()
+    tools = request.get("tools")
+    if isinstance(tools, (list, tuple)):
+        for tool in tools:
+            if not isinstance(tool, Mapping):
+                continue
+            function = tool.get("function")
+            if not isinstance(function, Mapping):
+                continue
+            name = function.get("name")
+            if isinstance(name, str) and name in {"submit_review", "submit_verdicts"}:
+                tool_names.add(name)
+    if "submit_review" in tool_names:
+        return "finder_sampler" if request.get("temperature") == 0.7 else "finder_anchor"
+    if "submit_verdicts" in tool_names:
+        return "verifier"
+    return "unknown"
+
+
+def _finish_reason_category(value: Any) -> str:
+    if not isinstance(value, str):
+        return "missing" if value is None else "other"
+    if value == "stop":
+        return "stop"
+    if value in {"tool_calls", "function_call"}:
+        return "tool_calls"
+    if value == "length":
+        return "length"
+    if value == "content_filter":
+        return "content_filter"
+    return "other"
+
+
+def _provider_exception_type(exc: BaseException) -> str:
+    name = type(exc).__name__
+    categories = {
+        "AuthenticationError": "authentication_error",
+        "RateLimitError": "rate_limit_error",
+        "APITimeoutError": "timeout_error",
+        "TimeoutError": "timeout_error",
+        "APIConnectionError": "connection_error",
+        "ConnectionError": "connection_error",
+        "BadRequestError": "bad_request_error",
+        "InternalServerError": "internal_server_error",
+        "RuntimeError": "runtime_error",
+        "RunValidationError": "validation_error",
+    }
+    return categories.get(name, "other")
+
+
+def _failure_code_for_exception(exception_type: str) -> str:
+    return {
+        "authentication_error": "provider_authentication",
+        "rate_limit_error": "provider_rate_limit",
+        "timeout_error": "provider_timeout",
+        "runtime_error": "provider_or_pipeline_runtime_error",
+        "validation_error": "local_budget_or_gate_refusal",
+    }.get(exception_type, "provider_exception")
+
+
+def validate_safe_failure_telemetry(raw: Any) -> dict[str, Any]:
+    telemetry = _expect_dict(raw, "safe_failure_telemetry")
+    _exact_keys(telemetry, SAFE_FAILURE_TELEMETRY_KEYS, "safe_failure_telemetry")
+    enum_fields = {
+        "pipeline_stage": SAFE_PIPELINE_STAGES,
+        "stable_failure_code": SAFE_FAILURE_CODES,
+        "finish_reason_category": SAFE_FINISH_REASON_CATEGORIES,
+        "response_shape_category": SAFE_RESPONSE_SHAPE_CATEGORIES,
+        "provider_exception_type": SAFE_PROVIDER_EXCEPTION_TYPES,
+    }
+    for key, allowed in enum_fields.items():
+        if telemetry[key] not in allowed:
+            _fail(f"safe failure telemetry {key} is invalid")
+    for key in ("submit_attempt_count", "empty_response_count", "step_count"):
+        value = telemetry[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            _fail(f"safe failure telemetry {key} must be a non-negative integer")
+    for key in (
+        "tool_call_present",
+        "output_limit_reached",
+        "usage_known",
+        "redaction_applied",
+    ):
+        if not isinstance(telemetry[key], bool):
+            _fail(f"safe failure telemetry {key} must be boolean")
+    if telemetry["redaction_applied"] is not True:
+        _fail("safe failure telemetry must be redacted before persistence")
+    if contains_forbidden_content(telemetry):
+        _fail("safe failure telemetry contains forbidden content")
+    return telemetry
+
+
+def _safe_response_telemetry(
+    response: Any,
+    *,
+    request: Mapping[str, Any],
+    step_count: int,
+    usage_known: bool,
+    output_tokens: int | None,
+) -> dict[str, Any]:
+    choices = getattr(response, "choices", None)
+    finish_reason = "missing"
+    response_shape = "missing_choices"
+    tool_call_present = False
+    submit_attempt_count = 0
+    empty_response_count = 0
+    if isinstance(choices, (list, tuple)) and choices:
+        finish_reason = _finish_reason_category(
+            getattr(choices[0], "finish_reason", None)
+        )
+        if len(choices) != 1:
+            response_shape = "multiple_choices"
+        else:
+            message = getattr(choices[0], "message", None)
+            if message is None:
+                response_shape = "missing_message"
+            else:
+                tool_calls = getattr(message, "tool_calls", None)
+                tool_call_present = bool(tool_calls)
+                malformed = tool_calls is not None and not isinstance(
+                    tool_calls, (list, tuple)
+                )
+                if isinstance(tool_calls, (list, tuple)):
+                    for call in tool_calls:
+                        function = getattr(call, "function", None)
+                        name = getattr(function, "name", None)
+                        arguments = getattr(function, "arguments", None)
+                        if not isinstance(name, str) or not isinstance(arguments, str):
+                            malformed = True
+                            continue
+                        if name in {"submit_review", "submit_verdicts"}:
+                            submit_attempt_count += 1
+                content = getattr(message, "content", None)
+                text_present = isinstance(content, str) and bool(content.strip())
+                if malformed:
+                    response_shape = "malformed_tool_call"
+                elif tool_call_present:
+                    response_shape = "tool_call"
+                elif text_present:
+                    response_shape = "text_only"
+                else:
+                    response_shape = "empty"
+                    empty_response_count = 1
+    output_limit_reached = finish_reason == "length" or (
+        output_tokens is not None and output_tokens >= PER_CALL_MAX_OUTPUT_TOKENS
+    )
+    if output_limit_reached:
+        failure_code = "output_token_limit"
+    elif response_shape in {
+        "missing_choices",
+        "multiple_choices",
+        "missing_message",
+    }:
+        failure_code = "provider_response_schema"
+    elif response_shape == "malformed_tool_call":
+        failure_code = "malformed_tool_arguments"
+    elif finish_reason in {"content_filter", "other"}:
+        failure_code = "abnormal_finish_reason"
+    elif response_shape == "empty":
+        failure_code = "empty_response"
+    elif response_shape == "text_only":
+        failure_code = "text_only_response"
+    else:
+        failure_code = "none"
+    return validate_safe_failure_telemetry(
+        {
+            "pipeline_stage": _safe_pipeline_stage(request),
+            "stable_failure_code": failure_code,
+            "finish_reason_category": finish_reason,
+            "response_shape_category": response_shape,
+            "tool_call_present": tool_call_present,
+            "submit_attempt_count": submit_attempt_count,
+            "empty_response_count": empty_response_count,
+            "step_count": step_count,
+            "output_limit_reached": output_limit_reached,
+            "usage_known": usage_known,
+            "provider_exception_type": "none",
+            "redaction_applied": True,
+        }
+    )
+
+
+def safe_terminal_failure_telemetry(
+    *,
+    pipeline_stage: str,
+    stable_failure_code: str,
+    step_count: int,
+    submit_attempt_count: int = 0,
+    empty_response_count: int = 0,
+    tool_call_present: bool = False,
+    output_limit_reached: bool = False,
+    usage_known: bool = False,
+) -> dict[str, Any]:
+    """Build content-free terminal telemetry from already stable control-flow enums."""
+
+    return validate_safe_failure_telemetry(
+        {
+            "pipeline_stage": pipeline_stage,
+            "stable_failure_code": stable_failure_code,
+            "finish_reason_category": "missing",
+            "response_shape_category": "not_observed",
+            "tool_call_present": tool_call_present,
+            "submit_attempt_count": submit_attempt_count,
+            "empty_response_count": empty_response_count,
+            "step_count": step_count,
+            "output_limit_reached": output_limit_reached,
+            "usage_known": usage_known,
+            "provider_exception_type": "none",
+            "redaction_applied": True,
+        }
+    )
+
+
+def safe_loop_result_telemetry(
+    *,
+    pipeline_stage: str,
+    reason: str,
+    step_count: int,
+    submit_attempt_count: int = 0,
+    empty_response_count: int = 0,
+    tool_call_present: bool = False,
+    output_limit_reached: bool = False,
+    usage_known: bool = False,
+) -> dict[str, Any]:
+    """Map a shared submit-loop terminal enum without retaining loop content."""
+
+    if reason == "step_cap":
+        failure_code = (
+            "verifier_step_cap" if pipeline_stage == "verifier" else "finder_step_cap"
+        )
+    else:
+        failure_code = {
+            "ok": "none",
+            "bad_submits": "invalid_submit_limit",
+            "text_answer": "text_only_response",
+            "token_budget": "local_budget_exhausted",
+            "deadline": "local_timeout",
+        }.get(reason, "unknown")
+    return safe_terminal_failure_telemetry(
+        pipeline_stage=pipeline_stage,
+        stable_failure_code=failure_code,
+        step_count=step_count,
+        submit_attempt_count=submit_attempt_count,
+        empty_response_count=empty_response_count,
+        tool_call_present=tool_call_present,
+        output_limit_reached=output_limit_reached,
+        usage_known=usage_known,
+    )
+
+
+def _headline_failure_telemetry(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    error_category: str | None,
+    status: str,
+) -> dict[str, Any]:
+    error_key = error_category or ""
+    if records and any(
+        not SAFE_FAILURE_TELEMETRY_KEYS.issubset(record.keys())
+        for record in records
+    ):
+        return safe_terminal_failure_telemetry(
+            pipeline_stage="unknown",
+            stable_failure_code=(
+                "process_interrupted" if error_category == "process_interrupted" else "unknown"
+            ),
+            step_count=len(records),
+            usage_known=all(record.get("usage_known") is True for record in records),
+        )
+    if records:
+        last = records[-1]
+        stable_code = str(last["stable_failure_code"])
+        empty_count = sum(int(row["empty_response_count"]) for row in records)
+        if empty_count > 1:
+            stable_code = "empty_response_after_retry"
+        elif status != "completed" and stable_code == "none":
+            stable_code = {
+                "provider_or_pipeline_RuntimeError": "provider_or_pipeline_runtime_error",
+                "provider_timeout": "provider_timeout",
+                "provider_authentication": "provider_authentication",
+                "provider_rate_limit": "provider_rate_limit",
+                "local_budget_or_gate_refusal": "local_budget_or_gate_refusal",
+                "process_interrupted": "process_interrupted",
+            }.get(error_key, "unknown")
+        telemetry = {
+            "pipeline_stage": last["pipeline_stage"],
+            "stable_failure_code": stable_code,
+            "finish_reason_category": last["finish_reason_category"],
+            "response_shape_category": last["response_shape_category"],
+            "tool_call_present": any(bool(row["tool_call_present"]) for row in records),
+            "submit_attempt_count": sum(
+                int(row["submit_attempt_count"]) for row in records
+            ),
+            "empty_response_count": empty_count,
+            "step_count": len(records),
+            "output_limit_reached": any(
+                bool(row["output_limit_reached"]) for row in records
+            ),
+            "usage_known": all(bool(row["usage_known"]) for row in records),
+            "provider_exception_type": next(
+                (
+                    str(row["provider_exception_type"])
+                    for row in reversed(records)
+                    if row["provider_exception_type"] != "none"
+                ),
+                "none",
+            ),
+            "redaction_applied": True,
+        }
+    else:
+        stable_code = {
+            "selected_diff_secret_scan_hit": "selected_diff_blocked",
+            "process_interrupted": "process_interrupted",
+            "local_budget_or_gate_refusal": "local_budget_or_gate_refusal",
+        }.get(error_key, "unknown" if status != "completed" else "none")
+        telemetry = {
+            "pipeline_stage": "headline",
+            "stable_failure_code": stable_code,
+            "finish_reason_category": "missing",
+            "response_shape_category": "not_observed",
+            "tool_call_present": False,
+            "submit_attempt_count": 0,
+            "empty_response_count": 0,
+            "step_count": 0,
+            "output_limit_reached": False,
+            "usage_known": True,
+            "provider_exception_type": "none",
+            "redaction_applied": True,
+        }
+    return validate_safe_failure_telemetry(telemetry)
+
+
+def validate_phase9h_failure_analysis(raw: Any) -> dict[str, Any]:
+    analysis = _expect_dict(raw, "phase9h_failure_analysis")
+    required = {
+        "schema_version",
+        "phase_id",
+        "source_phase_id",
+        "authorization_id",
+        "observed_stable_category",
+        "headline_outcome",
+        "confirmed_causes",
+        "ruled_out_causes",
+        "unresolved_causes",
+        "evidence_hashes",
+        "confidence_boundary",
+        "phase9i_solo_run_v2",
+        "no_rerun",
+        "external_calls_made",
+        "business_claim_allowed",
+        "quality_claim_allowed",
+        "formal_quality_status",
+        "model_quality_status",
+    }
+    _exact_keys(analysis, required, "phase9h_failure_analysis")
+    if analysis["schema_version"] != 1 or analysis["phase_id"] != (
+        "phase9h-auth004-failure-hardening-v1"
+    ):
+        _fail("Phase 9H failure analysis schema or phase is invalid")
+    outcome = _expect_dict(analysis["headline_outcome"], "Phase 9H headline outcome")
+    if outcome != {
+        "selected_prs": 5,
+        "headline_attempts": 5,
+        "completed": 0,
+        "failed": 5,
+        "diagnostic_attempts": 0,
+        "successful_reruns": 0,
+    }:
+        _fail("Phase 9H must preserve the five failed auth-004 headlines")
+    if analysis["confirmed_causes"] != []:
+        _fail("Phase 9H cannot confirm a root cause from sanitized aggregate evidence")
+    unresolved = analysis["unresolved_causes"]
+    if not isinstance(unresolved, list) or {
+        row.get("cause") for row in unresolved if isinstance(row, Mapping)
+    } != PHASE9H_REQUIRED_UNRESOLVED_CAUSES:
+        _fail("Phase 9H unresolved-cause set is incomplete")
+    if any(
+        not isinstance(row, Mapping) or row.get("status") != "unknown"
+        for row in unresolved
+    ):
+        _fail("Phase 9H unresolved causes must remain unknown")
+    if (
+        analysis["no_rerun"] is not True
+        or analysis["external_calls_made"] is not False
+        or analysis["business_claim_allowed"] is not False
+        or analysis["quality_claim_allowed"] is not False
+        or analysis["formal_quality_status"] != "incomplete"
+        or analysis["model_quality_status"] != "not_measured"
+    ):
+        _fail("Phase 9H claim or no-rerun boundary is invalid")
+    proposal = _expect_dict(analysis["phase9i_solo_run_v2"], "Phase 9I proposal")
+    if (
+        proposal.get("real_run_recommended_now") is not False
+        or proposal.get("new_denominator_required") is not True
+        or proposal.get("may_replace_auth004") is not False
+    ):
+        _fail("Phase 9I proposal cannot reopen or replace auth-004")
+    if contains_forbidden_content(analysis):
+        _fail("Phase 9H failure analysis contains forbidden content")
+    return analysis
 
 
 def _expect_dict(value: Any, where: str) -> dict[str, Any]:
@@ -2667,6 +3168,17 @@ class BudgetedCompletionGate:
             "usage_known": False,
             "response_sha256": None,
             "error_category": None,
+            "pipeline_stage": _safe_pipeline_stage(kwargs),
+            "stable_failure_code": "none",
+            "finish_reason_category": "missing",
+            "response_shape_category": "not_observed",
+            "tool_call_present": False,
+            "submit_attempt_count": 0,
+            "empty_response_count": 0,
+            "step_count": call_number,
+            "output_limit_reached": False,
+            "provider_exception_type": "none",
+            "redaction_applied": True,
         }
         try:
             response = self._underlying.create(**outgoing)
@@ -2687,6 +3199,15 @@ class BudgetedCompletionGate:
                         "usage_known": True,
                     }
                 )
+            record.update(
+                _safe_response_telemetry(
+                    response,
+                    request=kwargs,
+                    step_count=call_number,
+                    usage_known=usage is not None,
+                    output_tokens=usage[1] if usage is not None else None,
+                )
+            )
             response_material = {
                 "id": getattr(response, "id", None),
                 "model": getattr(response, "model", None),
@@ -2697,13 +3218,32 @@ class BudgetedCompletionGate:
             record["status"] = "completed"
             return response
         except BaseException as exc:
+            exception_type = _provider_exception_type(exc)
             record["status"] = "failed"
-            record["error_category"] = type(exc).__name__[:100]
+            record["error_category"] = _failure_code_for_exception(exception_type)
+            record.update(
+                {
+                    "stable_failure_code": _failure_code_for_exception(
+                        exception_type
+                    ),
+                    "finish_reason_category": "missing",
+                    "response_shape_category": "exception",
+                    "tool_call_present": False,
+                    "submit_attempt_count": 0,
+                    "empty_response_count": 0,
+                    "output_limit_reached": False,
+                    "provider_exception_type": exception_type,
+                    "redaction_applied": True,
+                }
+            )
             raise
         finally:
             completed = datetime.now(timezone.utc)
             record["completed_at"] = completed.strftime("%Y-%m-%dT%H:%M:%SZ")
             record["latency_seconds"] = round(time.monotonic() - started_monotonic, 6)
+            validate_safe_failure_telemetry(
+                {key: record[key] for key in SAFE_FAILURE_TELEMETRY_KEYS}
+            )
             sealed = solo.with_artifact_hash(
                 {**record, "call_sha256": ""},
                 "call_sha256",
@@ -3352,6 +3892,11 @@ def _blocked_headline(
         "logical_calls": 0,
         "http_attempts": 0,
         "content_retained": False,
+        "failure_telemetry": _headline_failure_telemetry(
+            [],
+            error_category="selected_diff_secret_scan_hit",
+            status="failed",
+        ),
     }
     trace_path = run_root / "traces" / f"{pr_id}.json"
     if trace_path.exists():
@@ -4014,6 +4559,7 @@ def _execute_headlines(
         usage = gate.actual_usage()
         after = ledger.snapshot()
         reserved = _reservation_delta(after, before)
+        call_records = gate.records()
         trace = {
             "schema_version": 1,
             "phase_id": RUN_PHASE_ID,
@@ -4021,7 +4567,12 @@ def _execute_headlines(
             "attempt_number": 1,
             "status": status,
             "error_category": error_category,
-            "calls": gate.records(),
+            "calls": call_records,
+            "failure_telemetry": _headline_failure_telemetry(
+                call_records,
+                error_category=error_category,
+                status=status,
+            ),
             "prompt_retained": False,
             "response_content_retained": False,
             "credential_retained": False,
@@ -4255,6 +4806,11 @@ def _recover_interrupted_run(
             "status": "cancelled",
             "error_category": "process_interrupted",
             "calls": calls,
+            "failure_telemetry": _headline_failure_telemetry(
+                calls,
+                error_category="process_interrupted",
+                status="cancelled",
+            ),
             "prompt_retained": False,
             "response_content_retained": False,
             "credential_retained": False,
@@ -4910,10 +5466,24 @@ def validate_synthetic() -> dict[str, Any]:
         ledger.reserve(BudgetReservation(1, 1, 0, 0, 0))
     except RunValidationError:
         blocked = True
+    telemetry = safe_terminal_failure_telemetry(
+        pipeline_stage="finder_anchor",
+        stable_failure_code="finder_step_cap",
+        step_count=10,
+        tool_call_present=True,
+        usage_known=True,
+    )
+    analysis_path = Path(__file__).resolve().parent / (
+        "phase9g_solo_run/phase9h-failure-analysis.json"
+    )
+    analysis = validate_phase9h_failure_analysis(solo.load_json(analysis_path))
     return {
         "valid": True,
         "synthetic": True,
         "budget_boundary_blocked": blocked,
+        "safe_failure_telemetry_valid": telemetry["redaction_applied"],
+        "auth004_headline_status_counts": analysis["headline_outcome"],
+        "real_run_gate": False,
         "paid_call_gate": False,
         "business_claim_allowed": False,
         "quality_claim_allowed": False,

@@ -33,6 +33,16 @@ Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。�
 > [`docs/phase9g-solo-exploratory-v1.md`](docs/phase9g-solo-exploratory-v1.md)，冻结合同见
 > [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)；运行状态和
 > 后续授权见 [`docs/phase9g-solo-run-v1.md`](docs/phase9g-solo-run-v1.md)。
+>
+> **Phase 9H auth-004 Failure Hardening v1（2026-07-27）** 冻结 auth-004 的真实结果为
+> 5 个不可替换 headline 全部失败，稳定聚合类别为
+> `provider_or_pipeline_RuntimeError`；这不是模型、Business Pilot 或 Formal Quality 成功。
+> 当前脱敏聚合证据不足以区分 provider、response schema、agent loop、step cap、空工具根或
+> 本地终止原因，所有细粒度根因保持 `unknown`。本阶段仅增加固定枚举/整数的安全失败遥测和
+> fake/synthetic 离线兼容回归，不重跑 auth-004，也不打开任何真实调用门禁。说明见
+> [`docs/phase9h-auth004-failure-hardening-v1.md`](docs/phase9h-auth004-failure-hardening-v1.md)，
+> 冻结合同见
+> [`docs/plans/phase9h-auth004-failure-hardening-v1.md`](docs/plans/phase9h-auth004-failure-hardening-v1.md)。
 
 ## 产品主线
 
