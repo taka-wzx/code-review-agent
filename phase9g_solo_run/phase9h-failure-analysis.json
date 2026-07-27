@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "phase_id": "phase9h-auth004-failure-hardening-v1",
+  "source_phase_id": "phase9g-solo-run-v1",
+  "authorization_id": "phase9g-solo-run-v1-auth-004",
+  "observed_stable_category": "provider_or_pipeline_RuntimeError",
+  "headline_outcome": {
+    "selected_prs": 5,
+    "headline_attempts": 5,
+    "completed": 0,
+    "failed": 5,
+    "diagnostic_attempts": 0,
+    "successful_reruns": 0
+  },
+  "confirmed_causes": [],
+  "ruled_out_causes": [
+    {
+      "cause": "sdk_automatic_retry_amplification",
+      "evidence": "sdk_max_retries=0"
+    },
+    {
+      "cause": "headline_replacement_or_successful_rerun",
+      "evidence": "diagnostic_attempts=0 and successful_reruns_after_failure=0"
+    },
+    {
+      "cause": "aggregate_authorization_ceiling_exhaustion",
+      "evidence": "actual and reserved aggregate call, HTTP, Token, and cost totals remained below the frozen authorization ceilings"
+    }
+  ],
+  "unresolved_causes": [
+    {
+      "cause": "empty_response_second_failure",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no empty-response counter"
+    },
+    {
+      "cause": "finder_or_verifier_step_cap",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no pipeline-stage or step-count terminal field"
+    },
+    {
+      "cause": "tool_call_loop",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no tool-call shape or loop terminal field"
+    },
+    {
+      "cause": "text_answer_instead_of_submit_tool",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no response-shape or submit counter"
+    },
+    {
+      "cause": "malformed_tool_arguments",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no fixed malformed-arguments category"
+    },
+    {
+      "cause": "invalid_submit_limit",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no invalid-submit counter or terminal code"
+    },
+    {
+      "cause": "output_token_truncation",
+      "status": "unknown",
+      "reason": "aggregate output Tokens do not reveal per-call output-limit exhaustion"
+    },
+    {
+      "cause": "abnormal_finish_reason",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no finish-reason category"
+    },
+    {
+      "cause": "empty_read_tool_root_search_or_read_loop",
+      "status": "unknown",
+      "reason": "the empty tool root is confirmed configuration, but sanitized evidence does not show that it caused termination"
+    },
+    {
+      "cause": "pipeline_runtime_error",
+      "status": "unknown",
+      "reason": "the stable category intentionally combines provider and pipeline RuntimeError"
+    },
+    {
+      "cause": "provider_response_schema_compatibility",
+      "status": "unknown",
+      "reason": "committed sanitized evidence has no response-schema category"
+    },
+    {
+      "cause": "local_budget_or_timeout_termination",
+      "status": "unknown",
+      "reason": "aggregate ceilings were not exhausted, but local step, token, and deadline terminals were not separately recorded"
+    }
+  ],
+  "evidence_hashes": {
+    "canonical_bundle_sha256": "b76b35da978b6cef5a8de681b849755607f43985c04b5ed45f9a52eaec04e619",
+    "canonical_report_sha256": "c8cded85d2f49182bcb5482e32b324f1cf2e307757f3507946fe042342b7cd2b",
+    "public_run_receipt_sha256": "1c413b0bab5f32678291bbf274aae1a68385fbf387b009a5bfa3aaf8aa02fd20",
+    "authorization_sha256": "cd10de893731c941d018d13d16fefa4d6276992791b9078fe509ec4d7f2dfaf8",
+    "runtime_config_sha256": "ee6161c3216d7d68e7fef60bb24558e866d83955a47b3a5a48a0abdc3ba886fd",
+    "selection_receipt_sha256": "0916821a9c4fb7a8c0ce47cadb7abed02115a87868c46954c14b5a35c00a932c",
+    "committed_final_report_file_sha256": "5de0e61cc09007a8d0aee971eb2b6db326c0d9dc44dddd07a14331b5c3134853",
+    "committed_public_run_receipt_file_sha256": "3265e687695ffb57c1a27a050f126714535271083481e0b0892606361915ab5f",
+    "committed_finalization_audit_file_sha256": "da513d5d17d1f767daea4b828b17953b6ad9254b61717059bc2dbe80f50a31be"
+  },
+  "confidence_boundary": {
+    "evidence_type": "single_participant_exploratory",
+    "root_cause_confidence": "insufficient_for_attribution",
+    "content_evidence_read": false,
+    "repository_external_metadata_read": false,
+    "statement": "The authorized committed evidence confirms the stable aggregate failure category but cannot distinguish provider, response-schema, agent-loop, tool-root, output-limit, or local-terminal causes. Unknowns are not inferred from counts, timing, or fragments."
+  },
+  "phase9i_solo_run_v2": {
+    "real_run_recommended_now": false,
+    "reason": "unresolved root cause",
+    "new_authorization_id_required": true,
+    "new_canonical_authorization_sha256_required": true,
+    "new_denominator_required": true,
+    "may_replace_auth004": false,
+    "new_cohort_required": true,
+    "recommended_limits": {
+      "max_logical_calls": 80,
+      "max_http_attempts": 80,
+      "max_input_tokens": 1500000,
+      "max_output_tokens": 163840,
+      "max_cost_microcny": 15000000,
+      "sdk_max_retries": 0
+    }
+  },
+  "no_rerun": true,
+  "external_calls_made": false,
+  "business_claim_allowed": false,
+  "quality_claim_allowed": false,
+  "formal_quality_status": "incomplete",
+  "model_quality_status": "not_measured"
+}

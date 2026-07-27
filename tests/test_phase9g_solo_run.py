@@ -855,6 +855,420 @@ class Phase9GSoloRunTests(unittest.TestCase):
             )
         underlying.create.assert_not_called()
 
+    def test_phase9h_safe_telemetry_records_normal_glm_tool_call(self) -> None:
+        raw_marker = "synthetic-response-body-must-not-be-retained"
+        argument_marker = "synthetic-tool-arguments-must-not-be-retained"
+
+        class FakeCompletions:
+            def create(self, **_kwargs: object) -> object:
+                return SimpleNamespace(
+                    id="synthetic-response",
+                    model=run.EXPECTED_MODEL,
+                    created=1,
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="tool_calls",
+                            message=SimpleNamespace(
+                                content=raw_marker,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        function=SimpleNamespace(
+                                            name="submit_review",
+                                            arguments=argument_marker,
+                                        )
+                                    )
+                                ],
+                            ),
+                        )
+                    ],
+                    usage=SimpleNamespace(
+                        prompt_tokens=100,
+                        completion_tokens=20,
+                        prompt_tokens_details=SimpleNamespace(cached_tokens=10),
+                    ),
+                )
+
+        gate = run.BudgetedCompletionGate(
+            FakeCompletions(),
+            ledger=run.BudgetLedger(
+                run.BudgetLimits(2, 2, 20_000, 4096, 100_000_000)
+            ),
+            tariff=self.auth3_tariff(),
+            temperature_profile=run.AUTH3_TEMPERATURE_PROFILE,
+        )
+        gate.create(
+            model=run.EXPECTED_MODEL,
+            messages=[],
+            tools=[{"type": "function", "function": {"name": "submit_review"}}],
+            tool_choice="auto",
+            temperature=0,
+        )
+        record = gate.records()[0]
+        telemetry = run.validate_safe_failure_telemetry(
+            {key: record[key] for key in run.SAFE_FAILURE_TELEMETRY_KEYS}
+        )
+        self.assertEqual(telemetry["pipeline_stage"], "finder_anchor")
+        self.assertEqual(telemetry["stable_failure_code"], "none")
+        self.assertEqual(telemetry["finish_reason_category"], "tool_calls")
+        self.assertEqual(telemetry["response_shape_category"], "tool_call")
+        self.assertTrue(telemetry["tool_call_present"])
+        self.assertEqual(telemetry["submit_attempt_count"], 1)
+        self.assertNotIn(raw_marker, repr(record))
+        self.assertNotIn(argument_marker, repr(record))
+
+    def test_phase9h_glm_response_shape_matrix_uses_only_fixed_categories(self) -> None:
+        def response(
+            *,
+            content: object = None,
+            tool_calls: object = None,
+            finish_reason: object = "stop",
+            output_tokens: int = 20,
+            choices: object = "one",
+        ) -> object:
+            actual_choices: object
+            if choices == "missing":
+                actual_choices = None
+            else:
+                actual_choices = [
+                    SimpleNamespace(
+                        finish_reason=finish_reason,
+                        message=SimpleNamespace(
+                            content=content,
+                            tool_calls=tool_calls,
+                        ),
+                    )
+                ]
+            return SimpleNamespace(
+                id="synthetic-response",
+                model=run.EXPECTED_MODEL,
+                created=1,
+                choices=actual_choices,
+                usage=SimpleNamespace(
+                    prompt_tokens=100,
+                    completion_tokens=output_tokens,
+                    prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                ),
+            )
+
+        malformed_call = SimpleNamespace(
+            function=SimpleNamespace(name="submit_review", arguments=None)
+        )
+        cases = (
+            ("empty", response(), "empty_response", "empty", "stop", False),
+            (
+                "text-only",
+                response(content="raw-text-not-retained"),
+                "text_only_response",
+                "text_only",
+                "stop",
+                False,
+            ),
+            (
+                "malformed-tool",
+                response(tool_calls=[malformed_call], finish_reason="tool_calls"),
+                "malformed_tool_arguments",
+                "malformed_tool_call",
+                "tool_calls",
+                False,
+            ),
+            (
+                "output-exhaustion",
+                response(
+                    content="truncated-not-retained",
+                    finish_reason="length",
+                    output_tokens=run.PER_CALL_MAX_OUTPUT_TOKENS,
+                ),
+                "output_token_limit",
+                "text_only",
+                "length",
+                True,
+            ),
+            (
+                "abnormal-finish",
+                response(content="filtered-not-retained", finish_reason="content_filter"),
+                "abnormal_finish_reason",
+                "text_only",
+                "content_filter",
+                False,
+            ),
+            (
+                "missing-choices",
+                response(choices="missing"),
+                "provider_response_schema",
+                "missing_choices",
+                "missing",
+                False,
+            ),
+        )
+        for label, fake_response, failure, shape, finish, output_limit in cases:
+            with self.subTest(label=label):
+                completions = mock.Mock()
+                completions.create.return_value = fake_response
+                gate = run.BudgetedCompletionGate(
+                    completions,
+                    ledger=run.BudgetLedger(
+                        run.BudgetLimits(2, 2, 20_000, 4096, 100_000_000)
+                    ),
+                    tariff=self.auth3_tariff(),
+                    temperature_profile=run.AUTH3_TEMPERATURE_PROFILE,
+                )
+                gate.create(
+                    model=run.EXPECTED_MODEL,
+                    messages=[],
+                    tools=[],
+                    tool_choice="auto",
+                    temperature=0,
+                )
+                record = gate.records()[0]
+                self.assertEqual(record["stable_failure_code"], failure)
+                self.assertEqual(record["response_shape_category"], shape)
+                self.assertEqual(record["finish_reason_category"], finish)
+                self.assertEqual(record["output_limit_reached"], output_limit)
+                self.assertTrue(record["redaction_applied"])
+                self.assertNotIn("not-retained", repr(record))
+
+    def test_phase9h_consecutive_empty_and_provider_exception_are_content_free(self) -> None:
+        empty = SimpleNamespace(
+            id="synthetic-empty",
+            model=run.EXPECTED_MODEL,
+            created=1,
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop",
+                    message=SimpleNamespace(content="", tool_calls=[]),
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=0,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+        completions = mock.Mock()
+        completions.create.side_effect = [
+            empty,
+            empty,
+            RuntimeError("provider-message-must-not-be-retained"),
+        ]
+        gate = run.BudgetedCompletionGate(
+            completions,
+            ledger=run.BudgetLedger(
+                run.BudgetLimits(3, 3, 60_000, 6144, 100_000_000)
+            ),
+            tariff=self.auth3_tariff(),
+            temperature_profile=run.AUTH3_TEMPERATURE_PROFILE,
+        )
+        request = {
+            "model": run.EXPECTED_MODEL,
+            "messages": [],
+            "tools": [],
+            "tool_choice": "auto",
+            "temperature": 0,
+        }
+        gate.create(**request)
+        gate.create(**request)
+        empty_summary = run._headline_failure_telemetry(
+            gate.records(),
+            error_category="provider_or_pipeline_RuntimeError",
+            status="failed",
+        )
+        self.assertEqual(empty_summary["stable_failure_code"], "empty_response_after_retry")
+        self.assertEqual(empty_summary["empty_response_count"], 2)
+        with self.assertRaises(RuntimeError):
+            gate.create(**request)
+        records = gate.records()
+        self.assertEqual(records[-1]["provider_exception_type"], "runtime_error")
+        self.assertEqual(
+            records[-1]["stable_failure_code"],
+            "provider_or_pipeline_runtime_error",
+        )
+        self.assertNotIn("provider-message-must-not-be-retained", repr(records))
+        used = gate._ledger.snapshot()
+        self.assertEqual(used.logical_calls, 3)
+        self.assertEqual(used.http_attempts, 3)
+
+    def test_phase9h_fixed_terminal_codes_cover_caps_submits_and_empty_root(self) -> None:
+        cases = (
+            ("finder_anchor", "finder_step_cap", 10, 0),
+            ("verifier", "verifier_step_cap", 6, 0),
+            ("verifier", "invalid_submit_limit", 2, 2),
+            ("finder_anchor", "tool_call_loop", 10, 0),
+            ("finder_anchor", "empty_tool_root_loop", 3, 0),
+        )
+        for stage, code, steps, submits in cases:
+            with self.subTest(code=code):
+                telemetry = run.safe_terminal_failure_telemetry(
+                    pipeline_stage=stage,
+                    stable_failure_code=code,
+                    step_count=steps,
+                    submit_attempt_count=submits,
+                    tool_call_present=True,
+                    usage_known=True,
+                )
+                self.assertEqual(telemetry["stable_failure_code"], code)
+                self.assertEqual(telemetry["step_count"], steps)
+                self.assertEqual(telemetry["submit_attempt_count"], submits)
+                self.assertFalse(run.contains_forbidden_content(telemetry))
+
+    def test_phase9h_fake_submit_loops_reach_step_cap_and_bad_submit_limit(self) -> None:
+        from code_review_agent.agentloop import run_submit_loop
+
+        class FakeSession:
+            def execute(self, _name: str, _arguments: str) -> str:
+                return "fixed-empty-root-result"
+
+        class FakeCompletions:
+            def __init__(self, tool_name: str) -> None:
+                self.tool_name = tool_name
+
+            def create(self, **_kwargs: object) -> object:
+                return SimpleNamespace(
+                    id="synthetic-loop-response",
+                    model=run.EXPECTED_MODEL,
+                    created=1,
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="tool_calls",
+                            message=SimpleNamespace(
+                                content=None,
+                                tool_calls=[
+                                    SimpleNamespace(
+                                        id="synthetic-call",
+                                        function=SimpleNamespace(
+                                            name=self.tool_name,
+                                            arguments="{}",
+                                        ),
+                                    )
+                                ],
+                            ),
+                        )
+                    ],
+                    usage=SimpleNamespace(
+                        prompt_tokens=10,
+                        completion_tokens=5,
+                        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+                    ),
+                )
+
+        def gate(tool_name: str) -> run.BudgetedCompletionGate:
+            return run.BudgetedCompletionGate(
+                FakeCompletions(tool_name),
+                ledger=run.BudgetLedger(
+                    run.BudgetLimits(2, 2, 100_000, 4096, 100_000_000)
+                ),
+                tariff=self.auth3_tariff(),
+                temperature_profile=run.AUTH3_TEMPERATURE_PROFILE,
+            )
+
+        finder_gate = gate("search_repo")
+        finder_result = run_submit_loop(
+            run.BudgetedOpenAIClient(finder_gate),
+            run.EXPECTED_MODEL,
+            [],
+            explore_tools=[{"type": "function", "function": {"name": "search_repo"}}],
+            submit_tool={"type": "function", "function": {"name": "submit_review"}},
+            parse=lambda _raw: ({}, []),
+            session=FakeSession(),
+            max_steps=2,
+            max_submit_attempts=2,
+            max_tokens=run.PER_CALL_MAX_OUTPUT_TOKENS,
+            temperature=0,
+            budget_msg="fixed-budget-message",
+            reject_msg=lambda _problems: "fixed-rejection",
+        )
+        finder_telemetry = run.safe_loop_result_telemetry(
+            pipeline_stage="finder_anchor",
+            reason=finder_result.reason,
+            step_count=finder_result.steps,
+            tool_call_present=True,
+            usage_known=True,
+        )
+        self.assertEqual(finder_result.reason, "step_cap")
+        self.assertEqual(finder_telemetry["stable_failure_code"], "finder_step_cap")
+
+        verifier_gate = gate("submit_verdicts")
+        verifier_result = run_submit_loop(
+            run.BudgetedOpenAIClient(verifier_gate),
+            run.EXPECTED_MODEL,
+            [],
+            explore_tools=[],
+            submit_tool={"type": "function", "function": {"name": "submit_verdicts"}},
+            parse=lambda _raw: (None, ["fixed-invalid-submit"]),
+            session=FakeSession(),
+            max_steps=2,
+            max_submit_attempts=2,
+            max_tokens=run.PER_CALL_MAX_OUTPUT_TOKENS,
+            temperature=0,
+            budget_msg="fixed-budget-message",
+            reject_msg=lambda _problems: "fixed-rejection",
+            on_text_answer="count",
+        )
+        verifier_telemetry = run.safe_loop_result_telemetry(
+            pipeline_stage="verifier",
+            reason=verifier_result.reason,
+            step_count=verifier_result.steps,
+            submit_attempt_count=2,
+            tool_call_present=True,
+            usage_known=True,
+        )
+        self.assertEqual(verifier_result.reason, "bad_submits")
+        self.assertEqual(
+            verifier_telemetry["stable_failure_code"], "invalid_submit_limit"
+        )
+        self.assertNotIn("fixed-invalid-submit", repr(verifier_telemetry))
+
+    def test_phase9h_empty_tool_root_outputs_never_enter_safe_telemetry(self) -> None:
+        from code_review_agent.tools import ToolSession
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = ToolSession(Path(directory))
+            search_result = session.execute(
+                "search_repo", '{"pattern":"raw-search-pattern"}'
+            )
+            read_result = session.execute(
+                "read_file", '{"path":"raw-missing-file.py"}'
+            )
+        self.assertIsInstance(search_result, str)
+        self.assertIsInstance(read_result, str)
+        telemetry = run.safe_terminal_failure_telemetry(
+            pipeline_stage="finder_anchor",
+            stable_failure_code="empty_tool_root_loop",
+            step_count=2,
+            tool_call_present=True,
+            usage_known=True,
+        )
+        serialized = repr(telemetry)
+        self.assertNotIn("raw-search-pattern", serialized)
+        self.assertNotIn("raw-missing-file.py", serialized)
+
+    def test_phase9h_failure_analysis_preserves_auth004_and_rejects_diagnostics(self) -> None:
+        analysis_path = (
+            Path(run.__file__).resolve().parent
+            / "phase9g_solo_run"
+            / "phase9h-failure-analysis.json"
+        )
+        analysis = run.validate_phase9h_failure_analysis(solo.load_json(analysis_path))
+        self.assertEqual(
+            analysis["headline_outcome"],
+            {
+                "selected_prs": 5,
+                "headline_attempts": 5,
+                "completed": 0,
+                "failed": 5,
+                "diagnostic_attempts": 0,
+                "successful_reruns": 0,
+            },
+        )
+        self.assertFalse(analysis["phase9i_solo_run_v2"]["real_run_recommended_now"])
+        self.assertFalse(analysis["phase9i_solo_run_v2"]["may_replace_auth004"])
+        for field in ("diagnostic_attempts", "successful_reruns"):
+            tampered = run.json.loads(run.json.dumps(analysis))
+            tampered["headline_outcome"][field] = 1
+            with self.assertRaisesRegex(
+                run.RunValidationError, "five failed auth-004 headlines"
+            ):
+                run.validate_phase9h_failure_analysis(tampered)
+
     def test_auth3_executor_fake_preserves_two_blocks_and_runs_three(self) -> None:
         class FakeCompletions:
             def create(self, **_kwargs: object) -> object:
