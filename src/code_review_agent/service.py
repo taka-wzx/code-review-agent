@@ -186,6 +186,7 @@ class HttpSettings:
             {"127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"}
         ),
         local_token_enabled: bool = True,
+        local_token_behind_loopback_publish: bool = False,
         worker_stale_seconds: float = 30.0,
     ) -> None:
         if service_token and len(service_token.encode("utf-8")) < 32:
@@ -198,6 +199,23 @@ class HttpSettings:
             raise InvalidRequest("CRAG_ALLOWED_ORIGINS must contain exact HTTP origins")
         if not allowed_hosts or any("/" in item or " " in item for item in allowed_hosts):
             raise InvalidRequest("CRAG_ALLOWED_HOSTS must contain exact host values")
+        if local_token_behind_loopback_publish:
+            if not local_token_enabled:
+                raise InvalidRequest(
+                    "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH requires local token mode"
+                )
+            loopback_origins = frozenset({"http://127.0.0.1", "http://localhost"})
+            loopback_hosts = frozenset(
+                {"127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*"}
+            )
+            if not allowed_origins.issubset(loopback_origins):
+                raise InvalidRequest(
+                    "trusted loopback publication requires loopback-only origins"
+                )
+            if not allowed_hosts.issubset(loopback_hosts):
+                raise InvalidRequest(
+                    "trusted loopback publication requires loopback-only hosts"
+                )
         if not 1 <= worker_stale_seconds <= 3600:
             raise InvalidRequest("CRAG_WORKER_STALE_SECONDS must be between 1 and 3600")
         self.service_token = service_token
@@ -205,6 +223,7 @@ class HttpSettings:
         self.allowed_origins = allowed_origins
         self.allowed_hosts = allowed_hosts
         self.local_token_enabled = local_token_enabled
+        self.local_token_behind_loopback_publish = local_token_behind_loopback_publish
         self.worker_stale_seconds = worker_stale_seconds
 
     @classmethod
@@ -222,6 +241,14 @@ class HttpSettings:
             "true",
             "yes",
         }
+        raw_loopback_publish = os.environ.get(
+            "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH", ""
+        ).casefold()
+        if raw_loopback_publish not in {"", "0", "false", "no", "1", "true", "yes"}:
+            raise InvalidRequest(
+                "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH must be boolean"
+            )
+        loopback_publish = raw_loopback_publish in {"1", "true", "yes"}
         try:
             worker_stale_seconds = float(
                 os.environ.get("CRAG_WORKER_STALE_SECONDS", "30")
@@ -236,6 +263,7 @@ class HttpSettings:
             allowed_origins=origins,
             allowed_hosts=hosts,
             local_token_enabled=local_token_enabled,
+            local_token_behind_loopback_publish=loopback_publish,
             worker_stale_seconds=worker_stale_seconds,
         )
 
@@ -1006,8 +1034,14 @@ def _port(value: str) -> int:
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     settings = HttpSettings.from_env()
-    if settings.local_token_enabled and args.host not in {"127.0.0.1", "localhost", "::1"}:
-        raise SystemExit("local token mode may only bind to a loopback host")
+    loopback_bind = args.host in {"127.0.0.1", "localhost", "::1"}
+    trusted_container_bind = (
+        args.host == "0.0.0.0" and settings.local_token_behind_loopback_publish
+    )
+    if settings.local_token_enabled and not (loopback_bind or trusted_container_bind):
+        raise SystemExit(
+            "local token mode requires loopback binding or trusted loopback publication"
+        )
     app = create_app(settings=settings)
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
 

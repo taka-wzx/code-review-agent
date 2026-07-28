@@ -1,6 +1,6 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — staging Python mirror remediation authorized for offline
+Status: **active — staging loopback-publication remediation authorized for offline
 implementation; deployment execution still requires a separate explicit confirmation**
 
 Frozen baseline: `origin/master` at
@@ -42,7 +42,7 @@ kept out of the repository.
 | --- | --- |
 | staging account/project | Owner-operated Alibaba Cloud ECS instance `i-bp12vpivp8pdpr0uq7uf`; no account identifier is recorded |
 | region/namespace | `cn-hangzhou`; host namespace `/opt/crag-synthetic-staging` |
-| staging hostname/URL | `http://127.0.0.1:8000` through an operator SSH tunnel only; no public hostname |
+| staging hostname/URL | `http://127.0.0.1:8000` through an operator SSH tunnel only; the API may bind container `0.0.0.0` only with `CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH=true`, loopback-only Host/Origin allowlists, and Compose host publication fixed to `127.0.0.1`; no public hostname |
 | container registry | No application-image registry; application-image push/pull is prohibited, the frozen source is built on the staging host, and the local image ID is recorded; public base-image pulls require the second confirmation |
 | build dependency mirrors | Docker builds default to `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may explicitly set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; Dockerfiles reject every other value |
 | database instance/volume | Compose `postgres:16-alpine` on the same ECS host with the `postgres_data` named volume; port 5432 is not published |
@@ -66,13 +66,15 @@ claim deployment success, or move a PR to Ready.
 Two bounded deployment windows on 2026-07-28 stopped before image creation because
 `deb.debian.org` package downloads did not finish before their hard timeouts. A third
 window used the allowlisted Alibaba Debian mirror and reached the Python dependency
-install, but downloads from `pypi.org` exceeded the build hard timeout. Every attempt
-retained zero Compose containers, volumes, and networks and ran no migration, service,
-smoke, or backup/restore operation. The owner subsequently authorized this offline
-Python mirror-parameter remediation only. Its executable-code commit, source archive,
-authorization record SHA, rendered Compose SHA, and local image ID must all be frozen
-again before another deployment window; evidence from any stopped attempt cannot be
-reused as deployment-success evidence.
+install, but downloads from `pypi.org` exceeded the build hard timeout. A fourth window
+successfully built the image and migrated PostgreSQL to `0007_phase11a_repair`, then the
+API correctly rejected local-token mode on container `0.0.0.0`; the operator removed all
+containers and networks, retained the image and two named volumes, and ran no smoke or
+backup/restore operation. The owner subsequently authorized this offline loopback-
+publication remediation only. Its executable-code commit, source archive, authorization
+record SHA, rendered Compose SHA, and local image ID must all be frozen again before
+another deployment window; evidence from any stopped attempt cannot be reused as
+deployment-success evidence.
 
 ## Goal and architecture
 

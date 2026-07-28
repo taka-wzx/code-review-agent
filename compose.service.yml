@@ -89,6 +89,7 @@ services:
       <<: [*service-environment, *synthetic-repair-environment]
       CRAG_WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
       CRAG_ALLOW_LOCAL_TOKEN: ${CRAG_ALLOW_LOCAL_TOKEN:-false}
+      CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH: ${CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH:-false}
       CRAG_SERVICE_TOKEN_FILE: /run/secrets/service_token
       CRAG_SERVICE_HOST: ${CRAG_SERVICE_HOST:-0.0.0.0}
       CRAG_SERVICE_PORT: 8000

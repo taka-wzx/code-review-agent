@@ -2,8 +2,8 @@
 
 ## Current status
 
-**Zero-incremental-cost staging preparation is authorized. Deployment execution still
-requires a separate explicit confirmation. Not deployed. Not Ready.**
+**Loopback-publication remediation is authorized for offline implementation. Deployment
+execution still requires a separate explicit confirmation. Not deployed. Not Ready.**
 
 This phase retains the immutable declarations below in every synthetic response and
 receipt:
@@ -76,7 +76,7 @@ The owner authorized the following preparation profile on 2026-07-28:
 | --- | --- |
 | Target | Owner-operated Alibaba Cloud ECS `i-bp12vpivp8pdpr0uq7uf` in `cn-hangzhou` |
 | Host namespace | `/opt/crag-synthetic-staging` |
-| Access URL | `http://127.0.0.1:8000` through an SSH tunnel; no public listener, hostname, DNS, or TLS change |
+| Access URL | `http://127.0.0.1:8000` through an SSH tunnel; container `0.0.0.0` is allowed only with the explicit trusted loopback-publication flag, loopback-only Host/Origin allowlists, and Compose host publication fixed to `127.0.0.1`; no public listener, hostname, DNS, or TLS change |
 | Image path | No registry; build the frozen source on the host and record the resulting local image ID |
 | Build mirrors | Defaults are `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; all other values fail the Docker build |
 | Database | Same-host Compose Postgres with the `postgres_data` volume; no published database port |
@@ -98,10 +98,11 @@ until the owner gives the required second confirmation, do not:
 Two authorized, bounded windows on 2026-07-28 reached their build hard timeout while
 downloading Debian packages from `deb.debian.org`. A third window selected the Alibaba
 Debian mirror and reached the Python dependency install, but `pypi.org` downloads did
-not finish before the build hard timeout. Every attempt stopped before creating the
-application image. Final audits reported zero Compose containers, volumes, and networks
-and confirmed that migration, services, synthetic smoke, and backup/restore had not run.
-These are failure receipts, not staging-validation evidence.
+not finish before the build hard timeout. A fourth window built the application image
+and migrated PostgreSQL to `0007_phase11a_repair`, then stopped when the API rejected
+local-token mode on container `0.0.0.0`. The operator removed every container and
+network, retained the image and two named volumes, and did not run synthetic smoke or
+backup/restore. These are failure receipts, not staging-validation evidence.
 
 The approved remediation keeps the fail-closed `DEBIAN_MIRROR` build argument and adds
 a fail-closed `PYPI_INDEX_URL` argument. Dockerfiles default to the upstream Debian and
@@ -110,8 +111,12 @@ The staging environment must explicitly select both Alibaba values through
 `CRAG_DEBIAN_MIRROR` and `CRAG_PYPI_INDEX_URL`; arbitrary mirrors are rejected. The
 endpoints are listed in the [Alibaba Cloud Debian mirror documentation](https://developer.aliyun.com/mirror/debian)
 and [Alibaba Cloud PyPI mirror documentation](https://developer.aliyun.com/mirror/pypi).
-This code change invalidates the previous source archive and rendered Compose hash, so
-all freeze evidence must be regenerated before another deployment window.
+The approved loopback-publication remediation adds an explicit
+`CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH` gate. It permits only container `0.0.0.0`,
+requires local-token mode plus loopback-only Host/Origin allowlists, and remains paired
+with Compose publication on host `127.0.0.1`. The default remains disabled. This code
+change invalidates the previous source archive and rendered Compose hash, so all freeze
+evidence must be regenerated before another deployment window.
 
 ## Prepared deployment sequence
 
@@ -130,9 +135,11 @@ confirmation:
 4. Set only non-secret Compose paths and the filtered build context in a root-owned
    environment file. For `cn-hangzhou`, set
    `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and
-   `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`. Render
-   `docker compose config` and reject any non-allowlisted mirror, provider key, GitHub
-   writer, real repository mount, non-loopback API publication, or database publication.
+   `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`, and enable
+   `CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH=true` only for the loopback-published API.
+   Render `docker compose config` and reject any non-allowlisted mirror, provider key,
+   GitHub writer, real repository mount, non-loopback API publication, non-loopback
+   Host/Origin allowlist, or database publication.
 5. Pull only the existing public base images required by the frozen Dockerfiles, build
    the local service image, record its immutable local image ID, and record the rendered
    deployment-configuration SHA-256. Any billable registry or add-on aborts the window.

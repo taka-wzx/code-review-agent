@@ -38,8 +38,8 @@ from code_review_agent.repair_service import (
     synthetic_repair_policy,
     validate_synthetic_runtime_environment,
 )
-from code_review_agent.service import HttpSettings, create_app
-from code_review_agent.service_core import RepositoryRegistry, ReviewService
+from code_review_agent.service import HttpSettings, create_app, main as service_main
+from code_review_agent.service_core import InvalidRequest, RepositoryRegistry, ReviewService
 from code_review_agent.service_queue import JobStore
 
 
@@ -453,6 +453,12 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
         self.assertIn(
             "PYPI_INDEX_URL: ${CRAG_PYPI_INDEX_URL:-https://pypi.org/simple}", compose
         )
+        self.assertIn(
+            "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH: "
+            "${CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH:-false}",
+            compose,
+        )
+        self.assertIn('"127.0.0.1:${CRAG_PUBLISHED_PORT:-8000}:8000"', compose)
         for dockerfile in (service_dockerfile, repair_dockerfile):
             self.assertIn("ARG DEBIAN_MIRROR=https://deb.debian.org", dockerfile)
             self.assertIn("https://deb.debian.org|https://mirrors.aliyun.com", dockerfile)
@@ -465,6 +471,38 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
             self.assertIn('--index-url "$PYPI_INDEX_URL"', dockerfile)
         self.assertIn("USER 65532:65532", repair_dockerfile)
         self.assertIn("--no-create-home", repair_dockerfile)
+
+    def test_local_token_container_bind_requires_trusted_loopback_publication(self) -> None:
+        untrusted = HttpSettings(
+            service_token="s" * 32,
+            webhook_secret="phase11a-webhook-secret-value",
+        )
+        with patch(
+            "code_review_agent.service.HttpSettings.from_env", return_value=untrusted
+        ):
+            with self.assertRaisesRegex(SystemExit, "trusted loopback publication"):
+                service_main(["--host", "0.0.0.0"])
+
+        trusted = HttpSettings(
+            service_token="s" * 32,
+            webhook_secret="phase11a-webhook-secret-value",
+            local_token_behind_loopback_publish=True,
+        )
+        with (
+            patch("code_review_agent.service.HttpSettings.from_env", return_value=trusted),
+            patch("code_review_agent.service.create_app", return_value=object()),
+            patch("code_review_agent.service.uvicorn.run") as uvicorn_run,
+        ):
+            service_main(["--host", "0.0.0.0"])
+        uvicorn_run.assert_called_once()
+
+        with self.assertRaisesRegex(InvalidRequest, "loopback-only hosts"):
+            HttpSettings(
+                service_token="s" * 32,
+                webhook_secret="phase11a-webhook-secret-value",
+                allowed_hosts=frozenset({"staging.example.com"}),
+                local_token_behind_loopback_publish=True,
+            )
 
     def test_unsafe_repair_values_fail_closed_at_the_schema_boundary(self) -> None:
         policy = synthetic_repair_policy()
