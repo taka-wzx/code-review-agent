@@ -198,13 +198,15 @@ class DryRunDraftPrPublisher(FakeDraftPrPublisher):
         return receipt
 
 
-class GitHubDraftPrPublisher:
-    """Disabled interface placeholder; real GitHub writes are not authorized."""
+from code_review_agent.github_sandbox_publish import (  # noqa: E402
+    GitHubDraftPrPublisher as _GitHubDraftPrPublisher,
+)
 
-    def publish(self, request: DraftPrRequest) -> DraftPrReceipt:
-        del request
-        raise DraftPrPublicationError("github_draft_pr_publisher_disabled")
 
-    def lookup(self, idempotency_key: str) -> DraftPrReceipt | None:
-        del idempotency_key
-        return None
+class GitHubDraftPrPublisher(_GitHubDraftPrPublisher):
+    """Phase 10-compatible facade over the Phase 11B configured adapter."""
+
+    def publish(self, request: Any) -> Any:
+        if not self._enabled:
+            raise DraftPrPublicationError("github_draft_pr_publisher_disabled")
+        return super().publish(request)
