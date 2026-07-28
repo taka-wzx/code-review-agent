@@ -2,7 +2,8 @@
 
 ## Current status
 
-**Offline implementation and local synthetic validation only. Not deployed. Not Ready.**
+**Zero-incremental-cost staging preparation is authorized. Deployment execution still
+requires a separate explicit confirmation. Not deployed. Not Ready.**
 
 This phase retains the immutable declarations below in every synthetic response and
 receipt:
@@ -69,20 +70,71 @@ a production readiness claim.
 
 ## Deployment gate and required handoff
 
-The task currently lacks the staging account/project, region/namespace, hostname,
-registry, database/volume, permitted API/image/migration/backup operations, DNS/TLS
-authority, deployment window, cost cap, incident owner, and approved secret injection
-method. Therefore do not:
+The owner authorized the following preparation profile on 2026-07-28:
 
-- deploy API/worker/Postgres/migration services;
-- push an image, record an immutable registry digest, or alter DNS/TLS;
+| Field | Recorded value |
+| --- | --- |
+| Target | Owner-operated Alibaba Cloud ECS `i-bp12vpivp8pdpr0uq7uf` in `cn-hangzhou` |
+| Host namespace | `/opt/crag-synthetic-staging` |
+| Access URL | `http://127.0.0.1:8000` through an SSH tunnel; no public listener, hostname, DNS, or TLS change |
+| Image path | No registry; build the frozen source on the host and record the resulting local image ID |
+| Database | Same-host Compose Postgres with the `postgres_data` volume; no published database port |
+| Secrets | Root-owned `0600` files below `/opt/crag-synthetic-staging/secrets`, consumed only through `*_FILE` |
+| Window and cost | At most 60 minutes after a separate deployment confirmation; CNY 0 incremental spend |
+| Owner | Repository and Alibaba Cloud account owner controls incident response and rollback |
+
+This authorization permits documentation and deployment preparation only. Therefore,
+until the owner gives the required second confirmation, do not:
+
+- connect to or mutate the staging host, transfer source, or pull/build an image;
+- deploy API/worker/Postgres/migration services or record a local image ID;
+- push an image or alter DNS/TLS;
 - run a staging migration or staging backup/restore drill;
 - transition a pull request to Ready or report Phase 11A completed.
 
-When those values are supplied, the operator must first freeze and record the code
-commit SHA, immutable image digest, authorization SHA, and deployment configuration SHA.
-Then run the explicit migration job before API/worker startup, inject secrets only via a
-secret manager or `*_FILE`, verify TLS and real maintainer/admin identity, verify
-health/readiness independently for process/database/migration/worker, perform the
-authorized backup/restore drill, and retain only a redacted deployment report with its
-SHA-256. Any executable-code change after external validation invalidates that result.
+## Prepared deployment sequence
+
+The following sequence is documentation only and must not be executed before the second
+confirmation:
+
+1. Confirm the ECS identity and `cn-hangzhou` region, confirm Docker/Compose health,
+   confirm that SSH 22 is restricted to the operator's current `/32`, and confirm that
+   ports 8000 and 5432 are not present in any public security-group rule.
+2. Require a clean task worktree, freeze the exact commit SHA, create a tracked-files-only
+   archive with `git archive`, calculate its SHA-256 locally, transfer it into a new
+   `/opt/crag-synthetic-staging/incoming` directory, and verify the same hash remotely.
+3. Create `/opt/crag-synthetic-staging/secrets` as root with mode `0700`. Generate unique
+   Postgres, webhook, and service-token values directly on the host as `0600` files.
+   Never print, download, or paste those values.
+4. Set only non-secret Compose paths and the filtered build context in a root-owned
+   environment file. Render `docker compose config` and reject any provider key, GitHub
+   writer, real repository mount, non-loopback API publication, or database publication.
+5. Pull only the existing public base images required by the frozen Dockerfiles, build
+   the local service image, record its immutable local image ID, and record the rendered
+   deployment-configuration SHA-256. Any billable registry or add-on aborts the window.
+6. Start Postgres alone, run the explicit `migrate` profile exactly once, record the
+   migration result, and start API/Review worker/synthetic Repair worker only after the
+   exact Alembic head check passes.
+7. Verify container hardening, loopback-only publication, database and migration
+   readiness, API health/readiness, worker heartbeat, fake-only adapters, zero real model
+   calls, zero real repository writes, and redacted metrics/receipts.
+8. Access the API only with an SSH local-forward to `127.0.0.1:8000`. No HTTP, HTTPS,
+   database, or management port is opened to the Internet.
+9. After separate backup/restore confirmation within the same window, create a local
+   logical backup, restore it into an isolated verification database, compare bounded
+   consistency evidence, and retain only the redacted report hash.
+10. On any failed gate, stop API/workers, preserve the database volume and redacted logs,
+    record the failure, and leave the public security group unchanged. Do not claim a
+    successful deployment.
+
+Before execution the operator must still record the frozen commit SHA, authorization
+record SHA, rendered deployment-configuration SHA, and then the local image ID. Any
+executable-code change after validation invalidates the result. The zero-cost, no-DNS,
+SSH-tunnel profile deliberately does not provide public TLS or production-readiness
+evidence.
+
+The second confirmation must explicitly authorize the bounded 60-minute window and the
+following mutations: tracked-source transfer, public base-image pulls, local image
+build, Postgres volume creation/start, explicit schema migration, API/worker start, and
+synthetic smoke validation. Backup/restore remains excluded unless that confirmation
+names it. A generic request to continue is not deployment authority.

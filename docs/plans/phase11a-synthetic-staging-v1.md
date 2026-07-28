@@ -1,7 +1,7 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — offline contract and implementation only; deployment authorization
-is incomplete**
+Status: **active — zero-incremental-cost staging preparation authorized; deployment
+execution still requires a separate explicit confirmation**
 
 Frozen baseline: `origin/master` at
 `21344a2b72be8cb83361875b5cc8f2952e99ffbf`
@@ -32,30 +32,35 @@ success never changes that evidence or either claim gate.
 
 ## Deployment authorization gate
 
-The following mandatory fields were intentionally not supplied with the task request:
+The repository and Alibaba Cloud account owner authorized the zero-incremental-cost
+preparation profile on 2026-07-28. This records the target and permitted preparation
+design, but deliberately does not authorize any deployment-side mutation. Account IDs,
+SSH private keys, secret values, and the operator's dynamic source IP are intentionally
+kept out of the repository.
 
 | Required deployment authority | Value |
 | --- | --- |
-| staging account/project | **missing** |
-| region/namespace | **missing** |
-| staging hostname/URL | **missing** |
-| container registry | **missing** |
-| database instance/volume | **missing** |
-| deploy API / push staging image / run schema migration / backup-restore | **missing** |
-| DNS/TLS change authority | **missing** |
-| deployment window and cost ceiling | **missing** |
-| rollback/incident owner | **missing** |
-| secret-manager or `*_FILE` injection method | **missing** |
+| staging account/project | Owner-operated Alibaba Cloud ECS instance `i-bp12vpivp8pdpr0uq7uf`; no account identifier is recorded |
+| region/namespace | `cn-hangzhou`; host namespace `/opt/crag-synthetic-staging` |
+| staging hostname/URL | `http://127.0.0.1:8000` through an operator SSH tunnel only; no public hostname |
+| container registry | No application-image registry; application-image push/pull is prohibited, the frozen source is built on the staging host, and the local image ID is recorded; public base-image pulls require the second confirmation |
+| database instance/volume | Compose `postgres:16-alpine` on the same ECS host with the `postgres_data` named volume; port 5432 is not published |
+| deploy API / push staging image / run schema migration / backup-restore | Preparation only is authorized; source transfer, base-image pull/build, migration, service start, and local backup/restore each remain blocked until the next explicit deployment confirmation |
+| DNS/TLS change authority | No DNS or TLS change is authorized; loopback publication plus SSH tunneling is mandatory |
+| deployment window and cost ceiling | One operator window of at most 60 minutes starts only after the next explicit confirmation; incremental spend ceiling is CNY 0 and any billable add-on aborts the operation |
+| rollback/incident owner | The repository and Alibaba Cloud account owner; Codex may act only within the confirmed window and must stop on owner request or gate failure |
+| secret-manager or `*_FILE` injection method | Root-owned host files below `/opt/crag-synthetic-staging/secrets`, mode `0600`, mounted through the existing Compose `*_FILE` declarations; values never enter Git, logs, receipts, or chat |
 
 External telemetry, real model/API calls, paid calls, product-side GitHub API or writes,
 and real repository/user data are prohibited. Local commits, task-branch pushes, and a
 Draft PR are authorized; agent push/merge to `master` and auto-merge are prohibited.
 
-Until every mandatory field above is filled and independently recorded, this task may
-implement and validate offline synthetic controls only. It must not deploy, run a
-migration against a staging database, create an image in a registry, make DNS/TLS
-changes, conduct backup/restore against staging, claim deployment success, or move a PR
-to Ready.
+The target profile is now recorded, but the operation-authority row intentionally keeps
+the execution gate closed. Until the owner separately confirms actual deployment, this
+task may prepare documentation and validate offline synthetic controls only. It must not
+connect to or mutate the staging host, transfer source, pull or build images, run a
+migration, start services, make DNS/TLS changes, conduct backup/restore against staging,
+claim deployment success, or move a PR to Ready.
 
 ## Goal and architecture
 
@@ -171,10 +176,10 @@ the executable/runtime is unavailable; such a skip is not staging validation.
 
 Before delivery, inspect every changed file and audit it for unauthorized scope and
 sensitive data. A stable local task-branch commit, push of this task branch only, and a
-Draft PR are permitted after offline validation. Because the deployment authorization
-gate is incomplete, no staging deployment receipt, image digest, authorization SHA,
-deployment configuration SHA, Ready transition, merge, or completed-phase claim may be
-made in this task state.
+Draft PR are permitted after offline validation. Because deployment execution still
+requires a second confirmation, no staging host mutation, deployment receipt, image ID,
+authorization SHA, deployment configuration SHA, Ready transition, merge, or
+completed-phase claim may be made in this task state.
 
 ## Change control
 
