@@ -167,6 +167,105 @@ Before a Phase 11B push or real canary:
    `scripts/verify.py`, `pip check`, and diff/leak checks;
 6. freeze a new Phase 11B executable code SHA and discard all pre-rebase code evidence.
 
+Run the following from the clean Phase 11B worktree only after the owner confirms the
+Phase 11A merge and its green master CI result. Replace both placeholders before
+running; this block intentionally performs no push, PR creation, merge, or canary:
+
+```powershell
+$Phase11AMerge = "<actual 40-character Phase 11A merge SHA>"
+$Phase11ACiRun = "<green Phase 11A master CI URL or run ID>"
+$StackedBase = "567bd3cf9fe97774ce2177275d325c7d30ff1631"
+$TaskBranch = "codex/phase11b-github-sandbox-canary-v1"
+
+if ($Phase11AMerge -notmatch '^[0-9a-f]{40}$') {
+    throw "Fill the exact Phase 11A merge SHA first"
+}
+if ([string]::IsNullOrWhiteSpace($Phase11ACiRun) -or $Phase11ACiRun.StartsWith("<")) {
+    throw "Record the green Phase 11A master CI URL or run ID first"
+}
+if ((git branch --show-current).Trim() -ne $TaskBranch) {
+    throw "Open the Phase 11B task worktree before integration"
+}
+if (@(git status --porcelain).Count -ne 0) {
+    throw "Phase 11B worktree must be clean"
+}
+
+$OfflineTip = (git rev-parse HEAD).Trim()
+$OfflineCommitCount = [int](git rev-list --count "$StackedBase..$OfflineTip")
+git fetch --prune origin
+if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+
+$LocalMaster = (git rev-parse master).Trim()
+$OriginMaster = (git rev-parse origin/master).Trim()
+if ($LocalMaster -ne $Phase11AMerge -or $OriginMaster -ne $Phase11AMerge) {
+    throw "master/origin/master does not equal the approved Phase 11A merge SHA"
+}
+if ((git merge-base $StackedBase $OfflineTip).Trim() -ne $StackedBase) {
+    throw "Offline Phase 11B tip is not based on the frozen stacked baseline"
+}
+
+git rebase --onto $Phase11AMerge $StackedBase $TaskBranch
+if ($LASTEXITCODE -ne 0) { throw "Resolve or abort the rebase; do not continue validation" }
+
+$RebasedTip = (git rev-parse HEAD).Trim()
+if ((git merge-base $Phase11AMerge $RebasedTip).Trim() -ne $Phase11AMerge) {
+    throw "Rebased Phase 11B is not based on the approved Phase 11A merge SHA"
+}
+if ([int](git rev-list --count "$Phase11AMerge..$RebasedTip") -ne $OfflineCommitCount) {
+    throw "The rebase changed the number of Phase 11B commits"
+}
+
+$ExpectedFiles = @(
+    "docs/phase11b-github-sandbox-canary-v1.md"
+    "docs/plans/phase11b-github-sandbox-canary-v1.md"
+    "migrations/versions/0008_phase11b_github_sandbox_canary.py"
+    "schemas/phase11b-github-sandbox-authorization.schema.json"
+    "src/code_review_agent/github_sandbox_publish.py"
+    "src/code_review_agent/repair_publish.py"
+    "tests/test_phase11b_github_sandbox_canary.py"
+)
+$ChangedFiles = @(git diff --name-only "$Phase11AMerge...$RebasedTip")
+$UnexpectedFiles = @(Compare-Object $ExpectedFiles $ChangedFiles)
+if ($UnexpectedFiles.Count -ne 0) {
+    $UnexpectedFiles | Format-Table | Out-String | Write-Error
+    throw "Rebased changed-file set differs from the Single Writer contract"
+}
+
+$Python = (Resolve-Path '..\..\.venv\Scripts\python.exe').Path
+$env:PYTHONPATH = (Resolve-Path 'src').Path
+& $Python -m unittest -v tests.test_phase10_repair_service
+if ($LASTEXITCODE -ne 0) { throw "Phase 10 regression failed" }
+& $Python -m unittest -v tests.test_phase11a_synthetic_staging
+if ($LASTEXITCODE -ne 0) { throw "Phase 11A regression failed" }
+& $Python -m unittest -v tests.test_phase11b_github_sandbox_canary
+if ($LASTEXITCODE -ne 0) { throw "Phase 11B regression failed" }
+& $Python -m ruff check .
+if ($LASTEXITCODE -ne 0) { throw "Ruff failed" }
+& $Python -m mypy src/code_review_agent
+if ($LASTEXITCODE -ne 0) { throw "mypy failed" }
+& $Python scripts/verify.py
+if ($LASTEXITCODE -ne 0) { throw "full offline verification failed" }
+& $Python -m pip check
+if ($LASTEXITCODE -ne 0) { throw "pip check failed" }
+git diff --check "$Phase11AMerge...$RebasedTip"
+if ($LASTEXITCODE -ne 0) { throw "rebased diff check failed" }
+
+$LeakPattern = 'github_pat_|gh[pousr]_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|[A-Za-z]:\\Users\\'
+$LeakMatches = @(
+    git diff --no-color "$Phase11AMerge...$RebasedTip" |
+        Where-Object { $_ -notmatch '^\+\$LeakPattern = ' } |
+        Select-String -Pattern $LeakPattern
+)
+if ($LeakMatches.Count -ne 0) {
+    throw "Review potential credential or host-path leakage before continuing"
+}
+
+Write-Output "Phase 11A merge: $Phase11AMerge"
+Write-Output "Phase 11A green master CI: $Phase11ACiRun"
+Write-Output "Pre-rebase Phase 11B tip (evidence now stale): $OfflineTip"
+Write-Output "Refrozen Phase 11B executable code SHA: $RebasedTip"
+```
+
 Any Phase 11A executable change before merge requires a fresh integration review. A
 successful offline rebase still does not authorize GitHub product writes, a task-branch
 push, a Phase 11B PR, or a real canary.
