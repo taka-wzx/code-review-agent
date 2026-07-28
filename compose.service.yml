@@ -5,6 +5,8 @@ x-app-image: &app-image
   build:
     context: ${CRAG_BUILD_CONTEXT:?set a filtered build context}
     dockerfile: Dockerfile.service
+    args:
+      DEBIAN_MIRROR: ${CRAG_DEBIAN_MIRROR:-https://deb.debian.org}
 
 x-database-environment: &database-environment
   CRAG_DATABASE_URL: postgresql+psycopg://crag@postgres:5432/crag

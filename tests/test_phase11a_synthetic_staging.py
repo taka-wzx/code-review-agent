@@ -438,7 +438,8 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
     def test_compose_and_sandbox_declare_synthetic_no_egress_boundaries(self) -> None:
         root = Path(__file__).resolve().parents[1]
         compose = (root / "compose.service.yml").read_text(encoding="utf-8")
-        dockerfile = (root / "Dockerfile.repair").read_text(encoding="utf-8")
+        service_dockerfile = (root / "Dockerfile.service").read_text(encoding="utf-8")
+        repair_dockerfile = (root / "Dockerfile.repair").read_text(encoding="utf-8")
         self.assertIn("repair-worker:", compose)
         self.assertIn("CRAG_REPAIR_RUNTIME: synthetic", compose)
         self.assertIn("internal: true", compose)
@@ -446,8 +447,15 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
         self.assertNotIn("CRAG_REPOSITORY_ROOT", compose)
         self.assertNotIn("/repositories", compose)
         self.assertIn("synthetic/repository", compose)
-        self.assertIn("USER 65532:65532", dockerfile)
-        self.assertIn("--no-create-home", dockerfile)
+        self.assertIn(
+            "DEBIAN_MIRROR: ${CRAG_DEBIAN_MIRROR:-https://deb.debian.org}", compose
+        )
+        for dockerfile in (service_dockerfile, repair_dockerfile):
+            self.assertIn("ARG DEBIAN_MIRROR=https://deb.debian.org", dockerfile)
+            self.assertIn("https://deb.debian.org|https://mirrors.aliyun.com", dockerfile)
+            self.assertIn('echo "unsupported DEBIAN_MIRROR" >&2; exit 64', dockerfile)
+        self.assertIn("USER 65532:65532", repair_dockerfile)
+        self.assertIn("--no-create-home", repair_dockerfile)
 
     def test_unsafe_repair_values_fail_closed_at_the_schema_boundary(self) -> None:
         policy = synthetic_repair_policy()

@@ -1,12 +1,20 @@
 FROM python:3.12-slim-bookworm
 
+ARG DEBIAN_MIRROR=https://deb.debian.org
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/workspace/src \
     HOME=/tmp/repair-home \
     XDG_CONFIG_HOME=/tmp/repair-config
 
-RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+RUN case "$DEBIAN_MIRROR" in \
+        https://deb.debian.org|https://mirrors.aliyun.com) ;; \
+        *) echo "unsupported DEBIAN_MIRROR" >&2; exit 64 ;; \
+    esac \
+    && sed -i \
+        -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get update \
     && apt-get install --yes --no-install-recommends git=1:2.39.5-0+deb12u2 \

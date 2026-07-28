@@ -1,6 +1,8 @@
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim
 
+ARG DEBIAN_MIRROR=https://deb.debian.org
+
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -13,7 +15,13 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 WORKDIR /app
 
-RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+RUN case "$DEBIAN_MIRROR" in \
+        https://deb.debian.org|https://mirrors.aliyun.com) ;; \
+        *) echo "unsupported DEBIAN_MIRROR" >&2; exit 64 ;; \
+    esac \
+    && sed -i \
+        -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=5 update \
     && apt-get install --yes --no-install-recommends ca-certificates git util-linux \

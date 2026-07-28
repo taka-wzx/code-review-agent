@@ -78,6 +78,7 @@ The owner authorized the following preparation profile on 2026-07-28:
 | Host namespace | `/opt/crag-synthetic-staging` |
 | Access URL | `http://127.0.0.1:8000` through an SSH tunnel; no public listener, hostname, DNS, or TLS change |
 | Image path | No registry; build the frozen source on the host and record the resulting local image ID |
+| Build mirror | Default `https://deb.debian.org`; `cn-hangzhou` staging may set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com`; all other values fail the Docker build |
 | Database | Same-host Compose Postgres with the `postgres_data` volume; no published database port |
 | Secrets | Root-owned `0600` files below `/opt/crag-synthetic-staging/secrets`, consumed only through `*_FILE` |
 | Window and cost | At most 60 minutes after a separate deployment confirmation; CNY 0 incremental spend |
@@ -91,6 +92,23 @@ until the owner gives the required second confirmation, do not:
 - push an image or alter DNS/TLS;
 - run a staging migration or staging backup/restore drill;
 - transition a pull request to Ready or report Phase 11A completed.
+
+## Stopped deployment windows
+
+Two authorized, bounded windows on 2026-07-28 reached their build hard timeout while
+downloading Debian packages from `deb.debian.org`. Each attempt stopped before creating
+the application image. Final audits reported zero Compose containers, volumes, and
+networks and confirmed that migration, services, synthetic smoke, and backup/restore had
+not run. These are failure receipts, not staging-validation evidence.
+
+The approved remediation adds a fail-closed `DEBIAN_MIRROR` build argument. Dockerfiles
+continue to default to the Debian endpoint and allow only that endpoint or Alibaba
+Cloud's documented `https://mirrors.aliyun.com` endpoint. The staging environment must
+select the Alibaba value explicitly through `CRAG_DEBIAN_MIRROR`; arbitrary mirrors are
+rejected. The endpoint is listed in the
+[Alibaba Cloud Debian mirror documentation](https://developer.aliyun.com/mirror/debian).
+This code change invalidates the previous source archive and rendered Compose hash, so
+all freeze evidence must be regenerated before another deployment window.
 
 ## Prepared deployment sequence
 
@@ -107,8 +125,10 @@ confirmation:
    Postgres, webhook, and service-token values directly on the host as `0600` files.
    Never print, download, or paste those values.
 4. Set only non-secret Compose paths and the filtered build context in a root-owned
-   environment file. Render `docker compose config` and reject any provider key, GitHub
-   writer, real repository mount, non-loopback API publication, or database publication.
+   environment file. For `cn-hangzhou`, set
+   `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com`. Render `docker compose config` and
+   reject any non-allowlisted mirror, provider key, GitHub writer, real repository mount,
+   non-loopback API publication, or database publication.
 5. Pull only the existing public base images required by the frozen Dockerfiles, build
    the local service image, record its immutable local image ID, and record the rendered
    deployment-configuration SHA-256. Any billable registry or add-on aborts the window.
