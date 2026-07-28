@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Worker-health remediation is authorized for offline implementation. Deployment
+**Internal-tunnel remediation is authorized for offline implementation. Deployment
 execution still requires a separate explicit confirmation. Not deployed. Not Ready.**
 
 This phase retains the immutable declarations below in every synthetic response and
@@ -76,7 +76,7 @@ The owner authorized the following preparation profile on 2026-07-28:
 | --- | --- |
 | Target | Owner-operated Alibaba Cloud ECS `i-bp12vpivp8pdpr0uq7uf` in `cn-hangzhou` |
 | Host namespace | `/opt/crag-synthetic-staging` |
-| Access URL | `http://127.0.0.1:8000` through an SSH tunnel; container `0.0.0.0` is allowed only with the explicit trusted loopback-publication flag, loopback-only Host/Origin allowlists, and Compose host publication fixed to `127.0.0.1`; no public listener, hostname, DNS, or TLS change |
+| Access URL | Operator-local `http://127.0.0.1:8000` through SSH `-L 8000:<api-container-ip>:8000`; Compose publishes no host port, and container `0.0.0.0` is allowed only with the explicit trusted loopback-publication flag plus loopback-only Host/Origin allowlists; no public listener, hostname, DNS, or TLS change |
 | Image path | No registry; build the frozen source on the host and record the resulting local image ID |
 | Build mirrors | Defaults are `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; all other values fail the Docker build |
 | Database | Same-host Compose Postgres with the `postgres_data` volume; no published database port |
@@ -112,6 +112,14 @@ and did not run synthetic smoke or backup/restore. The approved offline remediat
 raises only the Review and Repair worker health-probe timeout from 5 to 30 seconds; API
 and PostgreSQL health budgets remain unchanged.
 
+A sixth window made PostgreSQL, API, Review worker, and Repair worker healthy. Docker
+did not install the requested HostPort for the API on the internal-only network, so host
+`127.0.0.1:8000` refused the smoke connection even though the API was healthy inside
+the container. The operator removed every container and network, retained the image and
+two named volumes, and created no synthetic job. The approved remediation removes all
+Compose HostPort declarations and uses SSH local forwarding directly to the dynamic API
+container IP, preserving the internal network and its lack of a default route.
+
 The approved remediation keeps the fail-closed `DEBIAN_MIRROR` build argument and adds
 a fail-closed `PYPI_INDEX_URL` argument. Dockerfiles default to the upstream Debian and
 PyPI endpoints and allow only those endpoints or Alibaba Cloud's corresponding mirrors.
@@ -146,7 +154,7 @@ confirmation:
    `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`, and enable
    `CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH=true` only for the loopback-published API.
    Render `docker compose config` and reject any non-allowlisted mirror, provider key,
-   GitHub writer, real repository mount, non-loopback API publication, non-loopback
+   GitHub writer, real repository mount, Docker HostPort declaration, non-loopback
    Host/Origin allowlist, or database publication.
 5. Pull only the existing public base images required by the frozen Dockerfiles, build
    the local service image, record its immutable local image ID, and record the rendered
@@ -157,8 +165,10 @@ confirmation:
 7. Verify container hardening, loopback-only publication, database and migration
    readiness, API health/readiness, worker heartbeat, fake-only adapters, zero real model
    calls, zero real repository writes, and redacted metrics/receipts.
-8. Access the API only with an SSH local-forward to `127.0.0.1:8000`. No HTTP, HTTPS,
-   database, or management port is opened to the Internet.
+8. Resolve the running API container's internal IP with `docker inspect`, then access it
+   only through operator SSH `-L 8000:<api-container-ip>:8000` and send loopback Host
+   headers. No Docker HostPort, HTTP, HTTPS, database, or management port is opened on
+   the ECS host or to the Internet.
 9. After separate backup/restore confirmation within the same window, create a local
    logical backup, restore it into an isolated verification database, compare bounded
    consistency evidence, and retain only the redacted report hash.

@@ -1,6 +1,6 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — staging worker-health remediation authorized for offline
+Status: **active — staging internal-tunnel remediation authorized for offline
 implementation; deployment execution still requires a separate explicit confirmation**
 
 Frozen baseline: `origin/master` at
@@ -42,7 +42,7 @@ kept out of the repository.
 | --- | --- |
 | staging account/project | Owner-operated Alibaba Cloud ECS instance `i-bp12vpivp8pdpr0uq7uf`; no account identifier is recorded |
 | region/namespace | `cn-hangzhou`; host namespace `/opt/crag-synthetic-staging` |
-| staging hostname/URL | `http://127.0.0.1:8000` through an operator SSH tunnel only; the API may bind container `0.0.0.0` only with `CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH=true`, loopback-only Host/Origin allowlists, and Compose host publication fixed to `127.0.0.1`; no public hostname |
+| staging hostname/URL | Operator-local `http://127.0.0.1:8000` through SSH `-L 8000:<api-container-ip>:8000`; Compose publishes no host port, the API remains only on the internal Docker network, and `CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH=true` requires loopback-only Host/Origin allowlists; no public hostname |
 | container registry | No application-image registry; application-image push/pull is prohibited, the frozen source is built on the staging host, and the local image ID is recorded; public base-image pulls require the second confirmation |
 | build dependency mirrors | Docker builds default to `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may explicitly set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; Dockerfiles reject every other value |
 | database instance/volume | Compose `postgres:16-alpine` on the same ECS host with the `postgres_data` named volume; port 5432 is not published |
@@ -84,6 +84,14 @@ networks, retained the image and two named volumes, and ran no smoke or backup/r
 operation. The owner authorized an offline worker-health remediation that changes only
 the two worker probe timeouts from 5 to 30 seconds; API and PostgreSQL probe budgets are
 unchanged.
+
+A sixth window made all four containers healthy, but Docker correctly omitted the
+requested HostPort because the API was attached only to the internal network. The API
+was healthy inside the container while host `127.0.0.1:8000` refused the connection.
+The operator removed all containers and networks, retained the image and two named
+volumes, and created no synthetic job. The approved offline remediation removes every
+Compose host-port declaration and uses an operator SSH local-forward directly to the
+dynamic API container IP; the API remains on the internal network with no default route.
 
 ## Goal and architecture
 

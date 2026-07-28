@@ -99,8 +99,6 @@ services:
       - service_token
     volumes:
       - service_artifacts:/var/lib/crag
-    ports:
-      - "127.0.0.1:${CRAG_PUBLISHED_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
