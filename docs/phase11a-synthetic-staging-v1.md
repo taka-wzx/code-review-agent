@@ -2,7 +2,7 @@
 
 ## Current status
 
-**Loopback-publication remediation is authorized for offline implementation. Deployment
+**Worker-health remediation is authorized for offline implementation. Deployment
 execution still requires a separate explicit confirmation. Not deployed. Not Ready.**
 
 This phase retains the immutable declarations below in every synthetic response and
@@ -103,6 +103,14 @@ and migrated PostgreSQL to `0007_phase11a_repair`, then stopped when the API rej
 local-token mode on container `0.0.0.0`. The operator removed every container and
 network, retained the image and two named volumes, and did not run synthetic smoke or
 backup/restore. These are failure receipts, not staging-validation evidence.
+
+A fifth window confirmed that the loopback-publication fix allowed the API to become
+healthy. Both worker main processes remained running, but Docker killed each health
+probe at the fixed five-second timeout before its database-backed check completed. The
+operator removed every container and network, retained the image and two named volumes,
+and did not run synthetic smoke or backup/restore. The approved offline remediation
+raises only the Review and Repair worker health-probe timeout from 5 to 30 seconds; API
+and PostgreSQL health budgets remain unchanged.
 
 The approved remediation keeps the fail-closed `DEBIAN_MIRROR` build argument and adds
 a fail-closed `PYPI_INDEX_URL` argument. Dockerfiles default to the upstream Debian and

@@ -1,6 +1,6 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — staging loopback-publication remediation authorized for offline
+Status: **active — staging worker-health remediation authorized for offline
 implementation; deployment execution still requires a separate explicit confirmation**
 
 Frozen baseline: `origin/master` at
@@ -75,6 +75,15 @@ publication remediation only. Its executable-code commit, source archive, author
 record SHA, rendered Compose SHA, and local image ID must all be frozen again before
 another deployment window; evidence from any stopped attempt cannot be reused as
 deployment-success evidence.
+
+A fifth window verified the loopback-publication fix: the API became healthy on the
+host-loopback-only Docker publication. Both worker main processes remained running, but
+their startup health probes were killed at the fixed five-second timeout before the
+database-backed checks completed. The operator again removed all containers and
+networks, retained the image and two named volumes, and ran no smoke or backup/restore
+operation. The owner authorized an offline worker-health remediation that changes only
+the two worker probe timeouts from 5 to 30 seconds; API and PostgreSQL probe budgets are
+unchanged.
 
 ## Goal and architecture
 

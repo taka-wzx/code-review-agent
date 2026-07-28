@@ -148,7 +148,7 @@ services:
     healthcheck:
       test: ["CMD", "crag-entrypoint", "crag-worker", "--check"]
       interval: 10s
-      timeout: 5s
+      timeout: 30s
       retries: 6
       start_period: 15s
     stop_grace_period: ${CRAG_CONTAINER_STOP_GRACE_PERIOD:-35s}
@@ -177,7 +177,7 @@ services:
     healthcheck:
       test: ["CMD", "crag-entrypoint", "crag-worker", "--synthetic-repair", "--check"]
       interval: 10s
-      timeout: 5s
+      timeout: 30s
       retries: 6
       start_period: 15s
     stop_grace_period: ${CRAG_CONTAINER_STOP_GRACE_PERIOD:-35s}

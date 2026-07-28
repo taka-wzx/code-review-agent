@@ -459,6 +459,7 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
             compose,
         )
         self.assertIn('"127.0.0.1:${CRAG_PUBLISHED_PORT:-8000}:8000"', compose)
+        self.assertEqual(2, compose.count("timeout: 30s"))
         for dockerfile in (service_dockerfile, repair_dockerfile):
             self.assertIn("ARG DEBIAN_MIRROR=https://deb.debian.org", dockerfile)
             self.assertIn("https://deb.debian.org|https://mirrors.aliyun.com", dockerfile)
