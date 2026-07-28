@@ -1,7 +1,8 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — staging internal-tunnel remediation authorized for offline
-implementation; deployment execution still requires a separate explicit confirmation**
+Status: **synthetic staging validation succeeded for executable commit
+`e901c6c4bc7a51e1572efc35690dd05df7e3b66c`; Draft PR #17 is open and merge remains
+blocked until CI obtains a runner and passes**
 
 Frozen baseline: `origin/master` at
 `21344a2b72be8cb83361875b5cc8f2952e99ffbf`
@@ -46,22 +47,17 @@ kept out of the repository.
 | container registry | No application-image registry; application-image push/pull is prohibited, the frozen source is built on the staging host, and the local image ID is recorded; public base-image pulls require the second confirmation |
 | build dependency mirrors | Docker builds default to `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may explicitly set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; Dockerfiles reject every other value |
 | database instance/volume | Compose `postgres:16-alpine` on the same ECS host with the `postgres_data` named volume; port 5432 is not published |
-| deploy API / push staging image / run schema migration / backup-restore | Preparation only is authorized; source transfer, base-image pull/build, migration, service start, and local backup/restore each remain blocked until the next explicit deployment confirmation |
+| deploy API / push staging image / run schema migration / backup-restore | The owner consumed one bounded authorization for executable commit `e901c6c4bc7a51e1572efc35690dd05df7e3b66c`: source transfer, public-base build, API/worker start, synthetic smoke, and isolated backup/restore completed; the already-migrated volume stayed at `0007_phase11a_repair` and no migration container was created |
 | DNS/TLS change authority | No DNS or TLS change is authorized; loopback publication plus SSH tunneling is mandatory |
-| deployment window and cost ceiling | One operator window of at most 60 minutes starts only after the next explicit confirmation; incremental spend ceiling is CNY 0 and any billable add-on aborts the operation |
+| deployment window and cost ceiling | The consumed window ran from `2026-07-28T16:50:51+08:00` with a hard expiry at `17:50:51+08:00`; validation completed within the window with incremental spend recorded as CNY 0 |
 | rollback/incident owner | The repository and Alibaba Cloud account owner; Codex may act only within the confirmed window and must stop on owner request or gate failure |
 | secret-manager or `*_FILE` injection method | Root-owned host files below `/opt/crag-synthetic-staging/secrets`, mode `0600`, mounted through the existing Compose `*_FILE` declarations; values never enter Git, logs, receipts, or chat |
 
 External telemetry, real model/API calls, paid calls, product-side GitHub API or writes,
-and real repository/user data are prohibited. Local commits, task-branch pushes, and a
-Draft PR are authorized; agent push/merge to `master` and auto-merge are prohibited.
-
-The target profile is now recorded, but the operation-authority row intentionally keeps
-the execution gate closed. Until the owner separately confirms actual deployment, this
-task may prepare documentation and validate offline synthetic controls only. It must not
-connect to or mutate the staging host, transfer source, pull or build images, run a
-migration, start services, make DNS/TLS changes, conduct backup/restore against staging,
-claim deployment success, or move a PR to Ready.
+and real repository/user data remain prohibited. The one-time deployment confirmation
+was consumed only for the recorded synthetic operation; it does not authorize a later
+redeploy. Local commits, task-branch pushes, and Draft PR #17 are authorized. Merge stays
+closed while its required CI jobs report failure without obtaining a runner.
 
 Two bounded deployment windows on 2026-07-28 stopped before image creation because
 `deb.debian.org` package downloads did not finish before their hard timeouts. A third
@@ -92,6 +88,20 @@ The operator removed all containers and networks, retained the image and two nam
 volumes, and created no synthetic job. The approved offline remediation removes every
 Compose host-port declaration and uses an operator SSH local-forward directly to the
 dynamic API container IP; the API remains on the internal network with no default route.
+
+A seventh window deployed executable commit
+`e901c6c4bc7a51e1572efc35690dd05df7e3b66c` successfully. The frozen source archive,
+authorization record, rendered Compose configuration, and local application image were
+bound respectively to SHA-256 `16c206611b81fca899857a95323070806f1ef9f43ee1d4e862fde962d468c434`,
+SHA-256 `ec46f250f9bf10371371998bfc8862042efe4de3f7bcc08601e1d7c03621ead0`,
+SHA-256 `a9a9195f9bead6ed55db4b91c51e878613c23d904d738cf74b8dba208aa7cdf4`,
+and image ID `sha256:83e3274b2af08b9482dae1ae7158a93a94191259f010adc37afb5002e57da7b0`.
+PostgreSQL, API, Review worker, and Repair worker became healthy without rerunning the
+migration. Internal-IP health/readiness and the two-approval Repair flow reached
+`draft_published`; isolated logical backup/restore matched Alembic head, table names,
+and exact row counts, then deleted the raw dump and verification database. The final
+root-owned `0600` success receipt has SHA-256
+`a372663657d12df636399de8d69de06dd7ca5bdd6a4e3d4380cdde839902c4a1`.
 
 ## Goal and architecture
 
@@ -206,11 +216,11 @@ the executable/runtime is unavailable; such a skip is not staging validation.
 ## Delivery control
 
 Before delivery, inspect every changed file and audit it for unauthorized scope and
-sensitive data. A stable local task-branch commit, push of this task branch only, and a
-Draft PR are permitted after offline validation. Because deployment execution still
-requires a second confirmation, no staging host mutation, deployment receipt, image ID,
-authorization SHA, deployment configuration SHA, Ready transition, merge, or
-completed-phase claim may be made in this task state.
+sensitive data. The executable deployment remains frozen at `e901c6c...`; subsequent
+documentation-only status commits are not deployed artifacts. The task branch is pushed
+and Draft PR #17 is open. All CI jobs failed before receiving a runner and contain no
+steps or logs, so the PR must remain Draft and unmerged until that external gate is
+restored and the checks pass.
 
 ## Change control
 

@@ -2,8 +2,9 @@
 
 ## Current status
 
-**Internal-tunnel remediation is authorized for offline implementation. Deployment
-execution still requires a separate explicit confirmation. Not deployed. Not Ready.**
+**Synthetic staging validation succeeded for executable commit
+`e901c6c4bc7a51e1572efc35690dd05df7e3b66c`. Draft PR #17 remains Draft and unmerged
+because every CI job failed before receiving a runner. This is not production Ready.**
 
 This phase retains the immutable declarations below in every synthetic response and
 receipt:
@@ -70,7 +71,7 @@ a production readiness claim.
 
 ## Deployment gate and required handoff
 
-The owner authorized the following preparation profile on 2026-07-28:
+The owner authorized and later consumed the following bounded profile on 2026-07-28:
 
 | Field | Recorded value |
 | --- | --- |
@@ -81,17 +82,15 @@ The owner authorized the following preparation profile on 2026-07-28:
 | Build mirrors | Defaults are `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; all other values fail the Docker build |
 | Database | Same-host Compose Postgres with the `postgres_data` volume; no published database port |
 | Secrets | Root-owned `0600` files below `/opt/crag-synthetic-staging/secrets`, consumed only through `*_FILE` |
-| Window and cost | At most 60 minutes after a separate deployment confirmation; CNY 0 incremental spend |
+| Window and cost | Consumed from `2026-07-28T16:50:51+08:00` with hard expiry at `17:50:51+08:00`; CNY 0 incremental spend recorded |
 | Owner | Repository and Alibaba Cloud account owner controls incident response and rollback |
 
-This authorization permits documentation and deployment preparation only. Therefore,
-until the owner gives the required second confirmation, do not:
-
-- connect to or mutate the staging host, transfer source, or pull/build an image;
-- deploy API/worker/Postgres/migration services or record a local image ID;
-- push an image or alter DNS/TLS;
-- run a staging migration or staging backup/restore drill;
-- transition a pull request to Ready or report Phase 11A completed.
+The owner subsequently supplied and consumed the required bounded confirmation for
+executable commit `e901c6c4bc7a51e1572efc35690dd05df7e3b66c`. It authorized one
+source transfer and host-local build, reuse of the already-migrated volume without a
+second migration, API/worker startup, internal-IP synthetic smoke, and isolated logical
+backup/restore. It did not authorize a public endpoint, DNS/TLS change, real provider,
+real repository write, paid add-on, or later redeploy.
 
 ## Stopped deployment windows
 
@@ -120,6 +119,21 @@ two named volumes, and created no synthetic job. The approved remediation remove
 Compose HostPort declarations and uses SSH local forwarding directly to the dynamic API
 container IP, preserving the internal network and its lack of a default route.
 
+The seventh window completed staging validation for executable commit `e901c6c...`.
+The source archive, authorization record, rendered Compose configuration, and local
+application image are bound to SHA-256
+`16c206611b81fca899857a95323070806f1ef9f43ee1d4e862fde962d468c434`, SHA-256
+`ec46f250f9bf10371371998bfc8862042efe4de3f7bcc08601e1d7c03621ead0`, SHA-256
+`a9a9195f9bead6ed55db4b91c51e878613c23d904d738cf74b8dba208aa7cdf4`, and image ID
+`sha256:83e3274b2af08b9482dae1ae7158a93a94191259f010adc37afb5002e57da7b0`.
+All four containers were healthy, no HostPort or host listener existed on 8000/5432,
+and workload processes ran as UID 1000 with zero effective capabilities, read-only root
+filesystems, and `no-new-privileges`. The synthetic Repair flow reached
+`draft_published` through both exact approvals. Backup/restore matched Alembic head
+`0007_phase11a_repair`, 39 table names, and every exact row count; the verification
+database and raw dump were deleted. The root-owned `0600` success receipt has SHA-256
+`a372663657d12df636399de8d69de06dd7ca5bdd6a4e3d4380cdde839902c4a1`.
+
 The approved remediation keeps the fail-closed `DEBIAN_MIRROR` build argument and adds
 a fail-closed `PYPI_INDEX_URL` argument. Dockerfiles default to the upstream Debian and
 PyPI endpoints and allow only those endpoints or Alibaba Cloud's corresponding mirrors.
@@ -136,8 +150,8 @@ evidence must be regenerated before another deployment window.
 
 ## Prepared deployment sequence
 
-The following sequence is documentation only and must not be executed before the second
-confirmation:
+The following sequence is the frozen runbook used by the consumed seventh-window
+authorization. Repeating it requires a new explicit confirmation:
 
 1. Confirm the ECS identity and `cn-hangzhou` region, confirm Docker/Compose health,
    confirm that SSH 22 is restricted to the operator's current `/32`, and confirm that
@@ -182,8 +196,8 @@ executable-code change after validation invalidates the result. The zero-cost, n
 SSH-tunnel profile deliberately does not provide public TLS or production-readiness
 evidence.
 
-The second confirmation must explicitly authorize the bounded 60-minute window and the
-following mutations: tracked-source transfer, public base-image pulls, local image
-build, Postgres volume creation/start, explicit schema migration, API/worker start, and
-synthetic smoke validation. Backup/restore remains excluded unless that confirmation
-names it. A generic request to continue is not deployment authority.
+The consumed confirmation explicitly named the bounded 60-minute zero-cost window,
+tracked-source transfer, public-base build, reused migrated volume, API/worker start,
+internal-IP synthetic smoke, and backup/restore. It expressly prohibited rerunning the
+migration. That confirmation is exhausted; a generic request to continue is not new
+deployment authority.
