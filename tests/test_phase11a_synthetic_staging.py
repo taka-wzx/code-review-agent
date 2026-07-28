@@ -450,10 +450,19 @@ class Phase11ASyntheticStagingTests(unittest.TestCase):
         self.assertIn(
             "DEBIAN_MIRROR: ${CRAG_DEBIAN_MIRROR:-https://deb.debian.org}", compose
         )
+        self.assertIn(
+            "PYPI_INDEX_URL: ${CRAG_PYPI_INDEX_URL:-https://pypi.org/simple}", compose
+        )
         for dockerfile in (service_dockerfile, repair_dockerfile):
             self.assertIn("ARG DEBIAN_MIRROR=https://deb.debian.org", dockerfile)
             self.assertIn("https://deb.debian.org|https://mirrors.aliyun.com", dockerfile)
             self.assertIn('echo "unsupported DEBIAN_MIRROR" >&2; exit 64', dockerfile)
+            self.assertIn("ARG PYPI_INDEX_URL=https://pypi.org/simple", dockerfile)
+            self.assertIn(
+                "https://pypi.org/simple|https://mirrors.aliyun.com/pypi/simple/", dockerfile
+            )
+            self.assertIn('echo "unsupported PYPI_INDEX_URL" >&2; exit 64', dockerfile)
+            self.assertIn('--index-url "$PYPI_INDEX_URL"', dockerfile)
         self.assertIn("USER 65532:65532", repair_dockerfile)
         self.assertIn("--no-create-home", repair_dockerfile)
 

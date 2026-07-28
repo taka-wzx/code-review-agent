@@ -1,7 +1,7 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
-Status: **active — staging mirror remediation authorized for offline implementation;
-deployment execution still requires a separate explicit confirmation**
+Status: **active — staging Python mirror remediation authorized for offline
+implementation; deployment execution still requires a separate explicit confirmation**
 
 Frozen baseline: `origin/master` at
 `21344a2b72be8cb83361875b5cc8f2952e99ffbf`
@@ -44,7 +44,7 @@ kept out of the repository.
 | region/namespace | `cn-hangzhou`; host namespace `/opt/crag-synthetic-staging` |
 | staging hostname/URL | `http://127.0.0.1:8000` through an operator SSH tunnel only; no public hostname |
 | container registry | No application-image registry; application-image push/pull is prohibited, the frozen source is built on the staging host, and the local image ID is recorded; public base-image pulls require the second confirmation |
-| build dependency mirror | Docker builds default to `https://deb.debian.org`; `cn-hangzhou` staging may explicitly set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com`; Dockerfiles reject every other value |
+| build dependency mirrors | Docker builds default to `https://deb.debian.org` and `https://pypi.org/simple`; `cn-hangzhou` staging may explicitly set `CRAG_DEBIAN_MIRROR=https://mirrors.aliyun.com` and `CRAG_PYPI_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`; Dockerfiles reject every other value |
 | database instance/volume | Compose `postgres:16-alpine` on the same ECS host with the `postgres_data` named volume; port 5432 is not published |
 | deploy API / push staging image / run schema migration / backup-restore | Preparation only is authorized; source transfer, base-image pull/build, migration, service start, and local backup/restore each remain blocked until the next explicit deployment confirmation |
 | DNS/TLS change authority | No DNS or TLS change is authorized; loopback publication plus SSH tunneling is mandatory |
@@ -64,12 +64,14 @@ migration, start services, make DNS/TLS changes, conduct backup/restore against 
 claim deployment success, or move a PR to Ready.
 
 Two bounded deployment windows on 2026-07-28 stopped before image creation because
-`deb.debian.org` package downloads did not finish before their hard timeouts. Both
-attempts retained zero Compose containers, volumes, and networks and ran no migration,
-service, smoke, or backup/restore operation. The owner subsequently authorized this
-offline mirror-parameter remediation only. Its executable-code commit, source archive,
+`deb.debian.org` package downloads did not finish before their hard timeouts. A third
+window used the allowlisted Alibaba Debian mirror and reached the Python dependency
+install, but downloads from `pypi.org` exceeded the build hard timeout. Every attempt
+retained zero Compose containers, volumes, and networks and ran no migration, service,
+smoke, or backup/restore operation. The owner subsequently authorized this offline
+Python mirror-parameter remediation only. Its executable-code commit, source archive,
 authorization record SHA, rendered Compose SHA, and local image ID must all be frozen
-again before another deployment window; evidence from either stopped attempt cannot be
+again before another deployment window; evidence from any stopped attempt cannot be
 reused as deployment-success evidence.
 
 ## Goal and architecture

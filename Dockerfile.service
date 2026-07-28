@@ -2,6 +2,7 @@ ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim
 
 ARG DEBIAN_MIRROR=https://deb.debian.org
+ARG PYPI_INDEX_URL=https://pypi.org/simple
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -19,6 +20,10 @@ RUN case "$DEBIAN_MIRROR" in \
         https://deb.debian.org|https://mirrors.aliyun.com) ;; \
         *) echo "unsupported DEBIAN_MIRROR" >&2; exit 64 ;; \
     esac \
+    && case "$PYPI_INDEX_URL" in \
+        https://pypi.org/simple|https://mirrors.aliyun.com/pypi/simple/) ;; \
+        *) echo "unsupported PYPI_INDEX_URL" >&2; exit 64 ;; \
+    esac \
     && sed -i \
         -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
         -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
@@ -32,8 +37,8 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
 
-RUN python -m pip install -r requirements.lock \
-    && python -m pip install . --no-deps \
+RUN python -m pip install --index-url "$PYPI_INDEX_URL" -r requirements.lock \
+    && python -m pip install --index-url "$PYPI_INDEX_URL" . --no-deps \
     && groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin appuser \
     && mkdir -p /var/lib/crag/state /var/lib/crag/jobs /var/lib/crag/traces /synthetic/repository \
