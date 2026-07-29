@@ -413,6 +413,8 @@ class GitHubCanaryPublication:
     repair_job_id: str
     organization_id: str
     repair_repository_id: str
+    repair_base_sha: str
+    repair_diff_sha256: str
     repository_owner: str
     repository_name: str
     repository_id: int
@@ -462,6 +464,7 @@ class GitHubCanaryPublication:
         if not self.head_branch.startswith("crag-canary/") or self.head_branch == self.base_branch:
             raise ValueError("head branch is outside the canary boundary")
         for name in (
+            "repair_base_sha",
             "base_sha",
             "base_tree_sha",
             "exact_commit_sha",
@@ -470,6 +473,7 @@ class GitHubCanaryPublication:
         ):
             _git_sha(name, getattr(self, name))
         for name in (
+            "repair_diff_sha256",
             "diff_sha256",
             "test_evidence_sha256",
             "durable_budget_sha256",
@@ -557,6 +561,8 @@ class GitHubCanaryPublication:
             "installation_id": self.installation_id,
             "organization_id": self.organization_id,
             "publisher_payload_sha256": self.publisher_payload_sha256,
+            "repair_base_sha": self.repair_base_sha,
+            "repair_diff_sha256": self.repair_diff_sha256,
             "repair_job_id": self.repair_job_id,
             "repair_repository_id": self.repair_repository_id,
             "repository_id": self.repository_id,
@@ -891,9 +897,9 @@ class GitHubCanaryStore:
         if (
             record["organization_id"] != publication.organization_id
             or record["repository_id"] != publication.repair_repository_id
-            or record["base_sha"] != publication.base_sha
+            or record["base_sha"] != publication.repair_base_sha
             or record["checkpoint_sha256"] != publication.checkpoint_sha256
-            or record["current_diff_sha256"] != publication.diff_sha256
+            or record["current_diff_sha256"] != publication.repair_diff_sha256
             or record["budget_sha256"] != publication.durable_budget_sha256
             or checkpoint.get("tests_sha256") != publication.test_evidence_sha256
             or record["state"]

@@ -230,9 +230,11 @@ time-bounded authorization record containing all of the following:
   owner, revocation owner, and kill-switch owner;
 - GitHub App ID, installation ID, installation account ID, and a unique disposable
   repository owner/name plus immutable repository ID and data classification;
-- allowed base branch/frozen base SHA/base-tree SHA; exact three head branches; exact synthetic diff,
-  blob/tree/commit, test, budget, checkpoint, commit-message, title/body marker, and
-  publisher-payload hashes;
+- allowed base branch/frozen GitHub base SHA/base-tree SHA; exact three head branches; exact
+  synthetic diff, blob/tree/commit, test, budget, checkpoint, commit-message, title/body marker,
+  and publisher-payload hashes;
+- separate `repair_base_sha` and `repair_diff_sha256` values from the Phase 11A Repair lineage;
+  these must never be substituted with the GitHub sandbox base SHA or synthetic Git diff binding;
 - branch/commit/Draft-PR maximums no greater than three, plus exact mutation/read/total
   request caps, per-request timeout, total window, and retry/backoff caps;
 - incremental cost ceiling CNY 0;

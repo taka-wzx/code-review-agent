@@ -49,7 +49,9 @@ BASE_SHA = "1" * 40
 BASE_TREE_SHA = "0" * 40
 TREE_SHA = "2" * 40
 COMMIT_SHA = "3" * 40
+REPAIR_BASE_SHA = "4" * 40
 DIFF_SHA = "4" * 64
+REPAIR_DIFF_SHA = "5" * 64
 TEST_SHA = "5" * 64
 BUDGET_SHA = "6" * 64
 CHECKPOINT_SHA = "7" * 64
@@ -261,6 +263,8 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
             repair_job_id=job_id,
             organization_id=self.authorization.organization_id,
             repair_repository_id="repo-internal-sandbox",
+            repair_base_sha=REPAIR_BASE_SHA,
+            repair_diff_sha256=REPAIR_DIFF_SHA,
             repository_owner=self.authorization.repository_owner,
             repository_name=self.authorization.repository_name,
             repository_id=self.authorization.repository_id,
@@ -308,11 +312,11 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
                     "organization": publication.organization_id,
                     "repository": publication.repair_repository_id,
                     "finding": "a" * 64,
-                    "base": publication.base_sha,
+                    "base": publication.repair_base_sha,
                     "head": "b" * 40,
                     "checkpoint_json": json.dumps({"tests_sha256": publication.test_evidence_sha256}),
                     "checkpoint": publication.checkpoint_sha256,
-                    "diff": publication.diff_sha256,
+                    "diff": publication.repair_diff_sha256,
                     "budget": publication.durable_budget_sha256,
                 },
             )
@@ -484,6 +488,8 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
             {"repository_owner": "bad owner"},
             {"repository_id": 0},
             {"head_branch": "main"},
+            {"repair_base_sha": "bad"},
+            {"repair_diff_sha256": "bad"},
             {"base_sha": "bad"},
             {"base_tree_sha": "bad"},
             {"diff_sha256": "bad"},
@@ -804,6 +810,8 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
         publication = self._publication()
         request = self._approved_request(publication)
         changes = {
+            "repair_base_sha": "c" * 40,
+            "repair_diff_sha256": "9" * 64,
             "diff_sha256": "a" * 64,
             "test_evidence_sha256": "b" * 64,
             "durable_budget_sha256": "c" * 64,

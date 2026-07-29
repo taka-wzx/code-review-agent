@@ -110,6 +110,12 @@ runtime-config SHA-256. Blob/tree object SHAs, stable title/body marker hashes, 
 the exact synthetic file paths are also bound. Any drift invalidates the approvals and
 authorization before external mutation; no replacement approval is generated.
 
+The Phase 11A Repair repository and the GitHub sandbox are distinct Git namespaces.
+Every case therefore carries separate `repair_base_sha` and `repair_diff_sha256`
+lineage fields in addition to the frozen GitHub `base_sha` and synthetic
+`diff_sha256`. The lineage gate compares only like-for-like fields; crossing either
+pair is an authorization mismatch, not a value that an operator can make equal.
+
 Because the Phase 11A DRAFT_PR approval is created before a GitHub commit exists, it
 cannot bind the Phase 11B exact commit/App/installation/authorization fields. Phase
 11B therefore adds two one-use canary approval envelopes, named `write` and `draft_pr`,

@@ -243,6 +243,8 @@ class Phase11BGitHubCanaryExecutorTests(unittest.TestCase):
                 case_id=case_id,
                 repair_job_id=f"repair-{case_id}",
                 repair_repository_id="repair-repository-sandbox",
+                repair_base_sha="3" * 40,
+                repair_diff_sha256=sha256_hex(f"repair-diff:{case_id}".encode()),
                 head_branch=f"crag-canary/auth-test/{case_id.replace('_', '-')}",
                 app_idempotency_key=f"phase11b-auth-test-{case_id}",
                 synthetic_file_path=f"crag-canary-{case_id.replace('_', '-')}.txt",
@@ -371,13 +373,13 @@ class Phase11BGitHubCanaryExecutorTests(unittest.TestCase):
                         "organization": self.organization_id,
                         "repository": case.repair_repository_id,
                         "finding": sha256_hex(f"finding:{case.case_id}".encode()),
-                        "base": self.runtime.base_sha,
+                        "base": case.repair_base_sha,
                         "head": "2" * 40,
                         "checkpoint_json": json.dumps(
                             {"tests_sha256": case.test_evidence_sha256}
                         ),
                         "checkpoint": case.checkpoint_sha256,
-                        "diff": case.diff_sha256,
+                        "diff": case.repair_diff_sha256,
                         "budget": case.durable_budget_sha256,
                     },
                 )
@@ -446,6 +448,38 @@ class Phase11BGitHubCanaryExecutorTests(unittest.TestCase):
         )
         self.assertFalse(schema["additionalProperties"])
         self.assertEqual(set(schema["required"]), set(value))
+        self.assertEqual(
+            set(schema["$defs"]["case"]["required"]),
+            set(value["cases"][0]),
+        )
+
+    def test_prepare_keeps_repair_lineage_separate_from_github_material(self) -> None:
+        case = self.runtime.cases[0]
+        self.assertNotEqual(case.repair_base_sha, self.runtime.base_sha)
+        self.assertNotEqual(case.repair_diff_sha256, case.diff_sha256)
+
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                text("UPDATE repair_jobs SET base_sha=:base WHERE id=:id"),
+                {"base": self.runtime.base_sha, "id": case.repair_job_id},
+            )
+        with self.assertRaisesRegex(GitHubSandboxPublicationError, "authorization_mismatch"):
+            self.executor.prepare()
+
+        with self.database.engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE repair_jobs SET base_sha=:base, current_diff_sha256=:diff "
+                    "WHERE id=:id"
+                ),
+                {
+                    "base": case.repair_base_sha,
+                    "diff": case.diff_sha256,
+                    "id": case.repair_job_id,
+                },
+            )
+        with self.assertRaisesRegex(GitHubSandboxPublicationError, "authorization_mismatch"):
+            self.executor.prepare()
 
     def test_module_entrypoint_and_container_secret_path_handoff(self) -> None:
         root = Path(__file__).parents[1]
