@@ -1,17 +1,20 @@
 # CI Actions Usage Optimization v1
 
-Status: **contract ready; implementation not started**
+Status: **post-rebase validation passed; ready for the single authorized push**
 
-Date: 2026-07-28
+Date: 2026-07-29
 
 ## Task identity and new-dialog bootstrap
 
 - Contract: `docs/plans/ci-actions-usage-optimization-v1.md`
 - Task branch: `codex/ci-actions-usage-optimization-v1`
 - Worktree name: `.codex-worktrees/ci-actions-usage-optimization-v1`
-- Frozen stacked base: `567bd3cf9fe97774ce2177275d325c7d30ff1631`
-- Base branch at freeze time: `codex/phase11a-synthetic-staging-v1`
-- Base relationship: Phase 11A is not yet merged; this is not a `master` baseline.
+- Implementation base: `166ba49118060da05fe38558f31970f4cc86ea1c`
+- Base branch: `origin/master`
+- Base relationship: Phase 11A, the Phase 11B lineage fix, and Phase 11B canonicalization
+  fix PR #20 are merged. PR #20 merged once as
+  `166ba49118060da05fe38558f31970f4cc86ea1c`; master run `30448936688`, attempt 1,
+  passed all nine jobs.
 
 This file is the durable source of truth for the task. A new conversation must not
 create another contract. It must first:
@@ -39,11 +42,40 @@ observable v1 outcome is:
 - one service-image build path instead of separate service smoke and Compose builds;
 - stale runs are canceled only for the same pull request;
 - every existing heavy gate still runs on `master`/`main` pushes;
-- repository visibility, billing, and runner ownership remain unchanged.
+- repository visibility, billing, and runner ownership are not changed further by this
+  implementation.
 
 This task is CI orchestration work. It is not Phase 11B publisher work, a model-quality
 experiment, a production-readiness result, or evidence that any unexecuted GitHub run
 would pass.
+
+## 2026-07-29 security and rollout amendment
+
+The owner separately changed `taka-wzx/code-review-agent` from private to public after a
+full-history secret audit. That visibility change is historical input to this task, not
+an implementation result or authorization to change visibility again. Public-repository
+run `30442907181`, attempt 2, executed the unchanged PR #20 SHA and passed all nine jobs.
+
+The owner explicitly widened this task to remove the resulting Node.js 20 deprecation
+warnings and prepare immutable-Action enforcement. The implementation must:
+
+- use only official `actions/*` Actions already allowed by repository policy;
+- upgrade checkout to signed release `v7.0.1` at full commit SHA
+  `3d3c42e5aac5ba805825da76410c181273ba90b1`;
+- upgrade setup-python to signed release `v7.0.0` at full commit SHA
+  `5fda3b95a4ea91299a34e894583c3862153e4b97`;
+- keep a human-readable release comment beside each pinned SHA;
+- define the six PR checks that replace the current nine required contexts:
+  `quality`, `compatibility (ubuntu-latest, 3.10)`,
+  `compatibility (windows-latest, 3.11)`, `lock-check`, `container-compose`, and
+  `postgres-integration`;
+- leave repository-level SHA enforcement disabled until a pinned workflow is merged to
+  the default branch, then enable it only after the new task PR is green and the required
+  check contexts are migrated atomically.
+
+PR #20 has merged once and its exact merge commit received one successful `master` run
+before this task branch was rebased for its single authorized push. This preserved the
+already-green Phase 11B gate without modifying or bypassing it.
 
 ## Current measured structure
 
@@ -117,6 +149,10 @@ Replace the five copies of full validation with one `quality` job:
 - command: `python scripts/verify.py` exactly once per workflow run;
 - pip download cache keyed by both `requirements.lock` and `pyproject.toml`;
 - timeout: 30 minutes.
+
+All jobs declare top-level `contents: read` workflow permissions. Every checkout and
+setup-python step uses the exact full SHA frozen in the security amendment; floating
+major tags are prohibited.
 
 This job owns Ruff, coverage, mypy, module-entry, console-entry, and one full copy of the
 unit/golden suite.
@@ -228,6 +264,8 @@ contracts drift:
 - Compose fake-run behavior disappears;
 - any unit-suite job loses full history;
 - pip cache inputs or job timeouts are missing;
+- an Action is referenced by a tag, a shortened SHA, an unapproved owner, or a commit
+  other than the two signed commits frozen above;
 - `--eval-assets`, real provider/publisher commands, repository secrets, or a
   self-hosted runner is introduced.
 
@@ -250,7 +288,7 @@ $env:PYTHONPATH = (Resolve-Path 'src').Path
 & $Python scripts/verify.py
 & $Python -m pip check
 git diff --check
-git diff --name-only 567bd3cf9fe97774ce2177275d325c7d30ff1631...HEAD
+git diff --name-only 166ba49118060da05fe38558f31970f4cc86ea1c...HEAD
 ```
 
 The full discovery and verifier are permitted because they use repository fakes and do
@@ -274,6 +312,8 @@ executable behavior has changed.
 - The service image is built through one path; CLI image smoke remains present.
 - Lockfile, Postgres, load, container, and Compose evidence remains mandatory.
 - No job uses `self-hosted`, a larger runner, external credentials, or real services.
+- Every `uses:` reference is an approved official Action pinned to the frozen full SHA,
+  and the workflow-level token permission is `contents: read`.
 - Focused and repository-wide offline validation passes.
 - Actual GitHub Actions results are reported honestly, including every skipped, canceled,
   failed, and successful job; local inspection is not called CI success.
@@ -281,14 +321,33 @@ executable behavior has changed.
 
 ## Rollout, rollback, and evidence
 
-Implementation is local-only until separately authorized. Before any push:
+Local validation on 2026-07-29 after rebasing to the Phase 11B merge, before any push:
+
+- focused workflow contract: 10 tests passed;
+- repository discovery: 945 tests passed, 18 skipped;
+- Ruff: passed;
+- mypy: no issues in 37 source files;
+- `scripts/verify.py`: passed with 945 tests, 18 skipped, 85% total coverage,
+  module-entry smoke, and console-entry smoke;
+- pip check: no broken requirements;
+- `git diff --check`: passed;
+- `actionlint` and PyYAML: unavailable locally and not installed, in accordance with the
+  no-new-validation-dependency rule;
+- optimized GitHub Actions: not run, so no remote success or savings claim is allowed.
+
+The owner authorized the single task-branch push and end-to-end rollout in the
+2026-07-29 completion instruction. Before that push:
 
 1. review the full diff from the frozen baseline;
 2. record the implementation commit SHA and clean worktree status;
-3. if Phase 11A has merged, rebase onto its actual merge SHA and rerun all validation;
-4. if Phase 11A has not merged, the owner decides whether to cherry-pick the commit into
-   PR #17 or wait for post-merge integration;
-5. never push or rewrite the Phase 11A branch without explicit authorization.
+3. retain the recorded completion of PR #20 merge and its one successful `master` run;
+4. retain the rebase onto that exact merge commit and rerun all validation;
+5. push this task branch exactly once under that authorization;
+6. after the task PR is green, replace the old nine branch-protection contexts with the
+   six amended contexts immediately before merge;
+7. enable repository-level immutable-Action SHA enforcement only after the pinned
+   workflow is present on `master`;
+8. never push or rewrite the Phase 11A or Phase 11B branches.
 
 An authorized CI trial must first run on the task PR. Record workflow run URL/ID, event,
 commit SHA, job list, conclusion, wall duration, and billable duration for every job.
@@ -313,4 +372,5 @@ Every handoff or final response must include:
 - skipped/unavailable checks and reasons;
 - remaining risks and the Phase 11A integration state;
 - explicit confirmation that no eval asset, real model, real GitHub publisher, paid API,
-  repository visibility, self-hosted runner, push, PR, or master mutation occurred.
+  additional visibility change, self-hosted runner, push, PR, or master mutation
+  occurred.
