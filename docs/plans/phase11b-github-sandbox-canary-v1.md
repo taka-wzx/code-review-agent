@@ -2,9 +2,12 @@
 
 Status: **offline implementation and preparation only; real canary is not authorized**
 
-Frozen stacked baseline: `codex/phase11a-synthetic-staging-v1` at
-`567bd3cf9fe97774ce2177275d325c7d30ff1631`. This is not a master baseline while
-Phase 11A remains unmerged.
+Phase 11A is merged on `master` at
+`010537202ca653d40dc6da2464482cf191aba401`; the verified green master CI run is
+`30419658651`. The Phase 11B implementation was rebased onto that merge before
+validation. The old stacked development baseline
+`567bd3cf9fe97774ce2177275d325c7d30ff1631` is historical only and must not be used
+for authorization or evidence.
 
 Task branch: `codex/phase11b-github-sandbox-canary-v1`
 
@@ -202,7 +205,7 @@ python -m mypy src/code_review_agent
 python scripts/verify.py
 python -m pip check
 git diff --check
-git diff --name-only 567bd3cf9fe97774ce2177275d325c7d30ff1631...HEAD
+git diff --name-only 010537202ca653d40dc6da2464482cf191aba401...HEAD
 ```
 
 No eval-assets mode, real model, real GitHub, credential, or paid test is allowed.

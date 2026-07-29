@@ -2,11 +2,46 @@
 
 ## Current status
 
-Phase 11B is implemented and tested **offline only** on the temporary stacked baseline
-`567bd3cf9fe97774ce2177275d325c7d30ff1631`. Phase 11A is not yet merged, Phase 11B
-has not been pushed, and no real GitHub canary has run. The offline results are
+Phase 11B is implemented and tested **offline only** on top of the Phase 11A merge
+`010537202ca653d40dc6da2464482cf191aba401`. Phase 11B has not been pushed, and no
+real GitHub canary has run. The offline results are
 engineering evidence, not a Business Pilot, model-quality result, production writer,
 or readiness proof.
+
+Phase 11A's verified green master CI run is `30419658651`. The rebased Phase 11B
+task branch is `codex/phase11b-github-sandbox-canary-v1`; its executable publisher
+commit is `81c8f528a8fffd7d9120323bb97d0657dec95862`, and its current local tip
+before this report update is `c1f14781676aac9522542e1d12fc5a6c38ac5c9d`.
+
+## Preparation authorization table
+
+This table is the locally completed **Phase 11B-Prep** record. It is not a
+schema-valid real-canary authorization object and does not open the GitHub write
+gate. Values marked `PENDING` cannot be safely inferred from the local repository
+and must be supplied by the repository owner before any real mutation.
+
+| Field | Value | Status |
+| --- | --- | --- |
+| Phase 11A merge SHA | `010537202ca653d40dc6da2464482cf191aba401` | Filled and verified |
+| Phase 11A green master CI | `30419658651` | Filled and verified |
+| Phase 11B branch | `codex/phase11b-github-sandbox-canary-v1` | Filled locally; not pushed |
+| Phase 11B executable code commit | `81c8f528a8fffd7d9120323bb97d0657dec95862` | Filled locally |
+| Phase 11B green Draft PR CI | `PENDING` | Requires an explicitly authorized push and CI run |
+| Runtime config SHA-256 | `PENDING` | No real-canary runtime config exists locally |
+| Image digest | `PENDING` | No real-canary image was built or published |
+| Base branch / base SHA | `master` / `010537202ca653d40dc6da2464482cf191aba401` | Branch filled; exact canary base must be frozen later |
+| Case denominator | `3` | Filled: `normal`, `crash_after_branch`, `crash_after_draft_pr` |
+| Cost ceiling | `0 CNY` incremental | Filled |
+| GitHub App / installation / account IDs | `PENDING` | Must be supplied from GitHub configuration |
+| Disposable sandbox repository owner/name/immutable ID | `PENDING` | Must be created and verified by owner |
+| Exact base-tree, branch, object, marker, payload, test, budget, checkpoint and commit-message hashes | `PENDING` | Must be generated after the exact sandbox and payload are frozen |
+| Authorization ID / canonical SHA-256 / time window | `PENDING` | Must be issued after all exact bindings are known |
+| Token injection / expiry / revocation procedure | `PENDING` | Must be approved operationally; no token was accessed |
+| Runtime host / egress / TLS policy | `PENDING` | Must be approved for the real transport |
+| Authorization / revocation / kill-switch / incident / cleanup owners | `PENDING` | Named owners are not present in repository evidence |
+
+The publisher therefore remains fail-closed. No GitHub App credential, private key,
+installation token, repository alias, or real endpoint was accessed during this prep.
 
 The auth-004 evidence remains permanently unchanged: five selected/headline attempts,
 zero completed, five failed, stable category
@@ -157,115 +192,27 @@ cleanup window; the service has no delete/close method.
 
 ## Phase 11A merge integration
 
-Before a Phase 11B push or real canary:
+The required integration is complete. Local `master` and `origin/master` both point to
+`010537202ca653d40dc6da2464482cf191aba401`, the Phase 11A master CI run is
+`30419658651`, and the Phase 11B branch was rebased onto that merge before validation.
+The changed-file set remains exactly the seven paths declared by the Single Writer
+section. The executable publisher commit is
+`81c8f528a8fffd7d9120323bb97d0657dec95862`.
 
-1. fetch origin and record the actual Phase 11A merge SHA and green master CI URL/ID;
-2. verify local `master == origin/master ==` that merge SHA;
-3. rebase or cherry-pick the unpushed Phase 11B local commit onto that exact SHA;
-4. inspect every changed file and re-check the frozen interfaces;
-5. rerun the Phase 10, Phase 11A, and Phase 11B offline suites, Ruff, mypy,
-   `scripts/verify.py`, `pip check`, and diff/leak checks;
-6. freeze a new Phase 11B executable code SHA and discard all pre-rebase code evidence.
+Offline validation completed on the rebased tree:
 
-Run the following from the clean Phase 11B worktree only after the owner confirms the
-Phase 11A merge and its green master CI result. Replace both placeholders before
-running; this block intentionally performs no push, PR creation, merge, or canary:
+| Command | Result |
+| --- | --- |
+| `python -m unittest -v tests.test_phase11b_github_sandbox_canary` | 20 tests passed; 1 skipped |
+| `python -m unittest -v tests.test_phase11a_synthetic_staging` | Passed |
+| `python -m unittest discover -s tests` | 923 tests passed; 18 skipped |
+| `python -m ruff check .` | Passed |
+| `python -m mypy src/code_review_agent` | Passed; 36 source files |
+| `python scripts/verify.py` | Passed; offline verification valid |
+| `python -m pip check` | Passed; no broken requirements |
+| `git diff --check` | Passed |
 
-```powershell
-$Phase11AMerge = "<actual 40-character Phase 11A merge SHA>"
-$Phase11ACiRun = "<green Phase 11A master CI URL or run ID>"
-$StackedBase = "567bd3cf9fe97774ce2177275d325c7d30ff1631"
-$TaskBranch = "codex/phase11b-github-sandbox-canary-v1"
-
-if ($Phase11AMerge -notmatch '^[0-9a-f]{40}$') {
-    throw "Fill the exact Phase 11A merge SHA first"
-}
-if ([string]::IsNullOrWhiteSpace($Phase11ACiRun) -or $Phase11ACiRun.StartsWith("<")) {
-    throw "Record the green Phase 11A master CI URL or run ID first"
-}
-if ((git branch --show-current).Trim() -ne $TaskBranch) {
-    throw "Open the Phase 11B task worktree before integration"
-}
-if (@(git status --porcelain).Count -ne 0) {
-    throw "Phase 11B worktree must be clean"
-}
-
-$OfflineTip = (git rev-parse HEAD).Trim()
-$OfflineCommitCount = [int](git rev-list --count "$StackedBase..$OfflineTip")
-git fetch --prune origin
-if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
-
-$LocalMaster = (git rev-parse master).Trim()
-$OriginMaster = (git rev-parse origin/master).Trim()
-if ($LocalMaster -ne $Phase11AMerge -or $OriginMaster -ne $Phase11AMerge) {
-    throw "master/origin/master does not equal the approved Phase 11A merge SHA"
-}
-if ((git merge-base $StackedBase $OfflineTip).Trim() -ne $StackedBase) {
-    throw "Offline Phase 11B tip is not based on the frozen stacked baseline"
-}
-
-git rebase --onto $Phase11AMerge $StackedBase $TaskBranch
-if ($LASTEXITCODE -ne 0) { throw "Resolve or abort the rebase; do not continue validation" }
-
-$RebasedTip = (git rev-parse HEAD).Trim()
-if ((git merge-base $Phase11AMerge $RebasedTip).Trim() -ne $Phase11AMerge) {
-    throw "Rebased Phase 11B is not based on the approved Phase 11A merge SHA"
-}
-if ([int](git rev-list --count "$Phase11AMerge..$RebasedTip") -ne $OfflineCommitCount) {
-    throw "The rebase changed the number of Phase 11B commits"
-}
-
-$ExpectedFiles = @(
-    "docs/phase11b-github-sandbox-canary-v1.md"
-    "docs/plans/phase11b-github-sandbox-canary-v1.md"
-    "migrations/versions/0008_phase11b_github_sandbox_canary.py"
-    "schemas/phase11b-github-sandbox-authorization.schema.json"
-    "src/code_review_agent/github_sandbox_publish.py"
-    "src/code_review_agent/repair_publish.py"
-    "tests/test_phase11b_github_sandbox_canary.py"
-)
-$ChangedFiles = @(git diff --name-only "$Phase11AMerge...$RebasedTip")
-$UnexpectedFiles = @(Compare-Object $ExpectedFiles $ChangedFiles)
-if ($UnexpectedFiles.Count -ne 0) {
-    $UnexpectedFiles | Format-Table | Out-String | Write-Error
-    throw "Rebased changed-file set differs from the Single Writer contract"
-}
-
-$Python = (Resolve-Path '..\..\.venv\Scripts\python.exe').Path
-$env:PYTHONPATH = (Resolve-Path 'src').Path
-& $Python -m unittest -v tests.test_phase10_repair_service
-if ($LASTEXITCODE -ne 0) { throw "Phase 10 regression failed" }
-& $Python -m unittest -v tests.test_phase11a_synthetic_staging
-if ($LASTEXITCODE -ne 0) { throw "Phase 11A regression failed" }
-& $Python -m unittest -v tests.test_phase11b_github_sandbox_canary
-if ($LASTEXITCODE -ne 0) { throw "Phase 11B regression failed" }
-& $Python -m ruff check .
-if ($LASTEXITCODE -ne 0) { throw "Ruff failed" }
-& $Python -m mypy src/code_review_agent
-if ($LASTEXITCODE -ne 0) { throw "mypy failed" }
-& $Python scripts/verify.py
-if ($LASTEXITCODE -ne 0) { throw "full offline verification failed" }
-& $Python -m pip check
-if ($LASTEXITCODE -ne 0) { throw "pip check failed" }
-git diff --check "$Phase11AMerge...$RebasedTip"
-if ($LASTEXITCODE -ne 0) { throw "rebased diff check failed" }
-
-$LeakPattern = 'github_pat_|gh[pousr]_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|[A-Za-z]:\\Users\\'
-$LeakMatches = @(
-    git diff --no-color "$Phase11AMerge...$RebasedTip" |
-        Where-Object { $_ -notmatch '^\+\$LeakPattern = ' } |
-        Select-String -Pattern $LeakPattern
-)
-if ($LeakMatches.Count -ne 0) {
-    throw "Review potential credential or host-path leakage before continuing"
-}
-
-Write-Output "Phase 11A merge: $Phase11AMerge"
-Write-Output "Phase 11A green master CI: $Phase11ACiRun"
-Write-Output "Pre-rebase Phase 11B tip (evidence now stale): $OfflineTip"
-Write-Output "Refrozen Phase 11B executable code SHA: $RebasedTip"
-```
-
-Any Phase 11A executable change before merge requires a fresh integration review. A
-successful offline rebase still does not authorize GitHub product writes, a task-branch
-push, a Phase 11B PR, or a real canary.
+Docker/Postgres integration was not used for this offline prep and is not canary
+evidence. The results above authorize only local Phase 11B-Prep delivery; they do not
+authorize a task-branch push, Draft PR creation, or real GitHub canary. Any Phase 11A
+executable change requires a fresh integration review.
