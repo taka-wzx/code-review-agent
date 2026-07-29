@@ -1,6 +1,8 @@
 # Phase 11B-Prep: GitHub Sandbox Publisher Canary v1
 
-Status: **offline implementation and preparation only; real canary is not authorized**
+Status: **canary-executor preparation and delivery authorized; real writes remain
+closed until the complete second gate, six human decisions, and short-lived
+credential gate are satisfied**
 
 Phase 11A is merged on `master` at
 `010537202ca653d40dc6da2464482cf191aba401`; the verified green master CI run is
@@ -171,7 +173,12 @@ Codex owns exactly these paths for Phase 11B-Prep:
 - `migrations/versions/0008_phase11b_github_sandbox_canary.py`;
 - `src/code_review_agent/repair_publish.py`;
 - `src/code_review_agent/github_sandbox_publish.py`;
-- `tests/test_phase11b_github_sandbox_canary.py`.
+- `src/code_review_agent/github_canary_executor.py`;
+- `scripts/phase11b_github_canary.py`;
+- `schemas/phase11b-github-sandbox-runtime.schema.json`;
+- `Dockerfile.service` (only the root-to-UID-1000 canary secret-file path handoff);
+- `tests/test_phase11b_github_sandbox_canary.py`;
+- `tests/test_phase11b_github_canary_executor.py`.
 
 Every other path is read-only. In particular, no command may enumerate, read, execute,
 copy, or modify `eval/**` or `eval/holdout/**`. Dependencies, lock files, package entry
@@ -180,6 +187,53 @@ sentinels remain frozen. The additions to the existing publisher public types ar
 expressly authorized by the Phase 11B request; existing fake/dry-run behavior and
 Phase 10/11A callers remain backward compatible. Any further writable path or backend
 requires a contract revision and explicit user approval before editing.
+
+### Executor-preparation scope expansion
+
+On 2026-07-29 the repository owner confirmed the Phase 11A merge and green master
+CI and explicitly authorized the remaining Phase 11B executor work. The new paths
+added above are required to provide a strict runtime-config schema, deterministic Git
+object materialization, secure file-only credential providers, a database-authenticated
+human approval command, and a one-case-at-a-time canary command. This revision does not
+add a dependency, package entry point, service route, implicit migration, credential
+minting path, or additional GitHub endpoint. `Dockerfile.service` is included only
+because the existing root entrypoint already copies allowlisted root-owned host secret
+files into a UID-1000 `0600` tmpfs handoff; extending that fixed variable list is needed
+for the CRAG approver-token file and GitHub installation-token file while keeping secret
+values out of image layers, environment values, argv, and logs.
+
+The executor must:
+
+- require an exact versioned runtime config with unknown fields rejected and canonical
+  SHA-256 recomputed before every prepare/approve/run operation;
+- bind the exact root base-tree manifest and independently reproduce the Git blob,
+  resulting tree, and commit object IDs before an approval can be issued;
+- accept only top-level synthetic canary files so the frozen non-recursive base-tree
+  manifest is sufficient to reproduce the resulting root tree;
+- authenticate an approving human by reading one explicitly named, secure CRAG bearer-
+  token file and resolving the current Principal through the database; role and
+  identity are never caller-supplied;
+- issue and consume one WRITE plus one DRAFT_PR envelope per case, for six separate
+  one-use human decisions total; neither Codex, an agent, nor the service may perform
+  those decisions;
+- read a GitHub installation token only from one explicitly named JSON file with an
+  exact field set, bounded size, regular-file/no-symlink checks, mode `0600`, approved
+  owner UID, exact App/installation/account identity, revocation state, and a lifetime
+  no longer than one hour; no environment/PAT/`gh`/Git fallback exists;
+- require exact schema head `0008_phase11b_github_canary` and never run a migration;
+- run only one frozen case per explicit invocation, implement deterministic process-
+  restart failpoints for the two crash cases, and block later cases after an earlier
+  failure or quarantine;
+- emit only canonical redacted worksheets/status/receipts and never print a token,
+  private key, credential path, database URL, host path, repository alias, branch,
+  synthetic body, or approving identity.
+
+The runtime config contains no secret, private key, token, raw host IP, database URL,
+or credential path. It binds the exact code commit and local image ID, tracked-source
+archive and rendered deployment-config digests, repository/App/installation identity,
+base ref and root-tree manifest, three cases, request/time/retry budgets, pinned API
+host, TLS/redirect policy, token-file injection mode, synthetic-only claim boundary,
+and a SHA-256-redacted Aliyun runtime identity.
 
 ## Offline acceptance
 
@@ -198,6 +252,7 @@ Required validation is offline:
 
 ```powershell
 python -m unittest -v tests.test_phase11b_github_sandbox_canary
+python -m unittest -v tests.test_phase11b_github_canary_executor
 python -m unittest -v tests.test_phase11a_synthetic_staging
 python -m unittest discover -s tests
 python -m ruff check .
@@ -214,9 +269,12 @@ an environment skip is reported and is not canary evidence.
 
 ## Delivery and second authorization gate
 
-This prep round ends with one stable local task-branch commit after full diff review,
-Single Writer verification, and sensitive-data scanning. It does not push, create a
-Phase 11B PR, execute a real canary, or claim Phase 11B complete.
+This executor round ends with one stable task-branch commit after full diff review,
+Single Writer verification, and sensitive-data scanning. The owner's 2026-07-29
+instruction authorizes exactly one non-force push of the consolidated branch and one
+Phase 11B Draft PR (or update of the single existing Phase 11B PR) after every local
+gate passes. It does not authorize a second delivery PR, an empty trial commit, a
+product-side GitHub write, or a claim that Phase 11B is complete.
 
 After Phase 11A owner merge, record the actual merge SHA and green master CI run,
 verify `master == origin/master`, rebase the unpushed Phase 11B commit onto that merge,
@@ -230,3 +288,27 @@ branch/marker identities, three-case denominator, all request/mutation/read/time
 budgets, CNY-zero cost, short-lived credential injection/revocation, runtime egress/TLS
 policy, incident owner, and cleanup/retention owner. That later authorization is not
 implied by this contract.
+
+## GitHub Actions quota discipline
+
+The following owner rule is mandatory for this task: diagnose first, batch the complete
+fix, and push once; with no code/config/workflow change, rerun only failed jobs.
+
+- A CI result is evidence only for its exact commit SHA. A new commit receives at most
+  one complete PR workflow run; already-passing jobs are not separately rerun.
+- After a first failure, inspect only the failed job steps/logs and record the complete
+  root-cause set before changing code.
+- An infrastructure-only intermittent failure with no code, lockfile, or workflow
+  change may use GitHub's **Re-run failed jobs** exactly; **Re-run all jobs** is
+  prohibited.
+- If code must change, resolve all variants locally, run every affected local gate,
+  create one normal consolidated commit, and make one non-force push. Empty commits,
+  repeated small-fix pushes, duplicate PRs, superseded-run reruns, passed-run reruns,
+  and validation-only `workflow_dispatch` runs are prohibited.
+- After the PR passes, merge happens once through the protected owner path and only the
+  merge commit's one main CI run is monitored. Before any tag/release, verify the tag
+  ref cannot match `push.branches` and cause an unintended extra run.
+- Every necessary extra run is recorded with run ID, commit SHA, trigger, whether code
+  changed, and why failed-job-only rerun was insufficient.
+- Network, Docker, Compose, Gitleaks, pre-commit, or GitHub API unavailability is
+  recorded once and is not retried merely to consume another Actions run.

@@ -300,6 +300,8 @@ class GitHubSandboxAuthorization:
         expires = _utc(self.expires_at)
         if not issued <= not_before < expires:
             raise ValueError("authorization time order is invalid")
+        if (expires - not_before).total_seconds() > 3600:
+            raise ValueError("authorization window exceeds one hour")
         _positive_int("max_requests", self.max_requests, maximum=100)
         _positive_int("max_mutations", self.max_mutations, maximum=30)
         _positive_int("max_reads", self.max_reads, maximum=100)
@@ -1510,10 +1512,15 @@ class GitHubDraftPrPublisher:
     def _token(self) -> InstallationToken:
         if self.authorization is None or self.token_provider is None:
             raise GitHubSandboxPublicationError(GitHubFailure.AUTHORIZATION_MISMATCH)
+        now = datetime.fromtimestamp(float(self.clock()), tz=timezone.utc)
+        if now < _utc(self.authorization.not_before):
+            raise GitHubSandboxPublicationError(GitHubFailure.AUTHORIZATION_MISMATCH)
+        if now >= _utc(self.authorization.expires_at):
+            raise GitHubSandboxPublicationError(GitHubFailure.AUTHORIZATION_EXPIRED)
         token = self.token_provider()
         if token.revoked:
             raise GitHubSandboxPublicationError(GitHubFailure.TOKEN_REVOKED)
-        if token.expires_at.astimezone(timezone.utc) <= datetime.fromtimestamp(float(self.clock()), tz=timezone.utc):
+        if token.expires_at.astimezone(timezone.utc) <= now:
             raise GitHubSandboxPublicationError(GitHubFailure.TOKEN_EXPIRED)
         if (
             token.app_id != self.authorization.github_app_id

@@ -52,7 +52,7 @@ RUN python -m pip install --index-url "$PYPI_INDEX_URL" -r requirements.lock \
         '  mkdir -p "$secret_dir"' \
         '  chown root:root "$secret_dir"' \
         '  chmod 0711 "$secret_dir"' \
-        '  for variable in CRAG_DATABASE_PASSWORD_FILE CRAG_WEBHOOK_SECRET_FILE CRAG_SERVICE_TOKEN_FILE; do' \
+        '  for variable in CRAG_DATABASE_PASSWORD_FILE CRAG_WEBHOOK_SECRET_FILE CRAG_SERVICE_TOKEN_FILE CRAG_CANARY_APPROVER_TOKEN_FILE CRAG_CANARY_GITHUB_TOKEN_FILE; do' \
         '    source=$(printenv "$variable" 2>/dev/null || true)' \
         '    [ -n "$source" ] || continue' \
         '    [ -f "$source" ] || continue' \

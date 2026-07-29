@@ -2,16 +2,18 @@
 
 ## Current status
 
-Phase 11B is implemented and tested **offline only** on top of the Phase 11A merge
-`010537202ca653d40dc6da2464482cf191aba401`. Phase 11B has not been pushed, and no
-real GitHub canary has run. The offline results are
-engineering evidence, not a Business Pilot, model-quality result, production writer,
-or readiness proof.
+Phase 11B publisher and canary executor are implemented and tested **offline only** on
+top of the Phase 11A merge `010537202ca653d40dc6da2464482cf191aba401`.
+The executor is delivered by the consolidated task-branch commit whose exact SHA is
+reported externally; no real GitHub canary has run. The offline results are engineering
+evidence, not a Business Pilot,
+model-quality result, production writer, or readiness proof.
 
 Phase 11A's verified green master CI run is `30419658651`. The rebased Phase 11B
-task branch is `codex/phase11b-github-sandbox-canary-v1`; its executable publisher
-commit is `81c8f528a8fffd7d9120323bb97d0657dec95862`, and its current local tip
-before this report update is `c1f14781676aac9522542e1d12fc5a6c38ac5c9d`.
+task branch is `codex/phase11b-github-sandbox-canary-v1`; the earlier publisher-only
+commit is `81c8f528a8fffd7d9120323bb97d0657dec95862`. The exact executor code SHA is frozen
+only after the consolidated commit is created and therefore is intentionally not
+self-recorded in this commit's contents.
 
 ## Preparation authorization table
 
@@ -24,21 +26,22 @@ and must be supplied by the repository owner before any real mutation.
 | --- | --- | --- |
 | Phase 11A merge SHA | `010537202ca653d40dc6da2464482cf191aba401` | Filled and verified |
 | Phase 11A green master CI | `30419658651` | Filled and verified |
-| Phase 11B branch | `codex/phase11b-github-sandbox-canary-v1` | Filled locally; not pushed |
-| Phase 11B executable code commit | `81c8f528a8fffd7d9120323bb97d0657dec95862` | Filled locally |
+| Phase 11B branch | `codex/phase11b-github-sandbox-canary-v1` | Exact push/CI status is external delivery evidence, not self-recorded |
+| Phase 11B executable code commit | `PENDING CONSOLIDATED COMMIT` | Must bind the executor, not the earlier publisher-only commit |
 | Phase 11B green Draft PR CI | `PENDING` | Requires an explicitly authorized push and CI run |
 | Runtime config SHA-256 | `PENDING` | No real-canary runtime config exists locally |
 | Image digest | `PENDING` | No real-canary image was built or published |
-| Base branch / base SHA | `master` / `010537202ca653d40dc6da2464482cf191aba401` | Branch filled; exact canary base must be frozen later |
+| Phase 11B source baseline | `origin/master` / `010537202ca653d40dc6da2464482cf191aba401` | Phase 11A merge baseline; separate from the sandbox base below |
 | Case denominator | `3` | Filled: `normal`, `crash_after_branch`, `crash_after_draft_pr` |
 | Cost ceiling | `0 CNY` incremental | Filled |
-| GitHub App / installation / account IDs | `PENDING` | Must be supplied from GitHub configuration |
-| Disposable sandbox repository owner/name/immutable ID | `PENDING` | Must be created and verified by owner |
+| GitHub App / installation / account IDs | `4421400` / `149747930` / candidate `186135139` | App and installation confirmed by owner; account ID must be re-read at final freeze |
+| Disposable sandbox repository owner/name/immutable ID | `taka-wzx/crag-phase11b-sandbox` / `1315679182` | Public synthetic-only repository; immutable ID must be re-read at final freeze |
+| Candidate sandbox base | `main` / `a50e171d093219b084d26c754a5386500039095f` / tree `61ed082498193a9fc3363db50229f2b1c85c4738` | Discovery value only; all three values and the complete non-recursive root manifest must be re-read immediately before authorization |
 | Exact base-tree, branch, object, marker, payload, test, budget, checkpoint and commit-message hashes | `PENDING` | Must be generated after the exact sandbox and payload are frozen |
 | Authorization ID / canonical SHA-256 / time window | `PENDING` | Must be issued after all exact bindings are known |
-| Token injection / expiry / revocation procedure | `PENDING` | Must be approved operationally; no token was accessed |
-| Runtime host / egress / TLS policy | `PENDING` | Must be approved for the real transport |
-| Authorization / revocation / kill-switch / incident / cleanup owners | `PENDING` | Named owners are not present in repository evidence |
+| Token injection / expiry / revocation procedure | Explicit absolute Linux JSON file; regular, no symlink, owner root/current runtime UID, mode `0600`, exact IDs, revoked flag, <=1 hour | Private key stays outside CRAG; operator replaces or removes the token file to revoke local use and revokes the installation token/App grant at GitHub when required |
+| Runtime host / egress / TLS policy | Existing Aliyun ECS in `cn-hangzhou`; runtime identity is SHA-256-redacted in config; only `api.github.com:443`; normal CA verification; redirects disabled | No new server, database, registry, public listener, DNS, or TLS endpoint |
+| Authorization / revocation / kill-switch / incident / cleanup owners | `taka-wzx` | Cleanup remains separately authorized; no automatic branch/PR deletion exists |
 
 The publisher therefore remains fail-closed. No GitHub App credential, private key,
 installation token, repository alias, or real endpoint was accessed during this prep.
@@ -67,11 +70,87 @@ zero completed, five failed, stable category
 - The HTTPS transport pins `https://api.github.com`, normal CA verification, a frozen
   endpoint/method allowlist, disabled redirect following, bounded timeout/response
   size, and response projection that discards blob/tree contents.
+- A strict runtime-config schema binds the exact local image ID, source/deployment
+  digests, hashed runtime identity, repository/App/installation identity, complete root
+  base-tree manifest, three cases, zero-retry budget, egress/TLS policy, and all derived
+  Git object and publication hashes. Unknown/duplicate fields fail closed.
+- The executor recomputes Git blob, tree, and commit objects with Git's native object
+  encoding. Synthetic files are top-level only, so a complete non-recursive root-tree
+  manifest is enough to reproduce the exact tree that GitHub's `base_tree` operation
+  must return.
+- Approval decisions authenticate an existing CRAG bearer credential against current
+  database membership. No CLI role, user, organization, or auth-method argument exists.
+  Each invocation decides only one of the six exact approval envelopes.
+- `run` executes or reconciles one case only. The two crash cases return exit code 75 at
+  their deterministic first stop; rerunning the identical command performs read-back
+  reconciliation and cannot resend the recorded mutation.
 
 Ordinary tests inject an in-memory recording transport and a synthetic token provider.
 They do not open a socket, inspect Git credentials, call a model, or read a real
 repository. Their receipts keep `real_github_sandbox_writes=false`; only the separately
 authorized real-transport gate may set that field to `true`.
+
+## Executor entry points
+
+The runtime config and canonical authorization are non-secret files. The database URL
+and password continue to use the existing `CRAG_DATABASE_URL` /
+`CRAG_DATABASE_URL_FILE` and `CRAG_DATABASE_PASSWORD_FILE` deployment boundary. The
+executor verifies exact Alembic revision `0008_phase11b_github_canary`; it never runs a
+migration.
+
+On the Aliyun service image, invoke the installed module as
+`python -m code_review_agent.github_canary_executor` with the same arguments shown
+below. The root entrypoint accepts only the two additional **path** variables
+`CRAG_CANARY_APPROVER_TOKEN_FILE` and `CRAG_CANARY_GITHUB_TOKEN_FILE`, copies their
+root-owned `0600` source files into tmpfs, changes only the copies to UID 1000, and then
+drops privileges. The explicit CLI paths inside the container are respectively
+`/tmp/crag-secrets/CRAG_CANARY_APPROVER_TOKEN` and
+`/tmp/crag-secrets/CRAG_CANARY_GITHUB_TOKEN`; neither environment variable carries a
+token value.
+
+Global options precede the subcommand:
+
+```powershell
+python scripts/phase11b_github_canary.py `
+  --runtime-config <runtime-config.json> `
+  --authorization <authorization.json> validate
+
+python scripts/phase11b_github_canary.py `
+  --runtime-config <runtime-config.json> `
+  --authorization <authorization.json> prepare
+```
+
+`prepare` returns a redacted worksheet containing the three case IDs, six approval IDs,
+their exact binding hashes, and the worksheet hash. It does not expose repository,
+branch, path, content, credential, or human identity. For each worksheet item, the human
+operator—not Codex or the service—runs one decision command:
+
+```powershell
+python scripts/phase11b_github_canary.py `
+  --runtime-config <runtime-config.json> `
+  --authorization <authorization.json> approve `
+  --case-id <case-id> `
+  --kind <write-or-draft_pr> `
+  --approval-id <exact-approval-id> `
+  --decision approve `
+  --crag-token-file <absolute-secure-file>
+```
+
+Only after all six decisions are consumed and the operator has created a short-lived
+installation-token JSON file may one case be invoked:
+
+```powershell
+python scripts/phase11b_github_canary.py `
+  --runtime-config <runtime-config.json> `
+  --authorization <authorization.json> run `
+  --case-id <exact-case-id> `
+  --github-token-file <absolute-secure-json-file>
+```
+
+The token JSON fields are exactly `token`, `github_app_id`, `installation_id`,
+`installation_account_id`, `expires_at`, and `revoked`. The executor never mints an
+installation token and never reads a GitHub App private key, PAT, environment token,
+`gh` credential, or Git credential helper.
 
 ## Durable sequence
 
@@ -192,27 +271,39 @@ cleanup window; the service has no delete/close method.
 
 ## Phase 11A merge integration
 
-The required integration is complete. Local `master` and `origin/master` both point to
+The required branch integration is complete. `origin/master` points to
 `010537202ca653d40dc6da2464482cf191aba401`, the Phase 11A master CI run is
-`30419658651`, and the Phase 11B branch was rebased onto that merge before validation.
-The changed-file set remains exactly the seven paths declared by the Single Writer
-section. The executable publisher commit is
-`81c8f528a8fffd7d9120323bb97d0657dec95862`.
+`30419658651`, and the Phase 11B branch contains that merge as its direct baseline.
+The separate release worktree's local `master` ref is still stale at `21344a2...`; this
+task does not mutate or fast-forward `master`, and real-canary evidence must use the
+verified `origin/master` merge SHA. The earlier executable publisher commit is
+`81c8f528a8fffd7d9120323bb97d0657dec95862`; it is superseded for runtime purposes by
+the pending consolidated executor commit.
 
 Offline validation completed on the rebased tree:
 
 | Command | Result |
 | --- | --- |
-| `python -m unittest -v tests.test_phase11b_github_sandbox_canary` | 20 tests passed; 1 skipped |
-| `python -m unittest -v tests.test_phase11a_synthetic_staging` | Passed |
-| `python -m unittest discover -s tests` | 923 tests passed; 18 skipped |
+| `python -m unittest -v tests.test_phase11b_github_sandbox_canary tests.test_phase11b_github_canary_executor` | Passed; publisher and executor offline suites both green |
+| `python -m unittest -v tests.test_phase11b_github_canary_executor` | 11 tests passed |
+| `python -m unittest -v tests.test_phase11a_synthetic_staging` | 20 tests passed; 1 Postgres environment skip |
+| `python -m unittest discover -s tests` (through `scripts/verify.py`) | 934 tests passed; 18 environment skips |
 | `python -m ruff check .` | Passed |
-| `python -m mypy src/code_review_agent` | Passed; 36 source files |
-| `python scripts/verify.py` | Passed; offline verification valid |
+| `python -m mypy src/code_review_agent` | Passed; 37 source files |
+| `python scripts/verify.py` | Passed; total branch coverage 85%, offline verification valid |
 | `python -m pip check` | Passed; no broken requirements |
 | `git diff --check` | Passed |
 
-Docker/Postgres integration was not used for this offline prep and is not canary
-evidence. The results above authorize only local Phase 11B-Prep delivery; they do not
-authorize a task-branch push, Draft PR creation, or real GitHub canary. Any Phase 11A
-executable change requires a fresh integration review.
+Local Docker integration could not start because access to the Docker Desktop Linux
+engine named pipe was denied; this fact was recorded once and the command was not
+retried. The Phase 11A real-Postgres test also skipped because
+`CRAG_PHASE11A_POSTGRES_URL` was not supplied. Neither skip is canary evidence. The
+installed Gitleaks executable was also denied by the local OS before it could start;
+the fixed changed-file scan for private-key markers, live-token prefixes, host IP, and
+absolute user paths returned no matches and Gitleaks was not retried. No local
+`pre-commit` executable is installed, and the frozen CI workflow declares neither a
+Gitleaks nor pre-commit job. The
+owner now authorizes one consolidated non-force push and one Phase 11B Draft PR only
+after every final local gate passes,
+under the Actions quota discipline in the task contract. They do not authorize a real
+GitHub canary. Any Phase 11A executable change requires a fresh integration review.
