@@ -82,6 +82,8 @@ _CASE_FIELDS = frozenset(
         "case_id",
         "repair_job_id",
         "repair_repository_id",
+        "repair_base_sha",
+        "repair_diff_sha256",
         "head_branch",
         "app_idempotency_key",
         "synthetic_file_path",
@@ -384,6 +386,8 @@ class RuntimeCase:
     case_id: str
     repair_job_id: str
     repair_repository_id: str
+    repair_base_sha: str
+    repair_diff_sha256: str
     head_branch: str
     app_idempotency_key: str
     synthetic_file_path: str
@@ -409,6 +413,7 @@ class RuntimeCase:
             raise ValueError("runtime case is unknown")
         for name in ("repair_job_id", "repair_repository_id", "app_idempotency_key"):
             _required(name, getattr(self, name), maximum=128)
+        _git_sha("repair_base_sha", self.repair_base_sha)
         _normalized_branch("head_branch", self.head_branch)
         if not self.head_branch.startswith("crag-canary/"):
             raise ValueError("runtime case branch is outside the canary prefix")
@@ -431,6 +436,7 @@ class RuntimeCase:
         _git_sha("expected_tree_sha", self.expected_tree_sha)
         _git_sha("exact_commit_sha", self.exact_commit_sha)
         for name in (
+            "repair_diff_sha256",
             "diff_sha256",
             "test_evidence_sha256",
             "durable_budget_sha256",
@@ -467,6 +473,8 @@ class RuntimeCase:
             "case_id": self.case_id,
             "repair_job_id": self.repair_job_id,
             "repair_repository_id": self.repair_repository_id,
+            "repair_base_sha": self.repair_base_sha,
+            "repair_diff_sha256": self.repair_diff_sha256,
             "head_branch": self.head_branch,
             "app_idempotency_key": self.app_idempotency_key,
             "synthetic_file_path": self.synthetic_file_path,
@@ -494,6 +502,8 @@ def freeze_runtime_case(
     case_id: str,
     repair_job_id: str,
     repair_repository_id: str,
+    repair_base_sha: str,
+    repair_diff_sha256: str,
     head_branch: str,
     app_idempotency_key: str,
     synthetic_file_path: str,
@@ -566,6 +576,8 @@ def freeze_runtime_case(
         case_id=case_id,
         repair_job_id=repair_job_id,
         repair_repository_id=repair_repository_id,
+        repair_base_sha=repair_base_sha,
+        repair_diff_sha256=repair_diff_sha256,
         head_branch=head_branch,
         app_idempotency_key=app_idempotency_key,
         synthetic_file_path=synthetic_file_path,
@@ -858,6 +870,8 @@ class GitHubCanaryRuntimeConfig:
             repair_job_id=case.repair_job_id,
             organization_id=authorization.organization_id,
             repair_repository_id=case.repair_repository_id,
+            repair_base_sha=case.repair_base_sha,
+            repair_diff_sha256=case.repair_diff_sha256,
             repository_owner=self.repository_owner,
             repository_name=self.repository_name,
             repository_id=self.repository_id,
