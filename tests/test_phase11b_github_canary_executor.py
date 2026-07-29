@@ -571,15 +571,15 @@ class Phase11BGitHubCanaryExecutorTests(unittest.TestCase):
         ).encode()
         new_tree = run(["mktree"], tree_input)
         self.assertEqual(new_tree, git_tree_sha(all_entries))
-        git_commit = subprocess.run(
-            [git, "commit-tree", new_tree, "-p", base_commit],
-            cwd=root,
-            input=b"Synthetic sandbox canary\n",
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            check=True,
-        ).stdout.decode("ascii").strip()
+        epoch = int(datetime(2026, 7, 29, 1, tzinfo=timezone.utc).timestamp())
+        commit_body = (
+            f"tree {new_tree}\n"
+            f"parent {base_commit}\n"
+            f"author {COMMIT_ACTOR_NAME} <{COMMIT_ACTOR_EMAIL}> {epoch} +0000\n"
+            f"committer {COMMIT_ACTOR_NAME} <{COMMIT_ACTOR_EMAIL}> {epoch} +0000\n"
+            "\nSynthetic sandbox canary"
+        ).encode("utf-8")
+        git_commit = run(["hash-object", "-t", "commit", "--stdin"], commit_body)
         self.assertEqual(
             git_commit,
             git_commit_sha(
@@ -589,6 +589,24 @@ class Phase11BGitHubCanaryExecutorTests(unittest.TestCase):
                 timestamp="2026-07-29T01:00:00Z",
             ),
         )
+        self.assertNotEqual(
+            git_commit,
+            run(["hash-object", "-t", "commit", "--stdin"], commit_body + b"\n"),
+        )
+        for invalid_message in (
+            "Synthetic sandbox\ncanary",
+            "Synthetic sandbox canary\n",
+            "Synthetic sandbox\rcanary",
+            "Synthetic sandbox canary\r",
+        ):
+            with self.subTest(invalid_message=repr(invalid_message)):
+                with self.assertRaises(ValueError):
+                    git_commit_sha(
+                        tree_sha=new_tree,
+                        parent_sha=base_commit,
+                        message=invalid_message,
+                        timestamp="2026-07-29T01:00:00Z",
+                    )
 
     def test_secure_file_metadata_rejects_mode_owner_and_symlink(self) -> None:
         validate_secret_metadata(
