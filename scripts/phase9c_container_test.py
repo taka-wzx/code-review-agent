@@ -473,11 +473,6 @@ def _run_acceptance() -> dict[str, Any]:
         prepare_context(context)
         secrets_dir = root / "secrets"
         secrets_dir.mkdir()
-        repositories = root / "repositories"
-        repository = repositories / "repo"
-        repository.mkdir(parents=True)
-        (repository / ".git").mkdir()
-
         values = {
             "postgres": secrets.token_urlsafe(32),
             "webhook": secrets.token_urlsafe(32),
@@ -500,9 +495,8 @@ def _run_acceptance() -> dict[str, Any]:
                 "CRAG_WEBHOOK_SECRET_FILE": str(paths["webhook"]),
                 "CRAG_SERVICE_TOKEN_FILE": str(paths["service"]),
                 "CRAG_PROVIDER_API_KEY_FILE": str(paths["provider"]),
-                "CRAG_REPOSITORY_ROOT": str(repositories),
                 "CRAG_REPOSITORIES_JSON": json.dumps(
-                    {"owner/container": "/repositories/repo"}, separators=(",", ":")
+                    {"owner/container": "/synthetic/repository"}, separators=(",", ":")
                 ),
                 "CRAG_ALLOW_LOCAL_TOKEN": "true",
                 "CRAG_SERVICE_HOST": "127.0.0.1",

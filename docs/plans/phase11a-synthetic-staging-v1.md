@@ -1,8 +1,8 @@
 # Phase 11A: Synthetic Staging Deployment Validation v1
 
 Status: **synthetic staging validation succeeded for executable commit
-`e901c6c4bc7a51e1572efc35690dd05df7e3b66c`; Draft PR #17 is open and merge remains
-blocked until CI obtains a runner and passes**
+`e901c6c4bc7a51e1572efc35690dd05df7e3b66c`; Draft PR #17 CI is 8/9 green and the
+owner authorized one fake Compose harness compatibility fix before merge**
 
 Frozen baseline: `origin/master` at
 `21344a2b72be8cb83361875b5cc8f2952e99ffbf`
@@ -178,6 +178,7 @@ Codex owns exactly the following paths for this task. Every other path is read-o
 - `src/code_review_agent/service_queue.py`;
 - `src/code_review_agent/worker.py`;
 - `compose.service.yml`, `Dockerfile.service`, and `Dockerfile.repair`;
+- `scripts/phase9c_container_test.py` (2026-07-29 CI-only compatibility revision);
 - `scripts/phase11a_synthetic_staging_test.py`;
 - `tests/test_phase11a_synthetic_staging.py`.
 
@@ -217,10 +218,13 @@ the executable/runtime is unavailable; such a skip is not staging validation.
 
 Before delivery, inspect every changed file and audit it for unauthorized scope and
 sensitive data. The executable deployment remains frozen at `e901c6c...`; subsequent
-documentation-only status commits are not deployed artifacts. The task branch is pushed
-and Draft PR #17 is open. All CI jobs failed before receiving a runner and contain no
-steps or logs, so the PR must remain Draft and unmerged until that external gate is
-restored and the checks pass.
+documentation-only or test-harness-only commits are not deployed artifacts. The task
+branch is pushed and Draft PR #17 is open. After hosted-runner capacity returned on
+2026-07-29, eight jobs passed and only `compose-fake-run` failed: its pre-11A harness
+still requested the removed `/repositories` bind mount. The owner authorized changing
+only `scripts/phase9c_container_test.py` to use the image's frozen
+`/synthetic/repository`; Dockerfiles, Compose, runtime code, and deployment evidence
+remain unchanged. Merge stays blocked until the resulting CI run is fully green.
 
 ## Change control
 
