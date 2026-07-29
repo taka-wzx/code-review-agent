@@ -5,68 +5,110 @@ on:
     branches: [master, main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest]
-        python: ["3.10", "3.11", "3.12", "3.13"]
-        include:
-          - os: windows-latest
-            python: "3.11"
-    runs-on: ${{ matrix.os }}
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Week 6 live-result validation proves the committed A4 freeze is
           # an ancestor of HEAD and therefore needs more than a shallow tip.
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python }}
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
       - name: Install package and dev validation tools
         run: python -m pip install -e ".[dev]"
       - name: Offline validation
         run: python scripts/verify.py
 
+  compatibility:
+    strategy:
+      fail-fast: ${{ github.event_name == 'pull_request' }}
+      matrix: >-
+        ${{ fromJSON(
+          github.event_name == 'pull_request' &&
+          '{"include":[{"os":"ubuntu-latest","python":"3.10"},{"os":"windows-latest","python":"3.11"}]}' ||
+          '{"include":[{"os":"ubuntu-latest","python":"3.10"},{"os":"ubuntu-latest","python":"3.11"},{"os":"ubuntu-latest","python":"3.12"},{"os":"windows-latest","python":"3.11"}]}'
+        ) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
+      - name: Install package and dev validation tools
+        run: python -m pip install -e ".[dev]"
+      - name: Compatibility unit suite
+        run: python -m unittest discover -s tests -v
+
   lock-check:
     # The lockfile documents the exact reproducible dependency environment;
     # make sure it installs cleanly on the pinned interpreter.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
       - name: Install from lockfile
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e . --no-deps
           python -c "import code_review_agent"
 
-  container-smoke:
+  container-compose:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
+      - name: Install package for the container harness
+        run: python -m pip install -e .
       - name: Prepare filtered image context
         run: python scripts/phase9c_container_test.py --prepare-context "$RUNNER_TEMP/crag-build-context"
       - name: Build CLI image
         run: docker build --tag code-review-agent:ci "$RUNNER_TEMP/crag-build-context"
       - name: Start CLI image
         run: docker run --rm code-review-agent:ci --help
-      - name: Build service image
-        run: >-
-          docker build --file Dockerfile.service --tag code-review-agent-service:ci
-          "$RUNNER_TEMP/crag-build-context"
-      - name: Start service image
-        run: docker run --rm code-review-agent-service:ci --help
+      - name: Show Compose runtime
+        run: docker compose version
+      - name: API, two-worker, Postgres, and explicit-migration fake run
+        run: python scripts/phase9c_container_test.py
 
   postgres-integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:16-alpine
@@ -83,10 +125,14 @@ jobs:
       CRAG_TEST_POSTGRES_URL: postgresql+psycopg://postgres@127.0.0.1:5432/postgres
       CRAG_TEST_POSTGRES_RESET: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
       - name: Install package and dev validation tools
         run: python -m pip install -e ".[dev]"
       - name: Explicit Postgres migration
@@ -99,17 +145,3 @@ jobs:
           --workers 2
       - name: Postgres lease, recovery, idempotency, and quota integration
         run: python -m unittest -v tests.test_phase9c_postgres
-
-  compose-fake-run:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-      - name: Install package for the container harness
-        run: python -m pip install -e .
-      - name: Show Compose runtime
-        run: docker compose version
-      - name: API, two-worker, Postgres, and explicit-migration fake run
-        run: python scripts/phase9c_container_test.py

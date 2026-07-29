@@ -191,6 +191,23 @@ python3 -m venv .venv
 
 `scripts/verify.py` 依次执行：Ruff lint → 单测+golden 测试（带分支覆盖率）→ 覆盖率门禁（85%）→ mypy → `python -m code_review_agent --help` 冒烟 → `crag --help` 冒烟。任一步失败即退出非零。Phase 9C 的本地与 CI 验证均不读取冻结评测目录。
 
+### GitHub Actions CI
+
+CI 保留 `pull_request` 与 `master`/`main` push 两类触发，但避免在同一 run 中重复执行完整质量门：
+
+- `quality` 在 Ubuntu/Python 3.13 上且仅执行一次 `scripts/verify.py`；
+- PR 的 `compatibility` 只覆盖 Ubuntu/Python 3.10 与 Windows/Python 3.11；
+- 受保护分支 push 额外覆盖 Ubuntu/Python 3.11 和 3.12；
+- `lock-check`、`container-compose` 与 `postgres-integration` 继续独立保留；
+- 同一 PR 的旧 run 会取消，受保护分支 run 永不互相取消。
+
+所有 `actions/checkout` 与 `actions/setup-python` 引用都使用经核验 Release 的完整 commit SHA，
+并在旁边保留版本注释。PR 的六项 required checks 为 `quality`、
+`compatibility (ubuntu-latest, 3.10)`、`compatibility (windows-latest, 3.11)`、
+`lock-check`、`container-compose` 和 `postgres-integration`。只有固定 SHA 的 workflow 合入
+默认分支后，才能启用仓库级 Action SHA 强制策略；required-check 名称必须与 workflow 迁移同步，
+避免在过渡窗口绕过检查或永久阻塞合并。
+
 ## Docker
 
 ```bash
