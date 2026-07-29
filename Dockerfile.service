@@ -1,6 +1,9 @@
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim
 
+ARG DEBIAN_MIRROR=https://deb.debian.org
+ARG PYPI_INDEX_URL=https://pypi.org/simple
+
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -13,10 +16,20 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 WORKDIR /app
 
-RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' \
+RUN case "$DEBIAN_MIRROR" in \
+        https://deb.debian.org|https://mirrors.aliyun.com) ;; \
+        *) echo "unsupported DEBIAN_MIRROR" >&2; exit 64 ;; \
+    esac \
+    && case "$PYPI_INDEX_URL" in \
+        https://pypi.org/simple|https://mirrors.aliyun.com/pypi/simple/) ;; \
+        *) echo "unsupported PYPI_INDEX_URL" >&2; exit 64 ;; \
+    esac \
+    && sed -i \
+        -e "s|http://deb.debian.org|${DEBIAN_MIRROR}|g" \
+        -e "s|https://deb.debian.org|${DEBIAN_MIRROR}|g" \
         /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Retries=5 update \
-    && apt-get install --yes --no-install-recommends ca-certificates gh git util-linux \
+    && apt-get install --yes --no-install-recommends ca-certificates git util-linux \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml requirements.lock README.md LICENSE ./
@@ -24,12 +37,13 @@ COPY alembic.ini ./
 COPY migrations ./migrations
 COPY src ./src
 
-RUN python -m pip install -r requirements.lock \
-    && python -m pip install . --no-deps \
+RUN python -m pip install --index-url "$PYPI_INDEX_URL" -r requirements.lock \
+    && python -m pip install --index-url "$PYPI_INDEX_URL" . --no-deps \
     && groupadd --gid 1000 appuser \
     && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin appuser \
-    && mkdir -p /var/lib/crag/state /var/lib/crag/jobs /var/lib/crag/traces \
-    && chown -R appuser:appuser /var/lib/crag \
+    && mkdir -p /var/lib/crag/state /var/lib/crag/jobs /var/lib/crag/traces /synthetic/repository \
+    && git init --quiet --initial-branch=main /synthetic/repository \
+    && chown -R appuser:appuser /var/lib/crag /synthetic \
     && printf '%s\n' \
         '#!/bin/sh' \
         'set -eu' \
@@ -38,7 +52,7 @@ RUN python -m pip install -r requirements.lock \
         '  mkdir -p "$secret_dir"' \
         '  chown root:root "$secret_dir"' \
         '  chmod 0711 "$secret_dir"' \
-        '  for variable in CRAG_DATABASE_PASSWORD_FILE CRAG_WEBHOOK_SECRET_FILE CRAG_SERVICE_TOKEN_FILE DEEPSEEK_API_KEY_FILE GLM_API_KEY_FILE ZHIPUAI_API_KEY_FILE; do' \
+        '  for variable in CRAG_DATABASE_PASSWORD_FILE CRAG_WEBHOOK_SECRET_FILE CRAG_SERVICE_TOKEN_FILE; do' \
         '    source=$(printenv "$variable" 2>/dev/null || true)' \
         '    [ -n "$source" ] || continue' \
         '    [ -f "$source" ] || continue' \

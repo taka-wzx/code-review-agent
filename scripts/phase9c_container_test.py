@@ -473,11 +473,6 @@ def _run_acceptance() -> dict[str, Any]:
         prepare_context(context)
         secrets_dir = root / "secrets"
         secrets_dir.mkdir()
-        repositories = root / "repositories"
-        repository = repositories / "repo"
-        repository.mkdir(parents=True)
-        (repository / ".git").mkdir()
-
         values = {
             "postgres": secrets.token_urlsafe(32),
             "webhook": secrets.token_urlsafe(32),
@@ -500,9 +495,8 @@ def _run_acceptance() -> dict[str, Any]:
                 "CRAG_WEBHOOK_SECRET_FILE": str(paths["webhook"]),
                 "CRAG_SERVICE_TOKEN_FILE": str(paths["service"]),
                 "CRAG_PROVIDER_API_KEY_FILE": str(paths["provider"]),
-                "CRAG_REPOSITORY_ROOT": str(repositories),
                 "CRAG_REPOSITORIES_JSON": json.dumps(
-                    {"owner/container": "/repositories/repo"}, separators=(",", ":")
+                    {"owner/container": "/synthetic/repository"}, separators=(",", ":")
                 ),
                 "CRAG_ALLOW_LOCAL_TOKEN": "true",
                 "CRAG_SERVICE_HOST": "127.0.0.1",
@@ -530,7 +524,16 @@ def _run_acceptance() -> dict[str, Any]:
             harness.compose(
                 "--profile", "migration", "run", "--rm", "migrate", timeout=180
             )
-            harness.compose("up", "-d", "--scale", "worker=2", "api", "worker", timeout=180)
+            harness.compose(
+                "up",
+                "-d",
+                "--scale",
+                "worker=2",
+                "api",
+                "worker",
+                "repair-worker",
+                timeout=180,
+            )
             harness.wait_ready(200)
             health = harness.api({"path": "/healthz"})
             _assert_status(health, 200, "liveness")
@@ -647,6 +650,7 @@ def _run_acceptance() -> dict[str, Any]:
             running_workers = harness.compose("ps", "-q", "worker").stdout.splitlines()
             if running_workers:
                 harness.docker_run("stop", "--time", "3", *running_workers, timeout=30)
+            harness.compose("stop", "repair-worker", timeout=30)
             harness.wait_ready(503, timeout=12)
 
             harness.sql(
@@ -688,6 +692,7 @@ def _run_acceptance() -> dict[str, Any]:
                 raise HarnessError("queue overflow did not return stable queue_full")
 
             harness.docker_run("start", *worker_ids, timeout=60)
+            harness.compose("start", "repair-worker", timeout=60)
             harness.wait_ready(200, timeout=20)
             harness.wait_state(queue_job_id, {"awaiting_approval"}, timeout=35)
             harness.wait_state(webhook_job_id, {"awaiting_approval"}, timeout=35)

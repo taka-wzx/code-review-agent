@@ -20,7 +20,7 @@ import uuid
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from code_review_agent.database import database_url_from_env, sqlite_database_url
+from code_review_agent.database import Database, database_url_from_env, sqlite_database_url
 from code_review_agent.context_memory import OrganizationPolicyStore, RepositoryMemoryStore
 from code_review_agent.llm import make_client
 from code_review_agent.observability import aggregate_trace, load_span_records
@@ -35,6 +35,10 @@ from code_review_agent.service_core import (
     ReviewRunner,
 )
 from code_review_agent.service_queue import JobLease, JobStore, LeaseLost, SCHEMA_VERSION
+from code_review_agent.repair_service import (
+    SyntheticRepairWorker,
+    create_synthetic_staging_repair_service,
+)
 
 
 @dataclass(frozen=True)
@@ -647,6 +651,29 @@ def create_worker_from_env() -> ReviewWorker:
         raise
 
 
+def create_synthetic_repair_worker_from_env() -> SyntheticRepairWorker:
+    """Create the Phase 11A worker and fail before any real adapter can run."""
+    settings = WorkerSettings.from_env()
+    configured_state = os.environ.get("CRAG_STATE_DIR")
+    state = Path(configured_state) if configured_state else Path.home() / ".crag" / "service"
+    database_url = database_url_from_env(
+        default=sqlite_database_url(state / "reviews.sqlite3")
+    )
+    database = Database(database_url)
+    try:
+        service = create_synthetic_staging_repair_service(database)
+        return SyntheticRepairWorker(
+            service,
+            worker_id=settings.worker_id,
+            poll_seconds=settings.poll_seconds,
+            heartbeat_seconds=settings.heartbeat_seconds,
+            stale_seconds=settings.stale_seconds,
+        )
+    except BaseException:
+        database.close()
+        raise
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a durable code-review-agent worker")
     parser.add_argument(
@@ -654,11 +681,37 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="exit zero when the database is ready and a worker heartbeat is fresh",
     )
+    parser.add_argument(
+        "--synthetic-repair",
+        action="store_true",
+        help="run the offline-only Phase 11A synthetic Repair worker",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    if args.synthetic_repair:
+        repair_worker = create_synthetic_repair_worker_from_env()
+        if args.check:
+            healthy = repair_worker.store.live_worker_count(
+                stale_seconds=repair_worker.stale_seconds
+            ) > 0
+            repair_worker.store.database.close()
+            raise SystemExit(0 if healthy else 1)
+
+        def repair_stop(signum: int, frame: Any) -> None:
+            del signum, frame
+            repair_worker.request_shutdown()
+
+        signal.signal(signal.SIGTERM, repair_stop)
+        signal.signal(signal.SIGINT, repair_stop)
+        try:
+            repair_worker.run_forever()
+        finally:
+            repair_worker.store.database.close()
+        return
+
     worker = create_worker_from_env()
     if args.check:
         healthy = worker.store.database_ready() and worker.store.worker_is_live(

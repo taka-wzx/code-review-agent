@@ -1,8 +1,13 @@
 x-app-image: &app-image
-  image: code-review-agent-service:phase9c
+  # A separately authorized deployment must replace this local build tag with an
+  # immutable registry digest and record that digest in its deployment receipt.
+  image: ${CRAG_SERVICE_IMAGE:-code-review-agent-service:phase11a-synthetic}
   build:
     context: ${CRAG_BUILD_CONTEXT:?set a filtered build context}
     dockerfile: Dockerfile.service
+    args:
+      DEBIAN_MIRROR: ${CRAG_DEBIAN_MIRROR:-https://deb.debian.org}
+      PYPI_INDEX_URL: ${CRAG_PYPI_INDEX_URL:-https://pypi.org/simple}
 
 x-database-environment: &database-environment
   CRAG_DATABASE_URL: postgresql+psycopg://crag@postgres:5432/crag
@@ -13,8 +18,15 @@ x-database-environment: &database-environment
 
 x-service-environment: &service-environment
   <<: *database-environment
-  CRAG_REPOSITORIES_JSON: ${CRAG_REPOSITORIES_JSON:?set container-path repository mappings}
+  # Synthetic staging never mounts a real repository.  The service image contains
+  # only this empty, synthetic Git checkout for compatibility with the Review API.
+  CRAG_REPOSITORIES_JSON: '${CRAG_REPOSITORIES_JSON:-{"synthetic/repository":"/synthetic/repository"}}'
   CRAG_WORKER_STALE_SECONDS: ${CRAG_WORKER_STALE_SECONDS:-30}
+
+x-synthetic-repair-environment: &synthetic-repair-environment
+  CRAG_REPAIR_RUNTIME: synthetic
+  CRAG_REPAIR_PROVIDER: synthetic
+  CRAG_REPAIR_PUBLISHER: dry_run
 
 x-runtime-hardening: &runtime-hardening
   init: true
@@ -74,9 +86,10 @@ services:
   api:
     <<: [*app-image, *runtime-hardening]
     environment:
-      <<: *service-environment
+      <<: [*service-environment, *synthetic-repair-environment]
       CRAG_WEBHOOK_SECRET_FILE: /run/secrets/webhook_secret
       CRAG_ALLOW_LOCAL_TOKEN: ${CRAG_ALLOW_LOCAL_TOKEN:-false}
+      CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH: ${CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH:-false}
       CRAG_SERVICE_TOKEN_FILE: /run/secrets/service_token
       CRAG_SERVICE_HOST: ${CRAG_SERVICE_HOST:-0.0.0.0}
       CRAG_SERVICE_PORT: 8000
@@ -86,12 +99,6 @@ services:
       - service_token
     volumes:
       - service_artifacts:/var/lib/crag
-      - type: bind
-        source: ${CRAG_REPOSITORY_ROOT:?set a private repository root}
-        target: /repositories
-        read_only: true
-    ports:
-      - "127.0.0.1:${CRAG_PUBLISHED_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,7 +126,9 @@ services:
     command: ["crag-worker"]
     environment:
       <<: *service-environment
-      CRAG_WORKER_RUNNER: ${CRAG_WORKER_RUNNER:-real}
+      # The synthetic staging Compose path never mounts or accepts a provider key.
+      # Selecting the real runner therefore fails closed during worker startup.
+      CRAG_WORKER_RUNNER: ${CRAG_WORKER_RUNNER:-fake}
       CRAG_WORKER_CONCURRENCY: ${CRAG_WORKER_CONCURRENCY:-2}
       CRAG_JOB_LEASE_SECONDS: ${CRAG_JOB_LEASE_SECONDS:-60}
       CRAG_JOB_HEARTBEAT_SECONDS: ${CRAG_JOB_HEARTBEAT_SECONDS:-10}
@@ -127,26 +136,46 @@ services:
       CRAG_SHUTDOWN_GRACE_SECONDS: ${CRAG_SHUTDOWN_GRACE_SECONDS:-30}
       CRAG_RECEIVED_TIMEOUT_SECONDS: ${CRAG_RECEIVED_TIMEOUT_SECONDS:-60}
       CRAG_FAKE_RUN_SECONDS: ${CRAG_FAKE_RUN_SECONDS:-0}
-      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
-      DEEPSEEK_API_KEY_FILE: /run/secrets/provider_api_key
-      GLM_API_KEY_FILE: /run/secrets/provider_api_key
-      ZHIPUAI_API_KEY_FILE: /run/secrets/provider_api_key
     secrets:
       - postgres_password
-      - provider_api_key
     volumes:
       - service_artifacts:/var/lib/crag
-      - type: bind
-        source: ${CRAG_REPOSITORY_ROOT:?set a private repository root}
-        target: /repositories
-        read_only: true
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "crag-entrypoint", "crag-worker", "--check"]
       interval: 10s
-      timeout: 5s
+      timeout: 30s
+      retries: 6
+      start_period: 15s
+    stop_grace_period: ${CRAG_CONTAINER_STOP_GRACE_PERIOD:-35s}
+    restart: unless-stopped
+    networks:
+      - service
+
+  repair-worker:
+    <<: [*app-image, *runtime-hardening]
+    entrypoint: ["crag-entrypoint"]
+    command: ["crag-worker", "--synthetic-repair"]
+    environment:
+      <<: [*service-environment, *synthetic-repair-environment]
+      CRAG_WORKER_CONCURRENCY: 1
+      CRAG_JOB_LEASE_SECONDS: ${CRAG_JOB_LEASE_SECONDS:-60}
+      CRAG_JOB_HEARTBEAT_SECONDS: ${CRAG_JOB_HEARTBEAT_SECONDS:-10}
+      CRAG_WORKER_POLL_SECONDS: ${CRAG_WORKER_POLL_SECONDS:-1}
+      CRAG_SHUTDOWN_GRACE_SECONDS: ${CRAG_SHUTDOWN_GRACE_SECONDS:-30}
+    secrets:
+      - postgres_password
+    volumes:
+      - service_artifacts:/var/lib/crag
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "crag-entrypoint", "crag-worker", "--synthetic-repair", "--check"]
+      interval: 10s
+      timeout: 30s
       retries: 6
       start_period: 15s
     stop_grace_period: ${CRAG_CONTAINER_STOP_GRACE_PERIOD:-35s}
@@ -161,8 +190,6 @@ secrets:
     file: ${CRAG_WEBHOOK_SECRET_FILE:?set a private Webhook secret file}
   service_token:
     file: ${CRAG_SERVICE_TOKEN_FILE:?set a private local/bootstrap token file}
-  provider_api_key:
-    file: ${CRAG_PROVIDER_API_KEY_FILE:?set a private provider-key file or noncredential fake-run fixture}
 
 volumes:
   postgres_data:
@@ -170,3 +197,4 @@ volumes:
 
 networks:
   service:
+    internal: true
