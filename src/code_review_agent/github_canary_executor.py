@@ -367,7 +367,7 @@ def git_commit_sha(
     _git_sha("commit tree SHA", tree_sha)
     _git_sha("commit parent SHA", parent_sha)
     _required("commit message", message, maximum=256)
-    if "\n" in message or message.endswith("\n"):
+    if "\n" in message:
         raise ValueError("commit message must be a single line without a trailing newline")
     moment = _utc(timestamp)
     epoch = int(moment.timestamp())
@@ -376,7 +376,9 @@ def git_commit_sha(
         f"parent {parent_sha}\n"
         f"author {COMMIT_ACTOR_NAME} <{COMMIT_ACTOR_EMAIL}> {epoch} +0000\n"
         f"committer {COMMIT_ACTOR_NAME} <{COMMIT_ACTOR_EMAIL}> {epoch} +0000\n"
-        f"\n{message}\n"
+        # GitHub's Git Database API preserves the submitted message bytes.  A
+        # single-line JSON message therefore has no implicit trailing newline.
+        f"\n{message}"
     ).encode("utf-8")
     return git_object_sha("commit", content)
 
