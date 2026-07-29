@@ -2,7 +2,7 @@
 
 Status: **synthetic staging validation succeeded for executable commit
 `e901c6c4bc7a51e1572efc35690dd05df7e3b66c`; Draft PR #17 CI is 8/9 green and the
-owner authorized one fake Compose harness compatibility fix before merge**
+owner authorized the remaining fake Compose repair-worker lifecycle fix before merge**
 
 Frozen baseline: `origin/master` at
 `21344a2b72be8cb83361875b5cc8f2952e99ffbf`
@@ -221,10 +221,13 @@ sensitive data. The executable deployment remains frozen at `e901c6c...`; subseq
 documentation-only or test-harness-only commits are not deployed artifacts. The task
 branch is pushed and Draft PR #17 is open. After hosted-runner capacity returned on
 2026-07-29, eight jobs passed and only `compose-fake-run` failed: its pre-11A harness
-still requested the removed `/repositories` bind mount. The owner authorized changing
-only `scripts/phase9c_container_test.py` to use the image's frozen
-`/synthetic/repository`; Dockerfiles, Compose, runtime code, and deployment evidence
-remain unchanged. Merge stays blocked until the resulting CI run is fully green.
+still requested the removed `/repositories` bind mount. The first authorized harness
+revision switched it to the image's frozen `/synthetic/repository`; the next CI run
+confirmed that path fix but remained 8/9 because the harness did not start the
+`repair-worker` now required by Phase 11A readiness. The owner authorized one final
+change to synchronize that fake worker's start, outage, and recovery lifecycle.
+Dockerfiles, Compose, runtime code, and deployment evidence remain unchanged. Merge
+stays blocked until the resulting CI run is fully green.
 
 ## Change control
 

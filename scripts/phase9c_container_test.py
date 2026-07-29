@@ -524,7 +524,16 @@ def _run_acceptance() -> dict[str, Any]:
             harness.compose(
                 "--profile", "migration", "run", "--rm", "migrate", timeout=180
             )
-            harness.compose("up", "-d", "--scale", "worker=2", "api", "worker", timeout=180)
+            harness.compose(
+                "up",
+                "-d",
+                "--scale",
+                "worker=2",
+                "api",
+                "worker",
+                "repair-worker",
+                timeout=180,
+            )
             harness.wait_ready(200)
             health = harness.api({"path": "/healthz"})
             _assert_status(health, 200, "liveness")
@@ -641,6 +650,7 @@ def _run_acceptance() -> dict[str, Any]:
             running_workers = harness.compose("ps", "-q", "worker").stdout.splitlines()
             if running_workers:
                 harness.docker_run("stop", "--time", "3", *running_workers, timeout=30)
+            harness.compose("stop", "repair-worker", timeout=30)
             harness.wait_ready(503, timeout=12)
 
             harness.sql(
@@ -682,6 +692,7 @@ def _run_acceptance() -> dict[str, Any]:
                 raise HarnessError("queue overflow did not return stable queue_full")
 
             harness.docker_run("start", *worker_ids, timeout=60)
+            harness.compose("start", "repair-worker", timeout=60)
             harness.wait_ready(200, timeout=20)
             harness.wait_state(queue_job_id, {"awaiting_approval"}, timeout=35)
             harness.wait_state(webhook_job_id, {"awaiting_approval"}, timeout=35)
