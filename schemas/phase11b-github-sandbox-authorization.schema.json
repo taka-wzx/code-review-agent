@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11b-github-sandbox-authorization.schema.json",
+  "title": "CRAG GitHub sandbox canary authorization v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authorization_id",
+    "organization_id",
+    "repository_owner",
+    "repository_name",
+    "repository_id",
+    "github_app_id",
+    "installation_id",
+    "installation_account_id",
+    "allowed_base_branch",
+    "frozen_base_sha",
+    "cases",
+    "max_denominator",
+    "executable_code_sha",
+    "runtime_config_sha256",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "max_requests",
+    "max_mutations",
+    "max_reads",
+    "max_branches",
+    "max_commits",
+    "max_draft_prs",
+    "cost_ceiling_micro_cny",
+    "authorization_owner",
+    "revocation_owner",
+    "kill_switch_owner"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.github-sandbox-authorization/v1alpha1"},
+    "authorization_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "organization_id": {"type": "string", "minLength": 1, "maxLength": 96},
+    "repository_owner": {"type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$"},
+    "repository_name": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,100}$"},
+    "repository_id": {"type": "integer", "minimum": 1},
+    "github_app_id": {"type": "integer", "minimum": 1},
+    "installation_id": {"type": "integer", "minimum": 1},
+    "installation_account_id": {"type": "integer", "minimum": 1},
+    "allowed_base_branch": {"$ref": "#/$defs/branch"},
+    "frozen_base_sha": {"$ref": "#/$defs/gitSha"},
+    "cases": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/case"}
+    },
+    "max_denominator": {"const": 3},
+    "executable_code_sha": {"$ref": "#/$defs/gitSha"},
+    "runtime_config_sha256": {"$ref": "#/$defs/sha256"},
+    "issued_at": {"$ref": "#/$defs/utcSecond"},
+    "not_before": {"$ref": "#/$defs/utcSecond"},
+    "expires_at": {"$ref": "#/$defs/utcSecond"},
+    "max_requests": {"type": "integer", "minimum": 1, "maximum": 100},
+    "max_mutations": {"type": "integer", "minimum": 1, "maximum": 30},
+    "max_reads": {"type": "integer", "minimum": 1, "maximum": 100},
+    "max_branches": {"type": "integer", "minimum": 1, "maximum": 3},
+    "max_commits": {"type": "integer", "minimum": 1, "maximum": 3},
+    "max_draft_prs": {"type": "integer", "minimum": 1, "maximum": 3},
+    "cost_ceiling_micro_cny": {"const": 0},
+    "authorization_owner": {"$ref": "#/$defs/ownerLabel"},
+    "revocation_owner": {"$ref": "#/$defs/ownerLabel"},
+    "kill_switch_owner": {"$ref": "#/$defs/ownerLabel"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "branch": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^(?!.*(?:\\.\\.|//|/\\.|\\.lock$))(?:[A-Za-z0-9]|[A-Za-z0-9][A-Za-z0-9._/-]*[A-Za-z0-9])$"
+    },
+    "utcSecond": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "ownerLabel": {"type": "string", "minLength": 1, "maxLength": 96},
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "head_branch"],
+      "properties": {
+        "case_id": {"enum": ["normal", "crash_after_branch", "crash_after_draft_pr"]},
+        "head_branch": {"$ref": "#/$defs/branch"}
+      }
+    }
+  }
+}
