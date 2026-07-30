@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase 11C Gate B authorization candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase_id",
+    "gate",
+    "authorization_id",
+    "authorization_sha256",
+    "baseline",
+    "binding_state",
+    "real_provider_calls_enabled",
+    "paid_calls_enabled",
+    "authorization_window",
+    "owners",
+    "gate_b_bindings",
+    "human_approvals"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-provider-canary-authorization/v1"},
+    "phase_id": {"const": "phase11c-provider-canary-v1"},
+    "gate": {"const": "gate_b"},
+    "authorization_id": {"const": "PENDING_FREEZE"},
+    "authorization_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "master_sha",
+        "ci_run_id",
+        "ci_attempt",
+        "ci_conclusion",
+        "phase11b_acceptance_report_sha256",
+        "phase11b_acceptance_status",
+        "phase11b_authorization_sha256",
+        "phase11b_runtime_config_sha256"
+      ],
+      "properties": {
+        "master_sha": {"const": "4af4b2756e8d2de6764d08e17a6e12040e24975e"},
+        "ci_run_id": {"const": 30451250259},
+        "ci_attempt": {"const": 1},
+        "ci_conclusion": {"const": "success"},
+        "phase11b_acceptance_report_sha256": {"const": "354398234ee34773f26b1811ece62a5ccc7ed9fd18472adb11e1907bec25c6f7"},
+        "phase11b_acceptance_status": {"const": "accepted"},
+        "phase11b_authorization_sha256": {"const": "73c8367ce00ce4ad77798dbd1bcbf0f3995528096b18924f2a198ba290796745"},
+        "phase11b_runtime_config_sha256": {"const": "e1a3d3adadc78ab0b11e8d28b60ba05552c503edf7b91661e895d24cb5ea8bdc"}
+      }
+    },
+    "binding_state": {"const": "pending_freeze"},
+    "real_provider_calls_enabled": {"const": false},
+    "paid_calls_enabled": {"const": false},
+    "authorization_window": {"const": "PENDING_FREEZE"},
+    "owners": {"const": "PENDING_FREEZE"},
+    "gate_b_bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runtime_config_sha256",
+        "executable_code_commit_sha",
+        "executable_source_tree_sha256",
+        "immutable_image_digest",
+        "source_archive_sha256",
+        "rendered_deployment_config_sha256",
+        "synthetic_cohort_manifest_sha256",
+        "preflight_verdict_sha256",
+        "provider_tariff_manifest_sha256",
+        "aliyun_runtime_identity_sha256"
+      ],
+      "properties": {
+        "runtime_config_sha256": {"const": "PENDING_FREEZE"},
+        "executable_code_commit_sha": {"const": "PENDING_FREEZE"},
+        "executable_source_tree_sha256": {"const": "PENDING_FREEZE"},
+        "immutable_image_digest": {"const": "PENDING_FREEZE"},
+        "source_archive_sha256": {"const": "PENDING_FREEZE"},
+        "rendered_deployment_config_sha256": {"const": "PENDING_FREEZE"},
+        "synthetic_cohort_manifest_sha256": {"const": "PENDING_FREEZE"},
+        "preflight_verdict_sha256": {"const": "PENDING_FREEZE"},
+        "provider_tariff_manifest_sha256": {"const": "PENDING_FREEZE"},
+        "aliyun_runtime_identity_sha256": {"const": "PENDING_FREEZE"}
+      }
+    },
+    "human_approvals": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["diagnostic", "headline_cohort"],
+      "properties": {
+        "diagnostic": {"const": "PENDING_EXPLICIT_APPROVAL"},
+        "headline_cohort": {"const": "PENDING_EXPLICIT_APPROVAL"}
+      }
+    }
+  }
+}
