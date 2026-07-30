@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -378,10 +378,11 @@ def source_sha256(source_path: Path | None = None) -> str:
 
 
 def lockfile_sha256(lockfile_path: Path | None = None) -> str:
-    """Freeze the exact installed package set by hash, without modifying the lockfile."""
+    """Freeze the package-set text by hash with fixed UTF-8/LF normalization."""
 
     path = lockfile_path or (Path(__file__).resolve().parent / "requirements.lock")
-    return sha256_bytes(path.read_bytes())
+    normalized = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return sha256_bytes(normalized.encode("utf-8"))
 
 
 def _synthetic_targets() -> list[dict[str, str]]:
@@ -1887,9 +1888,14 @@ ARTIFACT_FILENAMES = {
 
 
 def _safe_output_directory(value: str | Path) -> Path:
-    supplied = Path(value)
-    if supplied.is_absolute():
+    raw = str(value)
+    supplied = Path(raw)
+    posix_path = PurePosixPath(raw)
+    windows_path = PureWindowsPath(raw)
+    if supplied.is_absolute() or posix_path.is_absolute() or windows_path.anchor:
         _fail("absolute_output_path_denied")
+    if ".." in posix_path.parts or ".." in windows_path.parts:
+        _fail("output_path_escape_denied")
     root = Path(__file__).resolve().parent
     resolved = (root / supplied).resolve()
     try:

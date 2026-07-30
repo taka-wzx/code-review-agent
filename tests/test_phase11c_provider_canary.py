@@ -59,6 +59,15 @@ class Phase11CProviderCanaryTests(unittest.TestCase):
             crlf.write_bytes(b"line_one\r\nline_two\r\n")
             self.assertEqual(canary.source_sha256(lf), canary.source_sha256(crlf))
 
+    def test_lockfile_hash_normalizes_platform_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lf = root / "requirements-lf.lock"
+            crlf = root / "requirements-crlf.lock"
+            lf.write_bytes(b"package==1.0\npackage-two==2.0\n")
+            crlf.write_bytes(b"package==1.0\r\npackage-two==2.0\r\n")
+            self.assertEqual(canary.lockfile_sha256(lf), canary.lockfile_sha256(crlf))
+
     def test_candidate_bundle_is_deterministic_and_gate_b_remains_blocked(self) -> None:
         digest = "a" * 64
         first = canary.build_gate_a_candidates(executable_source_digest=digest)
@@ -236,8 +245,28 @@ class Phase11CProviderCanaryTests(unittest.TestCase):
         self.assertFalse({"openai", "http", "requests", "urllib"} & imports)
 
     def test_absolute_artifact_output_path_is_denied(self) -> None:
-        with self.assertRaisesRegex(canary.CanaryValidationError, "absolute_output_path_denied"):
-            canary.write_gate_a_artifacts(Path("C:/outside-repository"))
+        for output_directory in (
+            "/outside-repository",
+            "C:/outside-repository",
+            r"C:\outside-repository",
+            r"\\server\share\outside-repository",
+            r"\outside-repository",
+            "C:outside-repository",
+        ):
+            with self.subTest(output_directory=output_directory):
+                with self.assertRaisesRegex(canary.CanaryValidationError, "absolute_output_path_denied"):
+                    canary.write_gate_a_artifacts(output_directory)
+
+    def test_relative_artifact_output_path_escape_is_denied(self) -> None:
+        for output_directory in (
+            "../outside-repository",
+            "nested/../../outside-repository",
+            r"..\outside-repository",
+            r"nested\..\..\outside-repository",
+        ):
+            with self.subTest(output_directory=output_directory):
+                with self.assertRaisesRegex(canary.CanaryValidationError, "output_path_escape_denied"):
+                    canary.write_gate_a_artifacts(output_directory)
 
 
 if __name__ == "__main__":
