@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crag.invalid/schemas/phase11c-gateb-headline-cohort-receipt.schema.json",
+  "title": "Phase 11C headline cohort safe receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0},
+    "targetReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_ordinal", "target_stable_id", "payload_sha256", "receipt_sha256", "execution_status", "terminal_category"],
+      "properties": {
+        "target_ordinal": {"type": "integer", "minimum": 1, "maximum": 3},
+        "target_stable_id": {"type": "string", "pattern": "^p11c-[0-9a-f]{32}$"},
+        "payload_sha256": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_status": {"enum": ["completed", "failed", "inconclusive", "not_run_gate_blocked", "quarantined"]},
+        "terminal_category": {"type": "string", "pattern": "^[a-z_]+$"}
+      }
+    }
+  },
+  "required": [
+    "schema_version", "phase_id", "stage", "receipt_sha256", "authorization_sha256", "approval_binding_sha256",
+    "diagnostic_receipt_sha256", "cohort_manifest_sha256", "execution_status", "stop_policy", "stop_policy_sha256",
+    "stopped_after_ordinal", "target_receipts", "headline_target_count", "completed_target_count", "logical_call_count",
+    "provider_call_count", "http_attempt_count", "reserved_input_tokens", "reserved_output_tokens", "reserved_microcny",
+    "aggregate_remaining_microcny", "aggregate_remaining_after_reservation_microcny", "usage_known", "input_tokens_used",
+    "output_tokens_used", "estimated_microcny", "raw_retained", "redaction_applied", "retry_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-gateb-headline-cohort-receipt/v1"},
+    "phase_id": {"const": "phase11c-gateb-headline-cohort-executor-v1"},
+    "stage": {"const": "HEADLINE_COHORT"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "approval_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "diagnostic_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "cohort_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_status": {"enum": ["completed", "failed", "inconclusive", "not_run_gate_blocked", "quarantined"]},
+    "stop_policy": {"const": "stop_on_first_noncompleted_or_unknown_or_ambiguous"},
+    "stop_policy_sha256": {"$ref": "#/$defs/sha256"},
+    "stopped_after_ordinal": {"type": "integer", "minimum": 1, "maximum": 3},
+    "target_receipts": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/targetReceipt"}},
+    "headline_target_count": {"const": 3},
+    "completed_target_count": {"type": "integer", "minimum": 0, "maximum": 3},
+    "logical_call_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "provider_call_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "http_attempt_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "reserved_input_tokens": {"const": 12000},
+    "reserved_output_tokens": {"const": 768},
+    "reserved_microcny": {"const": 117504},
+    "aggregate_remaining_microcny": {"const": 14960832},
+    "aggregate_remaining_after_reservation_microcny": {"const": 14843328},
+    "usage_known": {"type": "boolean"},
+    "input_tokens_used": {"$ref": "#/$defs/count"},
+    "output_tokens_used": {"$ref": "#/$defs/count"},
+    "estimated_microcny": {"$ref": "#/$defs/count"},
+    "raw_retained": {"const": false},
+    "redaction_applied": {"const": true},
+    "retry_count": {"const": 0}
+  }
+}
