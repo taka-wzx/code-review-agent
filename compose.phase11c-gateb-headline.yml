@@ -41,6 +41,60 @@ services:
         source: gateb-protocol-state
         target: /var/lib/crag-gateb-headline
 
+  gateb-protocol-recovery:
+    profiles: ["recovery"]
+    image: "${PHASE11C_GATEB_HEADLINE_IMAGE:?set PHASE11C_GATEB_HEADLINE_IMAGE to the frozen local sha256 image ID}"
+    pull_policy: never
+    user: "0:0"
+    command: ["recover-headline"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 16
+    mem_limit: 64m
+    cpus: 0.25
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700
+    volumes:
+      - type: bind
+        source: /run/crag-gateb-headline/authorization.json
+        target: /run/crag-gateb-headline/authorization.json
+        read_only: true
+      - type: volume
+        source: gateb-protocol-state
+        target: /var/lib/crag-gateb-headline
+
+  gateb-protocol-diagnostic-recovery:
+    profiles: ["recovery"]
+    image: "${PHASE11C_GATEB_HEADLINE_IMAGE:?set PHASE11C_GATEB_HEADLINE_IMAGE to the frozen local sha256 image ID}"
+    pull_policy: never
+    user: "0:0"
+    command: ["recover-diagnostic"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 16
+    mem_limit: 64m
+    cpus: 0.25
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700
+    volumes:
+      - type: bind
+        source: /run/crag-gateb-diagnostic/authorization.json
+        target: /run/crag-gateb-diagnostic/authorization.json
+        read_only: true
+      - type: volume
+        source: gateb-protocol-state
+        target: /var/lib/crag-gateb-headline
+
 volumes:
   gateb-protocol-state:
     name: phase11c-gateb-headline-cohort-state-v1

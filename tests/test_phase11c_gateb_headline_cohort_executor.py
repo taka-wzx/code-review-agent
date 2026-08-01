@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import unittest
@@ -247,6 +248,20 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(receipt["terminal_category"], "credential_validation_failed")
         self.assertEqual(protocol.validate_diagnostic_receipt(receipt), receipt)
 
+    def test_offline_diagnostic_reconciliation_seals_counted_dispatch_as_quarantine(self) -> None:
+        authorization = _diagnostic_authorization()
+        binding = protocol.diagnostic_approval_binding_sha256(authorization)
+        state = protocol._new_diagnostic_state(authorization["authorization_sha256"], binding)
+        state = protocol._transition_diagnostic_state(state, execution_status="budget_reserved", budget_reserved=True)
+        state = protocol._transition_diagnostic_state(state, execution_status="credential_opened", credential_file_opened=True)
+        state = protocol._transition_diagnostic_state(state, execution_status="credential_validated", credential_validated=True)
+        state = protocol._transition_diagnostic_state(state, execution_status="http_attempted", http_attempt_count=1)
+        receipt = protocol.reconcile_interrupted_diagnostic_attempt(authorization, state, now_utc=NOW)
+        self.assertEqual(receipt["execution_status"], "quarantined")
+        self.assertEqual(receipt["http_attempt_count"], 1)
+        self.assertEqual(receipt["estimated_microcny"], 19584)
+        self.assertEqual(protocol.validate_diagnostic_receipt(receipt), receipt)
+
 
 class HeadlineExecutionTests(unittest.TestCase):
     def test_three_successful_targets_use_exactly_six_requests_and_seal_ledger(self) -> None:
@@ -349,8 +364,116 @@ class HeadlineExecutionTests(unittest.TestCase):
         )
         self.assertEqual(receipt["execution_status"], "inconclusive")
 
+    def test_unknown_provider_response_fields_fail_closed_before_submit(self) -> None:
+        authorization, diagnostic_authorization, diagnostic_receipt = _lineage()
+        binding = protocol.approval_binding_sha256(authorization)
+        target = protocol.HEADLINE_TARGETS[0]
+        body = json.loads(_tool_response("probe_canary", "probe", target, "probe-1").body.decode("utf-8"))
+        body["unfrozen_provider_extension"] = {"opaque": True}
+        transport = FakeTransport([protocol.HttpResult(200, json.dumps(body, separators=(",", ":")).encode("utf-8"))])
+        store = protocol.InMemoryCohortStateStore()
+        receipt = protocol.execute_headline_cohort(
+            authorization,
+            protocol.expected_approval_text(binding),
+            diagnostic_authorization,
+            diagnostic_receipt,
+            store=store,
+            credential_reader=FakeCredential(),
+            transport=transport,
+            now_utc=NOW,
+        )
+        self.assertEqual(receipt["execution_status"], "failed")
+        self.assertEqual(len(transport.calls), 1)
+        self.assertEqual(store.target_receipts[0]["terminal_category"], "provider_response_schema_invalid")
+
 
 class ReceiptAndStateTests(unittest.TestCase):
+    def test_offline_reconciliation_seals_interrupted_target_without_replay(self) -> None:
+        authorization, _, _ = _lineage()
+        binding = protocol.approval_binding_sha256(authorization)
+        state = protocol._new_state(authorization["authorization_sha256"], binding)
+        state = protocol._transition_state(
+            state,
+            execution_status="budget_reserved",
+            budget_reserved=True,
+            reserved_input_tokens=12000,
+            reserved_output_tokens=768,
+            reserved_microcny=117504,
+        )
+        state = protocol._transition_state(state, execution_status="credential_opened", credential_file_opened=True)
+        state = protocol._transition_state(state, execution_status="credential_validated", credential_validated=True)
+        state = protocol._transition_state(
+            state,
+            execution_status="running",
+            current_target_ordinal=1,
+            logical_call_count=1,
+            provider_call_count=1,
+            http_attempt_count=1,
+        )
+        receipts, envelope = protocol.reconcile_interrupted_headline_attempt(
+            authorization, state, [], now_utc=NOW
+        )
+        self.assertEqual(
+            [item["execution_status"] for item in receipts],
+            ["quarantined", "not_run_gate_blocked", "not_run_gate_blocked"],
+        )
+        self.assertEqual(receipts[0]["http_attempt_count"], 1)
+        self.assertEqual(envelope["cohort_receipt"]["execution_status"], "quarantined")
+        self.assertEqual(envelope["ledger"]["http_attempt_count"], 1)
+        self.assertEqual(protocol.validate_terminal_envelope(envelope), envelope)
+
+    def test_offline_reconciliation_preserves_completed_prefix_and_attempt_count(self) -> None:
+        authorization, _, _ = _lineage()
+        binding = protocol.approval_binding_sha256(authorization)
+        first = protocol._target_receipt(
+            authorization=authorization,
+            binding_sha=binding,
+            ordinal=1,
+            target=protocol.HEADLINE_TARGETS[0],
+            execution_status="completed",
+            terminal_category="provider_tool_submit",
+            finish_reason_category="tool_calls",
+            response_shape_category="tool_call",
+            tool_call_present=True,
+            submit_attempt_count=1,
+            logical_call_count=2,
+            provider_call_count=2,
+            http_attempt_count=2,
+            usage_known=True,
+            input_tokens_used=1,
+            output_tokens_used=1,
+            estimated_microcny=36,
+            http_status_class="2xx",
+            provider_response_sha256=_sha("d"),
+            tool_call_sha256=_sha("e"),
+        )
+        state = protocol._new_state(authorization["authorization_sha256"], binding)
+        state = protocol._transition_state(
+            state,
+            execution_status="budget_reserved",
+            budget_reserved=True,
+            reserved_input_tokens=12000,
+            reserved_output_tokens=768,
+            reserved_microcny=117504,
+        )
+        state = protocol._transition_state(state, execution_status="credential_opened", credential_file_opened=True)
+        state = protocol._transition_state(state, execution_status="credential_validated", credential_validated=True)
+        state = protocol._transition_state(
+            state,
+            execution_status="running",
+            current_target_ordinal=2,
+            next_target_ordinal=2,
+            logical_call_count=3,
+            provider_call_count=3,
+            http_attempt_count=3,
+        )
+        receipts, envelope = protocol.reconcile_interrupted_headline_attempt(
+            authorization, state, [first], now_utc=NOW
+        )
+        self.assertEqual([item["execution_status"] for item in receipts], ["completed", "quarantined", "not_run_gate_blocked"])
+        self.assertEqual(receipts[1]["http_attempt_count"], 1)
+        self.assertEqual(envelope["ledger"]["http_attempt_count"], 3)
+
     def test_target_and_ledger_tampering_are_detected(self) -> None:
         authorization, diagnostic_authorization, diagnostic_receipt = _lineage()
         binding = protocol.approval_binding_sha256(authorization)
@@ -413,6 +536,7 @@ class ArtifactAndSourceGuardTests(unittest.TestCase):
             "phase11c-gateb-protocol-diagnostic-authorization.schema.json": protocol.DIAGNOSTIC_AUTHORIZATION_FIELDS,
             "phase11c-gateb-protocol-diagnostic-receipt.schema.json": protocol.DIAGNOSTIC_RECEIPT_FIELDS,
             "phase11c-gateb-headline-cohort-authorization.schema.json": protocol.AUTHORIZATION_FIELDS,
+            "phase11c-gateb-headline-cohort-target-receipt.schema.json": protocol.TARGET_RECEIPT_FIELDS,
             "phase11c-gateb-headline-cohort-receipt.schema.json": protocol.COHORT_RECEIPT_FIELDS,
             "phase11c-gateb-headline-cohort-ledger.schema.json": protocol.LEDGER_FIELDS,
         }
@@ -420,6 +544,8 @@ class ArtifactAndSourceGuardTests(unittest.TestCase):
             document = json.loads((ROOT / "schemas" / name).read_text(encoding="utf-8"))
             self.assertFalse(document["additionalProperties"])
             self.assertEqual(set(document["required"]), set(fields))
+            if name == "phase11c-gateb-headline-cohort-target-receipt.schema.json":
+                self.assertIn("nonzeroSha256", document["$defs"])
 
     def test_compose_is_exact_image_no_build_and_docker_is_minimal(self) -> None:
         compose = (ROOT / "compose.phase11c-gateb-headline.yml").read_text(encoding="utf-8")
@@ -428,6 +554,15 @@ class ArtifactAndSourceGuardTests(unittest.TestCase):
         self.assertNotIn("build:", compose)
         self.assertIn("read_only: true", compose)
         self.assertIn("cap_drop:", compose)
+        self.assertIn("gateb-protocol-recovery:", compose)
+        recovery = compose.split("gateb-protocol-recovery:", 1)[1]
+        self.assertIn("network_mode: none", recovery)
+        self.assertNotIn("glm_api_key", recovery)
+        self.assertNotIn("approval.txt", recovery)
+        diagnostic_recovery = compose.split("gateb-protocol-diagnostic-recovery:", 1)[1]
+        self.assertIn("network_mode: none", diagnostic_recovery)
+        self.assertNotIn("glm_api_key", diagnostic_recovery)
+        self.assertNotIn("approval.txt", diagnostic_recovery)
         self.assertIn("phase11c_gateb_headline_cohort_executor.py", dockerfile)
 
     def test_source_has_no_sdk_proxy_or_publisher_and_no_runtime_raw_persistence(self) -> None:
@@ -451,6 +586,12 @@ class ArtifactAndSourceGuardTests(unittest.TestCase):
         continuation = protocol.continuation_body_for(protocol.HEADLINE_TARGETS[0], "probe_1").decode("utf-8")
         self.assertRegex(protocol.request_protocol_sha256(), "^[0-9a-f]{64}$")
         self.assertIn("synthetic_probe_ok", continuation)
+
+    def test_offline_recovery_entrypoints_cannot_construct_credential_or_transport(self) -> None:
+        for entrypoint in (protocol.recover_diagnostic_from_fixed_files, protocol.recover_headline_from_fixed_files):
+            tree = ast.parse(inspect.getsource(entrypoint))
+            names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+            self.assertTrue({"FixedCredentialReader", "FixedHTTPSProviderTransport"}.isdisjoint(names))
 
 
 if __name__ == "__main__":

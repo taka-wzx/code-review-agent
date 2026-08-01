@@ -37,6 +37,7 @@ AUTHORIZATION_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-authorization/v1"
 TARGET_RECEIPT_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-target-receipt/v1"
 COHORT_RECEIPT_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-receipt/v1"
 LEDGER_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-ledger/v1"
+TERMINAL_ENVELOPE_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-terminal-envelope/v1"
 STATE_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-state/v1"
 APPROVAL_BINDING_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-approval-binding/v1"
 
@@ -95,6 +96,7 @@ STATE_DIRECTORY = Path("/var/lib/crag-gateb-headline")
 STATE_PATH = STATE_DIRECTORY / "state.json"
 COHORT_RECEIPT_PATH = STATE_DIRECTORY / "cohort-receipt.json"
 LEDGER_PATH = STATE_DIRECTORY / "ledger.json"
+TERMINAL_ENVELOPE_PATH = STATE_DIRECTORY / "terminal-envelope.json"
 LOCK_PATH = STATE_DIRECTORY / "state.lock"
 
 PENDING_FREEZE = "PENDING_FREEZE"
@@ -204,6 +206,13 @@ def _expect_mapping(value: Any, code: str) -> dict[str, Any]:
 
 def _expect_exact_keys(value: Mapping[str, Any], expected: frozenset[str], code: str) -> None:
     if set(value) != expected:
+        _fail(code)
+
+
+def _expect_known_keys(value: Mapping[str, Any], allowed: frozenset[str], code: str) -> None:
+    """Reject provider fields outside the frozen response-shape compatibility set."""
+
+    if set(value) - allowed:
         _fail(code)
 
 
@@ -613,7 +622,13 @@ def _validate_target_bindings(value: Any) -> None:
 
 
 def _validate_authorization_common(
-    value: Any, *, executable_source_digest: str, now_utc: datetime, sealed: bool, require_active_window: bool
+    value: Any,
+    *,
+    executable_source_digest: str,
+    now_utc: datetime,
+    sealed: bool,
+    require_active_window: bool,
+    allow_expired_window: bool,
 ) -> dict[str, Any]:
     authorization = _expect_mapping(value, "invalid_authorization")
     _expect_exact_keys(authorization, AUTHORIZATION_FIELDS, "invalid_authorization_keys")
@@ -695,7 +710,7 @@ def _validate_authorization_common(
         _fail("authorization_window_must_be_future")
     if require_active_window and not start <= now < end:
         _fail("authorization_window_not_active")
-    if not require_active_window and now >= end:
+    if not require_active_window and not allow_expired_window and now >= end:
         _fail("authorization_window_expired")
     return authorization
 
@@ -707,12 +722,18 @@ def seal_authorization(value: Any, *, executable_source_digest: str | None = Non
         now_utc=now_utc or datetime.now(timezone.utc),
         sealed=False,
         require_active_window=False,
+        allow_expired_window=False,
     )
     return _seal(candidate, "authorization_sha256")
 
 
 def validate_authorization(
-    value: Any, *, executable_source_digest: str | None = None, now_utc: datetime | None = None, require_active_window: bool = True
+    value: Any,
+    *,
+    executable_source_digest: str | None = None,
+    now_utc: datetime | None = None,
+    require_active_window: bool = True,
+    allow_expired_window: bool = False,
 ) -> dict[str, Any]:
     return _validate_authorization_common(
         value,
@@ -720,6 +741,7 @@ def validate_authorization(
         now_utc=now_utc or datetime.now(timezone.utc),
         sealed=True,
         require_active_window=require_active_window,
+        allow_expired_window=allow_expired_window,
     )
 
 
@@ -1027,7 +1049,12 @@ def _assert_absolute_no_symlinks(path: Path, code: str) -> None:
     try:
         for part in path.parts[1:]:
             current = current / part
-            if stat.S_ISLNK(os.lstat(current).st_mode):
+            metadata = os.lstat(current)
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or metadata.st_uid != 0
+                or stat.S_IMODE(metadata.st_mode) & 0o022
+            ):
                 _fail(code)
     except HeadlineCohortError:
         raise
@@ -1162,6 +1189,17 @@ class ParsedToolResponse:
     canonical_arguments: str
 
 
+_PROVIDER_TOP_LEVEL_KEYS = frozenset(
+    {"id", "object", "created", "model", "choices", "usage", "request_id", "service_tier", "system_fingerprint"}
+)
+_PROVIDER_USAGE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details"})
+_PROVIDER_PROMPT_DETAILS_KEYS = frozenset({"cached_tokens"})
+_PROVIDER_CHOICE_KEYS = frozenset({"index", "finish_reason", "message", "logprobs"})
+_PROVIDER_MESSAGE_KEYS = frozenset({"role", "content", "tool_calls", "reasoning_content", "refusal"})
+_PROVIDER_TOOL_CALL_KEYS = frozenset({"id", "type", "function", "index"})
+_PROVIDER_FUNCTION_KEYS = frozenset({"name", "arguments"})
+
+
 def _provider_json_loads(body: bytes) -> Any:
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -1188,10 +1226,22 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> tuple[bool, int, int]:
         return False, 0, 0
     if not isinstance(usage, Mapping):
         _fail("provider_usage_schema_invalid")
+    _expect_known_keys(usage, _PROVIDER_USAGE_KEYS, "provider_usage_schema_invalid")
     input_tokens = _expect_nonnegative_int(usage.get("prompt_tokens"), "provider_usage_schema_invalid")
     output_tokens = _expect_nonnegative_int(usage.get("completion_tokens"), "provider_usage_schema_invalid")
     if input_tokens > MAX_PROVIDER_USAGE_COUNTER or output_tokens > MAX_PROVIDER_USAGE_COUNTER:
         _fail("provider_usage_schema_invalid")
+    total = usage.get("total_tokens")
+    if total is not None and _expect_nonnegative_int(total, "provider_usage_schema_invalid") != input_tokens + output_tokens:
+        _fail("provider_usage_schema_invalid")
+    details = usage.get("prompt_tokens_details")
+    if details is not None:
+        if not isinstance(details, Mapping):
+            _fail("provider_usage_schema_invalid")
+        _expect_known_keys(details, _PROVIDER_PROMPT_DETAILS_KEYS, "provider_usage_schema_invalid")
+        cached = _expect_nonnegative_int(details.get("cached_tokens"), "provider_usage_schema_invalid")
+        if cached > input_tokens:
+            _fail("provider_usage_schema_invalid")
     return True, input_tokens, output_tokens
 
 
@@ -1203,14 +1253,17 @@ def parse_tool_response(
     payload = _provider_json_loads(body)
     if not isinstance(payload, Mapping):
         _fail("provider_response_schema_invalid")
+    _expect_known_keys(payload, _PROVIDER_TOP_LEVEL_KEYS, "provider_response_schema_invalid")
     usage_known, input_tokens, output_tokens = _usage_from_payload(payload)
     choices = payload.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], Mapping):
         _fail("provider_response_schema_invalid")
     choice = choices[0]
+    _expect_known_keys(choice, _PROVIDER_CHOICE_KEYS, "provider_response_schema_invalid")
     message = choice.get("message")
     if not isinstance(message, Mapping):
         _fail("provider_response_schema_invalid")
+    _expect_known_keys(message, _PROVIDER_MESSAGE_KEYS, "provider_response_schema_invalid")
     raw_finish = choice.get("finish_reason")
     if raw_finish == "tool_calls":
         finish = "tool_calls"
@@ -1233,8 +1286,11 @@ def parse_tool_response(
     if message.get("content") not in (None, ""):
         return ParsedToolResponse(finish, "malformed_tool_call", True, 0, usage_known, input_tokens, output_tokens, ZERO_SHA256, False, "", "")
     call = calls[0]
+    _expect_known_keys(call, _PROVIDER_TOOL_CALL_KEYS, "provider_response_schema_invalid")
     function = call.get("function")
     call_id = call.get("id")
+    if isinstance(function, Mapping):
+        _expect_known_keys(function, _PROVIDER_FUNCTION_KEYS, "provider_response_schema_invalid")
     if (
         call.get("type") != "function"
         or not isinstance(function, Mapping)
@@ -1475,6 +1531,24 @@ def validate_target_receipt(value: Any) -> dict[str, Any]:
             and receipt["estimated_microcny"] <= PER_TARGET_BUDGET_MICROCNY
         ):
             _fail("target_receipt_completed_invariant_failed")
+    elif receipt["execution_status"] == "quarantined":
+        if not (
+            receipt["terminal_category"] == "quarantined"
+            and receipt["finish_reason_category"] == "not_observed"
+            and receipt["response_shape_category"] == "not_observed"
+            and receipt["tool_call_present"] is False
+            and receipt["submit_attempt_count"] == 0
+            and 1 <= receipt["logical_call_count"] <= REQUESTS_PER_TARGET
+            and receipt["logical_call_count"] == receipt["provider_call_count"] == receipt["http_attempt_count"]
+            and receipt["usage_known"] is False
+            and receipt["input_tokens_used"] == 0
+            and receipt["output_tokens_used"] == 0
+            and receipt["estimated_microcny"] == PER_TARGET_BUDGET_MICROCNY
+            and receipt["http_status_class"] == "none"
+            and receipt["provider_response_sha256"] == ZERO_SHA256
+            and receipt["tool_call_sha256"] == ZERO_SHA256
+        ):
+            _fail("target_receipt_quarantine_invariant_failed")
     elif receipt["execution_status"] == "not_run_gate_blocked":
         if not (
             receipt["terminal_category"] == "not_run_gate_blocked"
@@ -1844,6 +1918,50 @@ def validate_ledger(value: Any) -> dict[str, Any]:
     return ledger
 
 
+TERMINAL_ENVELOPE_FIELDS = frozenset(
+    {"schema_version", "phase_id", "terminal_envelope_sha256", "cohort_receipt", "ledger"}
+)
+
+
+def build_terminal_envelope(cohort_receipt: Mapping[str, Any]) -> dict[str, Any]:
+    """Atomically persist the final cohort receipt and its ledger as one commitment."""
+
+    cohort = validate_cohort_receipt(cohort_receipt)
+    ledger = build_ledger(cohort)
+    return validate_terminal_envelope(
+        _seal(
+            {
+                "schema_version": TERMINAL_ENVELOPE_SCHEMA_VERSION,
+                "phase_id": PHASE_ID,
+                "terminal_envelope_sha256": "",
+                "cohort_receipt": cohort,
+                "ledger": ledger,
+            },
+            "terminal_envelope_sha256",
+        )
+    )
+
+
+def validate_terminal_envelope(value: Any) -> dict[str, Any]:
+    envelope = _expect_mapping(value, "invalid_terminal_envelope")
+    _expect_exact_keys(envelope, TERMINAL_ENVELOPE_FIELDS, "invalid_terminal_envelope_keys")
+    if envelope["schema_version"] != TERMINAL_ENVELOPE_SCHEMA_VERSION or envelope["phase_id"] != PHASE_ID:
+        _fail("terminal_envelope_identity_mismatch")
+    _expect_sha256(envelope["terminal_envelope_sha256"], "terminal_envelope_sha256_mismatch", allow_zero=False)
+    cohort = validate_cohort_receipt(envelope["cohort_receipt"])
+    ledger = validate_ledger(envelope["ledger"])
+    if (
+        ledger["cohort_receipt_sha256"] != cohort["receipt_sha256"]
+        or ledger["authorization_sha256"] != cohort["authorization_sha256"]
+        or ledger["approval_binding_sha256"] != cohort["approval_binding_sha256"]
+        or ledger["diagnostic_receipt_sha256"] != cohort["diagnostic_receipt_sha256"]
+        or ledger["target_receipt_sha256s"] != [item["receipt_sha256"] for item in cohort["target_receipts"]]
+    ):
+        _fail("terminal_envelope_lineage_mismatch")
+    _validate_seal(envelope, "terminal_envelope_sha256", "terminal_envelope_sha256_mismatch")
+    return envelope
+
+
 STATE_FIELDS = frozenset(
     {
         "schema_version", "phase_id", "state_sha256", "authorization_sha256", "approval_binding_sha256",
@@ -1975,6 +2093,7 @@ class InMemoryCohortStateStore:
         self.target_receipts: list[dict[str, Any]] = []
         self.cohort_receipt: dict[str, Any] | None = None
         self.ledger: dict[str, Any] | None = None
+        self.terminal_envelope: dict[str, Any] | None = None
         self.events: list[str] = []
 
     @property
@@ -2008,8 +2127,9 @@ class InMemoryCohortStateStore:
             item["receipt_sha256"] for item in self.target_receipts
         ] != [item["receipt_sha256"] for item in validated["target_receipts"]]:
             _fail("cohort_receipt_target_linkage_invalid")
-        self.cohort_receipt = validated
-        self.ledger = build_ledger(validated)
+        self.terminal_envelope = build_terminal_envelope(validated)
+        self.cohort_receipt = self.terminal_envelope["cohort_receipt"]
+        self.ledger = self.terminal_envelope["ledger"]
         self.events.append("cohort_receipt_written")
 
 
@@ -2026,14 +2146,24 @@ def _path_entry_exists(path: Path) -> bool:
 class FileCohortStateStore:
     """Dedicated fsync-backed, no-replay state store for headline execution."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, recovery: bool = False) -> None:
         self._state: dict[str, Any] | None = None
         self._lock_descriptor: int | None = None
         self._target_receipts: list[dict[str, Any]] = []
+        self._recovery = recovery
+        self._terminal_envelope: dict[str, Any] | None = None
 
     @property
     def state(self) -> dict[str, Any] | None:
         return deepcopy(self._state)
+
+    @property
+    def target_receipts(self) -> list[dict[str, Any]]:
+        return deepcopy(self._target_receipts)
+
+    @property
+    def terminal_envelope(self) -> dict[str, Any] | None:
+        return deepcopy(self._terminal_envelope)
 
     def __enter__(self) -> FileCohortStateStore:
         _require_linux("state_store_platform_unsupported")
@@ -2049,8 +2179,37 @@ class FileCohortStateStore:
                 _fail("state_store_platform_unsupported")
             _FCHMOD(self._lock_descriptor, 0o600)
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            if self._recovery:
+                if _path_entry_exists(TERMINAL_ENVELOPE_PATH):
+                    self._terminal_envelope = validate_terminal_envelope(
+                        strict_json_loads(_read_fixed_state_file(TERMINAL_ENVELOPE_PATH))
+                    )
+                    return self
+                if not _path_entry_exists(STATE_PATH):
+                    _fail("cohort_quarantine_state_missing")
+                if _path_entry_exists(COHORT_RECEIPT_PATH) or _path_entry_exists(LEDGER_PATH):
+                    _fail("cohort_quarantine_partial_terminal_artifact")
+                self._state = validate_state(strict_json_loads(_read_fixed_state_file(STATE_PATH)))
+                for ordinal in range(1, HEADLINE_TARGET_COUNT + 1):
+                    receipt_path = STATE_DIRECTORY / f"target-{ordinal:02d}.json"
+                    if not _path_entry_exists(receipt_path):
+                        break
+                    receipt = validate_target_receipt(strict_json_loads(_read_fixed_state_file(receipt_path)))
+                    if receipt["target_ordinal"] != ordinal:
+                        _fail("cohort_quarantine_target_order_invalid")
+                    self._target_receipts.append(receipt)
+                for ordinal in range(len(self._target_receipts) + 1, HEADLINE_TARGET_COUNT + 1):
+                    if _path_entry_exists(STATE_DIRECTORY / f"target-{ordinal:02d}.json"):
+                        _fail("cohort_quarantine_target_order_invalid")
+                return self
             target_artifacts = list(STATE_DIRECTORY.glob("target-*.json"))
-            if _path_entry_exists(STATE_PATH) or _path_entry_exists(COHORT_RECEIPT_PATH) or _path_entry_exists(LEDGER_PATH) or target_artifacts:
+            if (
+                _path_entry_exists(STATE_PATH)
+                or _path_entry_exists(COHORT_RECEIPT_PATH)
+                or _path_entry_exists(LEDGER_PATH)
+                or _path_entry_exists(TERMINAL_ENVELOPE_PATH)
+                or target_artifacts
+            ):
                 _fail("cohort_quarantined")
             return self
         except HeadlineCohortError:
@@ -2129,16 +2288,43 @@ class FileCohortStateStore:
         self._target_receipts.append(validated)
 
     def write_cohort(self, receipt: Mapping[str, Any]) -> None:
-        if _path_entry_exists(COHORT_RECEIPT_PATH) or _path_entry_exists(LEDGER_PATH):
+        if (
+            _path_entry_exists(COHORT_RECEIPT_PATH)
+            or _path_entry_exists(LEDGER_PATH)
+            or _path_entry_exists(TERMINAL_ENVELOPE_PATH)
+        ):
             _fail("cohort_receipt_already_written")
         validated = validate_cohort_receipt(receipt)
         if len(self._target_receipts) != HEADLINE_TARGET_COUNT or [
             item["receipt_sha256"] for item in self._target_receipts
         ] != [item["receipt_sha256"] for item in validated["target_receipts"]]:
             _fail("cohort_receipt_target_linkage_invalid")
-        self._atomic_write(COHORT_RECEIPT_PATH, validated)
-        ledger = build_ledger(validated)
-        self._atomic_write(LEDGER_PATH, ledger)
+        envelope = build_terminal_envelope(validated)
+        # This write is the authoritative final commit. The two leaf documents are
+        # convenience exports only; a crash after the envelope cannot erase the
+        # receipt/ledger linkage or permit a replay.
+        self._atomic_write(TERMINAL_ENVELOPE_PATH, envelope)
+        self._atomic_write(COHORT_RECEIPT_PATH, envelope["cohort_receipt"])
+        self._atomic_write(LEDGER_PATH, envelope["ledger"])
+
+    def materialize_terminal_envelope(self) -> dict[str, Any]:
+        """Repair only leaf exports already committed by the immutable envelope."""
+
+        if self._terminal_envelope is None:
+            _fail("terminal_envelope_missing")
+        envelope = self._terminal_envelope
+        expected_documents: tuple[tuple[Path, str, Callable[[Any], dict[str, Any]]], ...] = (
+            (COHORT_RECEIPT_PATH, "cohort_receipt", validate_cohort_receipt),
+            (LEDGER_PATH, "ledger", validate_ledger),
+        )
+        for path, key, validator in expected_documents:
+            if _path_entry_exists(path):
+                observed = validator(strict_json_loads(_read_fixed_state_file(path)))
+                if observed != envelope[key]:
+                    _fail("terminal_envelope_export_mismatch")
+            else:
+                self._atomic_write(path, envelope[key])
+        return deepcopy(envelope)
 
 
 DIAGNOSTIC_RECEIPT_PATH = STATE_DIRECTORY / "diagnostic-receipt.json"
@@ -2231,6 +2417,23 @@ def validate_diagnostic_receipt(value: Any) -> dict[str, Any]:
         and receipt["terminal_match"] is False
     ):
         _fail("diagnostic_receipt_zero_attempt_invariant_failed")
+    if receipt["execution_status"] == "quarantined" and not (
+        receipt["terminal_category"] == "quarantined"
+        and receipt["logical_call_count"] == 1
+        and receipt["provider_call_count"] == 1
+        and receipt["http_attempt_count"] == 1
+        and receipt["credential_file_opened"] is True
+        and receipt["credential_validated"] is True
+        and receipt["usage_known"] is False
+        and receipt["input_tokens_used"] == 0
+        and receipt["output_tokens_used"] == 0
+        and receipt["estimated_microcny"] == DIAGNOSTIC_BUDGET_MICROCNY
+        and receipt["http_status_class"] == "none"
+        and receipt["provider_response_sha256"] == ZERO_SHA256
+        and receipt["assistant_content_sha256"] == ZERO_SHA256
+        and receipt["terminal_match"] is False
+    ):
+        _fail("diagnostic_receipt_quarantine_invariant_failed")
     _validate_seal(receipt, "receipt_sha256", "diagnostic_receipt_sha256_mismatch")
     return receipt
 
@@ -2368,9 +2571,11 @@ class InMemoryDiagnosticStateStore:
 
 
 class FileDiagnosticStateStore:
-    def __init__(self) -> None:
+    def __init__(self, *, recovery: bool = False) -> None:
         self.state: dict[str, Any] | None = None
         self._lock_descriptor: int | None = None
+        self._recovery = recovery
+        self.recovered_receipt: dict[str, Any] | None = None
 
     def __enter__(self) -> FileDiagnosticStateStore:
         _require_linux("diagnostic_state_store_platform_unsupported")
@@ -2386,6 +2591,18 @@ class FileDiagnosticStateStore:
                 _fail("diagnostic_state_store_platform_unsupported")
             _FCHMOD(self._lock_descriptor, 0o600)
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            if self._recovery:
+                if _path_entry_exists(DIAGNOSTIC_RECEIPT_PATH):
+                    self.recovered_receipt = validate_diagnostic_receipt(
+                        strict_json_loads(_read_fixed_state_file(DIAGNOSTIC_RECEIPT_PATH))
+                    )
+                    return self
+                if not _path_entry_exists(DIAGNOSTIC_STATE_PATH):
+                    _fail("diagnostic_quarantine_state_missing")
+                self.state = _validate_diagnostic_state(
+                    strict_json_loads(_read_fixed_state_file(DIAGNOSTIC_STATE_PATH))
+                )
+                return self
             if _path_entry_exists(DIAGNOSTIC_STATE_PATH) or _path_entry_exists(DIAGNOSTIC_RECEIPT_PATH):
                 _fail("diagnostic_quarantined")
             return self
@@ -2820,11 +3037,6 @@ def execute_headline_cohort(
             blocked = _not_run_target(validated, binding_sha, blocked_ordinal)
             store.write_target(blocked)
             receipts.append(blocked)
-        store.transition(
-            execution_status="terminal",
-            next_target_ordinal=HEADLINE_TARGET_COUNT + 1,
-            current_target_ordinal=0,
-        )
         cohort = build_cohort_receipt(
             authorization=validated,
             binding_sha=binding_sha,
@@ -2833,6 +3045,11 @@ def execute_headline_cohort(
             stopped_after_ordinal=1,
         )
         store.write_cohort(cohort)
+        store.transition(
+            execution_status="terminal",
+            next_target_ordinal=HEADLINE_TARGET_COUNT + 1,
+            current_target_ordinal=0,
+        )
         return cohort
 
     try:
@@ -2860,11 +3077,6 @@ def execute_headline_cohort(
                 blocked = _not_run_target(validated, binding_sha, blocked_ordinal)
                 store.write_target(blocked)
                 receipts.append(blocked)
-            store.transition(
-                execution_status="terminal",
-                next_target_ordinal=HEADLINE_TARGET_COUNT + 1,
-                current_target_ordinal=0,
-            )
             cohort = build_cohort_receipt(
                 authorization=validated,
                 binding_sha=binding_sha,
@@ -2873,9 +3085,13 @@ def execute_headline_cohort(
                 stopped_after_ordinal=ordinal,
             )
             store.write_cohort(cohort)
+            store.transition(
+                execution_status="terminal",
+                next_target_ordinal=HEADLINE_TARGET_COUNT + 1,
+                current_target_ordinal=0,
+            )
             return cohort
         store.transition(next_target_ordinal=ordinal + 1)
-    store.transition(execution_status="terminal", current_target_ordinal=0)
     cohort = build_cohort_receipt(
         authorization=validated,
         binding_sha=binding_sha,
@@ -2884,7 +3100,114 @@ def execute_headline_cohort(
         stopped_after_ordinal=HEADLINE_TARGET_COUNT,
     )
     store.write_cohort(cohort)
+    store.transition(execution_status="terminal", current_target_ordinal=0)
     return cohort
+
+
+def reconcile_interrupted_headline_attempt(
+    authorization: Mapping[str, Any],
+    state: Mapping[str, Any],
+    target_receipt_prefix: Sequence[Mapping[str, Any]],
+    *,
+    now_utc: datetime | None = None,
+    executable_source_digest: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Seal a no-replay quarantine result for one durably counted interrupted target.
+
+    This is intentionally an offline-only reconciliation primitive. It neither
+    accepts an approval string nor receives a credential or transport object.
+    Only the narrow state shape in which a request may already have been sent but
+    the current target has no immutable receipt is eligible for reconciliation.
+    Any other partial layout remains fail-closed for human incident handling.
+    """
+
+    now = now_utc or datetime.now(timezone.utc)
+    validated = validate_authorization(
+        authorization,
+        executable_source_digest=executable_source_digest or source_sha256(),
+        now_utc=now,
+        require_active_window=False,
+        allow_expired_window=True,
+    )
+    state_value = validate_state(state)
+    binding_sha = approval_binding_sha256(validated)
+    if (
+        state_value["authorization_sha256"] != validated["authorization_sha256"]
+        or state_value["approval_binding_sha256"] != binding_sha
+    ):
+        _fail("quarantine_state_authorization_mismatch")
+    prefix = [validate_target_receipt(item) for item in target_receipt_prefix]
+    first_noncompleted: dict[str, Any] | None = None
+    for ordinal, receipt in enumerate(prefix, start=1):
+        if (
+            receipt["target_ordinal"] != ordinal
+            or receipt["authorization_sha256"] != validated["authorization_sha256"]
+            or receipt["approval_binding_sha256"] != binding_sha
+            or receipt["diagnostic_receipt_sha256"] != validated["diagnostic_receipt_sha256"]
+        ):
+            _fail("quarantine_prefix_invalid")
+        if first_noncompleted is None and receipt["execution_status"] != "completed":
+            if receipt["execution_status"] == "not_run_gate_blocked":
+                _fail("quarantine_prefix_invalid")
+            first_noncompleted = receipt
+        elif first_noncompleted is not None and receipt["execution_status"] != "not_run_gate_blocked":
+            _fail("quarantine_prefix_invalid")
+    if first_noncompleted is not None:
+        receipts = list(prefix)
+        for ordinal in range(len(receipts) + 1, HEADLINE_TARGET_COUNT + 1):
+            receipts.append(_not_run_target(validated, binding_sha, ordinal))
+        cohort = build_cohort_receipt(
+            authorization=validated,
+            binding_sha=binding_sha,
+            target_receipts=receipts,
+            execution_status=first_noncompleted["execution_status"],
+            stopped_after_ordinal=first_noncompleted["target_ordinal"],
+        )
+        return receipts, build_terminal_envelope(cohort)
+    if len(prefix) == HEADLINE_TARGET_COUNT:
+        cohort = build_cohort_receipt(
+            authorization=validated,
+            binding_sha=binding_sha,
+            target_receipts=prefix,
+            execution_status="completed",
+            stopped_after_ordinal=HEADLINE_TARGET_COUNT,
+        )
+        return prefix, build_terminal_envelope(cohort)
+    if state_value["execution_status"] != "running":
+        _fail("quarantine_state_position_invalid")
+    interrupted_ordinal = len(prefix) + 1
+    if (
+        state_value["current_target_ordinal"] != interrupted_ordinal
+        or state_value["next_target_ordinal"] != interrupted_ordinal
+    ):
+        _fail("quarantine_state_position_invalid")
+    durable_prefix_attempts = sum(item["http_attempt_count"] for item in prefix)
+    uncertain_attempts = state_value["http_attempt_count"] - durable_prefix_attempts
+    if uncertain_attempts not in {1, 2}:
+        _fail("quarantine_attempt_delta_invalid")
+    interrupted = _target_receipt(
+        authorization=validated,
+        binding_sha=binding_sha,
+        ordinal=interrupted_ordinal,
+        target=HEADLINE_TARGETS[interrupted_ordinal - 1],
+        execution_status="quarantined",
+        terminal_category="quarantined",
+        logical_call_count=uncertain_attempts,
+        provider_call_count=uncertain_attempts,
+        http_attempt_count=uncertain_attempts,
+        estimated_microcny=PER_TARGET_BUDGET_MICROCNY,
+    )
+    receipts = [*prefix, interrupted]
+    for ordinal in range(interrupted_ordinal + 1, HEADLINE_TARGET_COUNT + 1):
+        receipts.append(_not_run_target(validated, binding_sha, ordinal))
+    cohort = build_cohort_receipt(
+        authorization=validated,
+        binding_sha=binding_sha,
+        target_receipts=receipts,
+        execution_status="quarantined",
+        stopped_after_ordinal=interrupted_ordinal,
+    )
+    return receipts, build_terminal_envelope(cohort)
 
 
 def _diagnostic_receipt(
@@ -2956,12 +3279,18 @@ def _parse_diagnostic_response(body: bytes) -> tuple[bool, bool, int, int, str]:
     payload = _provider_json_loads(body)
     if not isinstance(payload, Mapping):
         _fail("provider_response_schema_invalid")
+    _expect_known_keys(payload, _PROVIDER_TOP_LEVEL_KEYS, "provider_response_schema_invalid")
     usage_known, input_tokens, output_tokens = _usage_from_payload(payload)
     choices = payload.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], Mapping):
         _fail("provider_response_schema_invalid")
-    message = choices[0].get("message")
+    choice = choices[0]
+    _expect_known_keys(choice, _PROVIDER_CHOICE_KEYS, "provider_response_schema_invalid")
+    message = choice.get("message")
     if not isinstance(message, Mapping) or not isinstance(message.get("content"), str):
+        _fail("provider_response_schema_invalid")
+    _expect_known_keys(message, _PROVIDER_MESSAGE_KEYS, "provider_response_schema_invalid")
+    if message.get("tool_calls") not in (None, []):
         _fail("provider_response_schema_invalid")
     assistant_content = message["content"].strip()
     return (
@@ -3012,7 +3341,6 @@ def execute_diagnostic(
         provider_response_sha256: str = ZERO_SHA256,
         assistant_content_sha256: str = ZERO_SHA256,
     ) -> dict[str, Any]:
-        store.transition(execution_status="terminal")
         receipt = _diagnostic_receipt(
             authorization=validated,
             binding_sha=binding_sha,
@@ -3032,6 +3360,7 @@ def execute_diagnostic(
             assistant_content_sha256=assistant_content_sha256,
         )
         store.write_receipt(receipt)
+        store.transition(execution_status="terminal")
         return receipt
 
     def record_open() -> None:
@@ -3115,6 +3444,50 @@ def execute_diagnostic(
     )
 
 
+def reconcile_interrupted_diagnostic_attempt(
+    authorization: Mapping[str, Any],
+    state: Mapping[str, Any],
+    *,
+    now_utc: datetime | None = None,
+    executable_source_digest: str | None = None,
+) -> dict[str, Any]:
+    """Seal an offline no-replay diagnostic quarantine after its counted dispatch."""
+
+    validated = validate_diagnostic_authorization(
+        authorization,
+        executable_source_digest=executable_source_digest or source_sha256(),
+        now_utc=now_utc or datetime.now(timezone.utc),
+        require_active_window=False,
+        allow_expired_window=True,
+    )
+    state_value = _validate_diagnostic_state(state)
+    binding_sha = diagnostic_approval_binding_sha256(validated)
+    if not (
+        state_value["authorization_sha256"] == validated["authorization_sha256"]
+        and state_value["approval_binding_sha256"] == binding_sha
+        and state_value["execution_status"] == "http_attempted"
+        and state_value["budget_reserved"] is True
+        and state_value["credential_file_opened"] is True
+        and state_value["credential_validated"] is True
+        and state_value["http_attempt_count"] == 1
+    ):
+        _fail("diagnostic_quarantine_state_invalid")
+    return _diagnostic_receipt(
+        authorization=validated,
+        binding_sha=binding_sha,
+        execution_status="quarantined",
+        terminal_category="quarantined",
+        logical_call_count=1,
+        provider_call_count=1,
+        http_attempt_count=1,
+        usage_known=False,
+        http_status_class="none",
+        terminal_match=False,
+        credential_file_opened=True,
+        credential_validated=True,
+    )
+
+
 def _read_fixed_control_file(path: Path, *, maximum_bytes: int, exact_mode: int) -> bytes:
     _require_linux("control_file_platform_unsupported")
     _assert_absolute_no_symlinks(path, "control_file_symlink_or_path_denied")
@@ -3166,10 +3539,13 @@ def read_fixed_diagnostic_authorization(
     )
 
 
-def read_fixed_headline_authorization(*, require_active_window: bool) -> dict[str, Any]:
+def read_fixed_headline_authorization(
+    *, require_active_window: bool, allow_expired_window: bool = False
+) -> dict[str, Any]:
     return validate_authorization(
         strict_json_loads(_read_fixed_control_file(AUTHORIZATION_PATH, maximum_bytes=MAX_CONTROL_FILE_BYTES, exact_mode=0o400)),
         require_active_window=require_active_window,
+        allow_expired_window=allow_expired_window,
     )
 
 
@@ -3193,6 +3569,21 @@ def run_diagnostic_from_fixed_files() -> dict[str, Any]:
         )
 
 
+def recover_diagnostic_from_fixed_files() -> dict[str, Any]:
+    """Seal a conservative diagnostic quarantine without approval, credential, or network."""
+
+    authorization = read_fixed_diagnostic_authorization(require_active_window=False, allow_expired_window=True)
+    with FileDiagnosticStateStore(recovery=True) as store:
+        if store.recovered_receipt is not None:
+            return store.recovered_receipt
+        if store.state is None:
+            _fail("diagnostic_quarantine_state_missing")
+        receipt = reconcile_interrupted_diagnostic_attempt(authorization, store.state)
+        store.transition(execution_status="terminal")
+        store.write_receipt(receipt)
+        return receipt
+
+
 def run_headline_from_fixed_files() -> dict[str, Any]:
     authorization = read_fixed_headline_authorization(require_active_window=True)
     approval = _read_ascii_approval(APPROVAL_PATH, "headline_approval_encoding_invalid")
@@ -3210,6 +3601,32 @@ def run_headline_from_fixed_files() -> dict[str, Any]:
             credential_reader=FixedCredentialReader(),
             transport=FixedHTTPSProviderTransport(),
         )
+
+
+def recover_headline_from_fixed_files() -> dict[str, Any]:
+    """Seal a conservative quarantine outcome without credential or network access."""
+
+    authorization = read_fixed_headline_authorization(require_active_window=False, allow_expired_window=True)
+    with FileCohortStateStore(recovery=True) as store:
+        if store.terminal_envelope is not None:
+            return store.materialize_terminal_envelope()["cohort_receipt"]
+        state = store.state
+        if state is None:
+            _fail("cohort_quarantine_state_missing")
+        receipts, envelope = reconcile_interrupted_headline_attempt(
+            authorization,
+            state,
+            store.target_receipts,
+        )
+        for receipt in receipts[len(store.target_receipts):]:
+            store.write_target(receipt)
+        store.transition(
+            execution_status="terminal",
+            next_target_ordinal=HEADLINE_TARGET_COUNT + 1,
+            current_target_ordinal=0,
+        )
+        store.write_cohort(envelope["cohort_receipt"])
+        return envelope["cohort_receipt"]
 
 
 def _read_stdin_bounded() -> bytes:
@@ -3231,11 +3648,13 @@ def _parser() -> argparse.ArgumentParser:
     commands.add_parser("seal-diagnostic-authorization")
     commands.add_parser("print-diagnostic-approval-binding")
     commands.add_parser("run-diagnostic")
+    commands.add_parser("recover-diagnostic")
     commands.add_parser("print-headline-template")
     commands.add_parser("seal-headline-authorization")
     commands.add_parser("print-headline-approval-binding")
     commands.add_parser("print-diagnostic-receipt")
     commands.add_parser("run-headline")
+    commands.add_parser("recover-headline")
     return parser
 
 
@@ -3266,6 +3685,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = run_diagnostic_from_fixed_files()
             _print_safe_json(receipt)
             return 0 if receipt["execution_status"] == "completed" else 3
+        if args.command == "recover-diagnostic":
+            _print_safe_json(recover_diagnostic_from_fixed_files())
+            return 3
         if args.command == "print-headline-template":
             _print_safe_json(build_authorization_template())
             return 0
@@ -3292,6 +3714,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "print-diagnostic-receipt":
             _print_safe_json(validate_completed_diagnostic_receipt(strict_json_loads(_read_fixed_state_file(DIAGNOSTIC_RECEIPT_PATH))))
             return 0
+        if args.command == "recover-headline":
+            _print_safe_json(recover_headline_from_fixed_files())
+            return 3
         receipt = run_headline_from_fixed_files()
         _print_safe_json(receipt)
         return 0 if receipt["execution_status"] == "completed" else 3

@@ -1,8 +1,24 @@
 # Phase 11C Gate B Headline Cohort Executor v1
 
-Status: **offline implementation and fake-only validation complete; no new provider
-dispatch, credential read, image build, ECS mutation, push, or PR action is authorized
-by this task contract**
+Status: **offline implementation refresh in progress. The user has authorized the
+non-payment continuation actions required to complete Phase 11C, including source
+changes, branch updates, ECS freeze, evidence collection, and PR maintenance.**
+
+## Continuation authority and non-delegable approvals
+
+The repository owner has authorized completion work after this contract was first
+committed. That authority permits the offline hardening, image/deployment freeze,
+preflight, evidence collection, credential lifecycle work, and GitHub PR
+maintenance described here. It does **not** replace the original Phase 11C
+requirement for two newly generated, exact, one-use human approval strings:
+
+- `APPROVE PHASE11C DIAGNOSTIC <binding_sha256>`; and
+- `APPROVE PHASE11C HEADLINE_COHORT <binding_sha256>`.
+
+Each string is generated only after the relevant immutable freeze is complete and
+must be supplied by `taka-wzx` before its associated paid provider dispatch. No
+agent, service credential, or broad authorization may synthesize or consume either
+approval.
 
 ## Identity and authority
 
@@ -51,13 +67,19 @@ one-use human approval.
 - Every live attempt writes a sealed state transition before network I/O. A
   partial, prior, or corrupt state/target/ledger artifact makes the matching
   stage fail closed with a `*_quarantined` code and zero further provider calls.
-  There is no automatic retry or recovery of an in-flight target.
+  There is no automatic retry or recovery of an in-flight target. Separate
+  `recover-diagnostic` and `recover-headline` commands can only seal a
+  conservative `quarantined` outcome from a narrowly validated, already-counted
+  interrupted state; their Compose services have neither network nor credential
+  mounts.
 - A headline credential failure still produces target 1's safe terminal receipt
   and two `not_run_gate_blocked` receipts. Therefore the three-target denominator
   is never dropped merely because a run cannot begin.
 - The final cohort receipt and ledger are separately self-sealed. The ledger
   binds the cohort receipt, all three target-receipt hashes, authorization and
-  diagnostic lineage, reservation accounting, and redaction state.
+  diagnostic lineage, reservation accounting, and redaction state. The final
+  receipt and ledger are first committed together in one self-sealed terminal
+  envelope, then exported as separate convenience files.
 
 The fixed public endpoint, mount locations, deterministic synthetic wording, and
 tool names are compiled protocol constants necessary to reproduce the canary. The
@@ -75,6 +97,7 @@ Codex is the sole writer for exactly these new files:
 - `schemas/phase11c-gateb-protocol-diagnostic-authorization.schema.json`;
 - `schemas/phase11c-gateb-protocol-diagnostic-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-authorization.schema.json`;
+- `schemas/phase11c-gateb-headline-cohort-target-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-ledger.schema.json`;
 - `Dockerfile.phase11c-gateb-headline`;

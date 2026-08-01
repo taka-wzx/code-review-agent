@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crag.invalid/schemas/phase11c-gateb-headline-cohort-target-receipt.schema.json",
+  "title": "Phase 11C headline target safe receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nonzeroSha256": {"allOf": [{"$ref": "#/$defs/sha256"}, {"not": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}}]},
+    "count": {"type": "integer", "minimum": 0}
+  },
+  "required": [
+    "schema_version", "phase_id", "stage", "receipt_sha256", "authorization_sha256", "approval_binding_sha256",
+    "diagnostic_receipt_sha256", "target_ordinal", "target_stable_id", "payload_sha256", "execution_status",
+    "terminal_category", "finish_reason_category", "response_shape_category", "tool_call_present",
+    "submit_attempt_count", "logical_call_count", "provider_call_count", "http_attempt_count",
+    "reserved_input_tokens", "reserved_output_tokens", "reserved_microcny", "usage_known", "input_tokens_used",
+    "output_tokens_used", "estimated_microcny", "http_status_class", "provider_response_sha256", "tool_call_sha256",
+    "raw_retained", "redaction_applied", "retry_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-gateb-headline-cohort-target-receipt/v1"},
+    "phase_id": {"const": "phase11c-gateb-headline-cohort-executor-v1"},
+    "stage": {"const": "HEADLINE_COHORT"},
+    "receipt_sha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "authorization_sha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "approval_binding_sha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "diagnostic_receipt_sha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "target_ordinal": {"type": "integer", "minimum": 1, "maximum": 3},
+    "target_stable_id": {"type": "string", "pattern": "^p11c-[0-9a-f]{32}$"},
+    "payload_sha256": {"$ref": "#/$defs/nonzeroSha256"},
+    "execution_status": {"enum": ["completed", "failed", "inconclusive", "not_run_gate_blocked", "quarantined"]},
+    "terminal_category": {"enum": ["provider_tool_submit", "provider_transport_failure", "provider_response_too_large", "provider_response_invalid_json", "provider_response_schema_invalid", "provider_usage_schema_invalid", "provider_usage_cap_exceeded", "http_status_failure", "redirect_refused", "empty_response", "text_only_response", "malformed_tool_call", "finish_reason_invalid", "tool_target_mismatch", "usage_unknown", "not_run_gate_blocked", "quarantined", "credential_validation_failed", "internal_failure"]},
+    "finish_reason_category": {"enum": ["tool_calls", "stop", "length", "other", "not_observed"]},
+    "response_shape_category": {"enum": ["tool_call", "empty", "text_only", "malformed_tool_call", "not_observed"]},
+    "tool_call_present": {"type": "boolean"},
+    "submit_attempt_count": {"type": "integer", "minimum": 0, "maximum": 1},
+    "logical_call_count": {"$ref": "#/$defs/count", "maximum": 2},
+    "provider_call_count": {"$ref": "#/$defs/count", "maximum": 2},
+    "http_attempt_count": {"$ref": "#/$defs/count", "maximum": 2},
+    "reserved_input_tokens": {"const": 4000},
+    "reserved_output_tokens": {"const": 256},
+    "reserved_microcny": {"const": 39168},
+    "usage_known": {"type": "boolean"},
+    "input_tokens_used": {"$ref": "#/$defs/count", "maximum": 4000},
+    "output_tokens_used": {"$ref": "#/$defs/count", "maximum": 256},
+    "estimated_microcny": {"$ref": "#/$defs/count", "maximum": 39168},
+    "http_status_class": {"enum": ["none", "2xx", "3xx", "4xx", "5xx", "other"]},
+    "provider_response_sha256": {"$ref": "#/$defs/sha256"},
+    "tool_call_sha256": {"$ref": "#/$defs/sha256"},
+    "raw_retained": {"const": false},
+    "redaction_applied": {"const": true},
+    "retry_count": {"const": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"execution_status": {"const": "completed"}}},
+      "then": {"properties": {"terminal_category": {"const": "provider_tool_submit"}, "finish_reason_category": {"const": "tool_calls"}, "response_shape_category": {"const": "tool_call"}, "tool_call_present": {"const": true}, "submit_attempt_count": {"const": 1}, "logical_call_count": {"const": 2}, "provider_call_count": {"const": 2}, "http_attempt_count": {"const": 2}, "usage_known": {"const": true}, "http_status_class": {"const": "2xx"}}}
+    },
+    {
+      "if": {"properties": {"execution_status": {"const": "not_run_gate_blocked"}}},
+      "then": {"properties": {"terminal_category": {"const": "not_run_gate_blocked"}, "logical_call_count": {"const": 0}, "provider_call_count": {"const": 0}, "http_attempt_count": {"const": 0}, "submit_attempt_count": {"const": 0}, "tool_call_present": {"const": false}, "http_status_class": {"const": "none"}, "provider_response_sha256": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}, "tool_call_sha256": {"const": "0000000000000000000000000000000000000000000000000000000000000000"}}}
+    }
+  ]
+}
