@@ -1,0 +1,14 @@
+ARG BASE_IMAGE=python:3.13-slim
+FROM ${BASE_IMAGE}
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=0 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY --chown=0:0 phase11c_gateb_one_shot_executor.py /app/phase11c_gateb_one_shot_executor.py
+RUN chmod 0555 /app/phase11c_gateb_one_shot_executor.py
+
+USER 0:0
+ENTRYPOINT ["python", "-B", "/app/phase11c_gateb_one_shot_executor.py"]
+CMD ["run"]

@@ -1,0 +1,43 @@
+services:
+  gateb-one-shot:
+    image: "${PHASE11C_GATEB_IMAGE:?set PHASE11C_GATEB_IMAGE to the frozen sha256 image ID}"
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile.phase11c-gateb
+      args:
+        BASE_IMAGE: "${PHASE11C_GATEB_BASE_IMAGE:-python:3.13-slim}"
+    user: "0:0"
+    command: ["run"]
+    restart: "no"
+    network_mode: bridge
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.50
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700
+    volumes:
+      - type: bind
+        source: /run/crag-gateb/glm_api_key
+        target: /run/crag-gateb/glm_api_key
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb/authorization.json
+        target: /run/crag-gateb/authorization.json
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb/approval.txt
+        target: /run/crag-gateb/approval.txt
+        read_only: true
+      - type: volume
+        source: gateb-one-shot-state
+        target: /var/lib/crag-gateb
+
+volumes:
+  gateb-one-shot-state:
+    name: phase11c-gateb-one-shot-state-v1
