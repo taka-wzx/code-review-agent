@@ -190,10 +190,18 @@ def sha256_file(path: Path, *, code: str) -> str:
 def normalized_utf8_sha256(path: Path, *, code: str) -> str:
     _regular_file(path, code)
     try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        content = path.read_bytes()
+    except OSError as exc:
         raise FreezeError(code) from exc
-    return _sha256_bytes(text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8"))
+    return normalized_utf8_bytes_sha256(content, code=code)
+
+
+def normalized_utf8_bytes_sha256(content: bytes, *, code: str) -> str:
+    try:
+        normalized = content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FreezeError(code) from exc
+    return _sha256_bytes(normalized)
 
 
 def _source_root(root: Path) -> Path:
@@ -208,7 +216,7 @@ def source_tree_manifest(root: Path) -> dict[str, Any]:
     files: list[dict[str, str]] = []
     for relative in EXECUTION_SOURCE_FILES:
         path = source_root / relative
-        files.append({"path": relative, "sha256": sha256_file(path, code="source_tree_file_invalid")})
+        files.append({"path": relative, "sha256": normalized_utf8_sha256(path, code="source_tree_file_invalid")})
     document = {
         "schema_version": "phase11c-gateb-source-tree/v1",
         "phase_id": executor.PHASE_ID,
@@ -246,13 +254,9 @@ def validate_source_archive(path: Path, *, source_root: Path) -> str:
                     _fail("source_archive_member_invalid")
                 with source:
                     content = source.read()
-                observed[relative] = _sha256_bytes(content)
+                observed[relative] = normalized_utf8_bytes_sha256(content, code="source_archive_member_encoding_invalid")
                 if relative == "phase11c_gateb_headline_cohort_executor.py":
-                    try:
-                        normalized_bytes = content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
-                    except UnicodeDecodeError as exc:
-                        raise FreezeError("source_archive_executor_encoding_invalid") from exc
-                    if _sha256_bytes(normalized_bytes) != executor.source_sha256():
+                    if observed[relative] != executor.source_sha256():
                         _fail("source_archive_executor_mismatch")
     except FreezeError:
         raise

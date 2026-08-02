@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from datetime import datetime, timedelta, timezone
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -298,6 +299,17 @@ class ArtifactTests(unittest.TestCase):
                 output.add(extra, arcname="unrelated.txt", recursive=False)
             with self.assertRaisesRegex(freeze.FreezeError, "source_archive_member_unexpected"):
                 freeze.validate_source_archive(archive, source_root=ROOT)
+
+    def test_source_archive_normalizes_cross_platform_line_endings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "normalized-source.tar.gz"
+            with tarfile.open(archive, "w:gz") as output:
+                for relative in freeze.EXECUTION_SOURCE_FILES:
+                    content = (ROOT / relative).read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+                    member = tarfile.TarInfo(relative)
+                    member.size = len(content)
+                    output.addfile(member, io.BytesIO(content))
+            self.assertRegex(freeze.validate_source_archive(archive, source_root=ROOT), "^[0-9a-f]{64}$")
 
     def test_freeze_output_matches_the_compose_control_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
