@@ -1,0 +1,13 @@
+{
+  "auth004_unchanged": true,
+  "business_claim_allowed": false,
+  "business_claim_reason": "synthetic_rows_present_and_gate_b_not_executed",
+  "formal_quality_status": "incomplete",
+  "generalization_denied": true,
+  "model_quality_status": "not_measured",
+  "new_denominator": true,
+  "phase11c_provider_reliability_not_proven": true,
+  "pilot_completed_does_not_equal_success": true,
+  "report_id": "phase11d-gate-a-synthetic-claim-decision",
+  "schema_version": "crag.phase11d.claim-decision/v1alpha1"
+}

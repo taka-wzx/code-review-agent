@@ -1,0 +1,105 @@
+{
+  "artifacts": [
+    {
+      "kind": "authorization",
+      "path": "authorization.json",
+      "sha256": "cfbedcc40d86debae9eb45991eb3ed68c221804e6d890ea6cd31e9ee5f0734c8"
+    },
+    {
+      "kind": "business_report",
+      "path": "business-report.json",
+      "sha256": "2560b72744fe7d12f003480a9e27cdc73f9161ad372f21cb99a2b68de476950b"
+    },
+    {
+      "kind": "claim_decision_report",
+      "path": "claim-decision-report.json",
+      "sha256": "e39c0834e537a74b5e4d0d008841cd539600a4b7872cd7684d3c83b5ed7fdc44"
+    },
+    {
+      "kind": "cohort",
+      "path": "cohort.json",
+      "sha256": "d68241d5358d57f8a9793effeedcb1112ce89c93c0076a1f6497c1647acaa724"
+    },
+    {
+      "kind": "consent_receipts",
+      "path": "consent-receipts.json",
+      "sha256": "1c1982ba7c4f56819def3b06f84047f72f4546dda06d4e6cd7c7734bd2b987be"
+    },
+    {
+      "kind": "draft_pr_receipts",
+      "path": "draft-pr-receipts.jsonl",
+      "sha256": "f8b8643746d3dc5192c949cfcac3833e0ad702219c168e1cf9beb59418f43a4f"
+    },
+    {
+      "kind": "feedback_receipts",
+      "path": "feedback-receipts.jsonl",
+      "sha256": "d722acfdd4070a718b8a08e831838ca4f7e02accd410e1fa1d4f968bba6cf319"
+    },
+    {
+      "kind": "final_acceptance_report",
+      "path": "final-acceptance-report.json",
+      "sha256": "2a79b12756803357d6614cd2203502b21c9b33b0bf787dc1945ab44e5293ee2d"
+    },
+    {
+      "kind": "headline_manifest",
+      "path": "headline-manifest.json",
+      "sha256": "b4c3c4c2006ab03dff7d0e2dde3f03b5e4ff2fa2dd333b7b3f911bcf6e234077"
+    },
+    {
+      "kind": "incident_stop_receipts",
+      "path": "incident-stop-receipts.jsonl",
+      "sha256": "ca430cb6e0d4b137018de8c803da97333ed1f6dc632e57f3a596d05102e448a0"
+    },
+    {
+      "kind": "repair_receipts",
+      "path": "repair-receipts.jsonl",
+      "sha256": "855b5a735b8e300d3513547b65f547a1df991dad44dd0f5c1380b80337106419"
+    },
+    {
+      "kind": "repository_allowlist",
+      "path": "repository-allowlist.json",
+      "sha256": "2c83e92511396e15e567835538e4653ae7320ee80cb35b31ef538f92db871dba"
+    },
+    {
+      "kind": "review_receipts",
+      "path": "review-receipts.jsonl",
+      "sha256": "75c2b6b840ae729e7d4f3e83ae5dfce867c7116cb902f82736cdf912034f5b01"
+    },
+    {
+      "kind": "selection_receipt",
+      "path": "selection-receipt.json",
+      "sha256": "c59bc6d2a29e08d9da430904778648295c8dc3fd3c27d31cbd486b90d2eb24e2"
+    },
+    {
+      "kind": "time_cost_latency_receipts",
+      "path": "time-cost-latency-receipts.jsonl",
+      "sha256": "0ed619f45c395cdff63c1e4ad307f8f5c62755ab8d50c32e64c65833a260a118"
+    }
+  ],
+  "auth004_boundary": {
+    "authorization_id": "auth-004",
+    "completed": 0,
+    "failed": 5,
+    "headline_attempts": 5,
+    "no_backfill": true,
+    "no_replacement": true,
+    "no_rerun": true,
+    "selected_pr_count": 5,
+    "stable_category": "provider_or_pipeline_RuntimeError"
+  },
+  "baseline_sha": "4af4b2756e8d2de6764d08e17a6e12040e24975e",
+  "generated_at_utc": "2026-08-03T00:00:00Z",
+  "local_master_at_start": "21344a2b72be8cb83361875b5cc8f2952e99ffbf",
+  "manifest_id": "phase11d-gate-a-synthetic-manifest",
+  "manifest_sha256": "d7e450a010bcbee2270376bc0f9fe23456c0ca3caea2a7b572ed841d910dbdd1",
+  "phase11c_facts": {
+    "diagnostic_receipt_sha256": "97a887015e95e02e94460979dd170b36d01558ce71b882df272b1d2e8aa0a41c",
+    "diagnostic_status": "completed",
+    "final_evidence_archive_sha256": "e269f4394a25a812b4a2ac08e3c7b1dbc396e9356b5f522286372bae65abb9f2",
+    "headline_cohort_receipt_sha256": "107f664a6fb1f11caeb85682b648472e351f61b34b4db987ff7b32f3d0e1f146",
+    "headline_cohort_status": "inconclusive",
+    "headline_ledger_sha256": "680f3cc1938856cfcc00b1f9a9c1aa3dc233c97d6bd794f8409d039817760419",
+    "headline_terminal_category": "text_only_response"
+  },
+  "schema_version": "crag.phase11d.canonical-manifest/v1alpha1"
+}
