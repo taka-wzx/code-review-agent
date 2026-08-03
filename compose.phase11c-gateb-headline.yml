@@ -152,4 +152,4 @@ services:
 
 volumes:
   gateb-protocol-state:
-    name: phase11c-gateb-headline-cohort-state-v1
+    name: phase11c-gateb-headline-cohort-state-v2

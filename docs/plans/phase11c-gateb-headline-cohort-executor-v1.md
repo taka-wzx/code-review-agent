@@ -4,6 +4,14 @@ Status: **offline implementation refresh in progress. The user has authorized th
 non-payment continuation actions required to complete Phase 11C, including source
 changes, branch updates, ECS freeze, evidence collection, and PR maintenance.**
 
+Live DIAGNOSTIC attempt `receipt_sha256=600378cc1871aeef3e3d65c566246e0815c3986c4ca8c1e45514f3a0614b8188`
+consumed the first headline-cohort state volume and failed closed as
+`provider_usage_schema_invalid` after exactly one 2xx provider attempt. It is
+retained as counted evidence only and is not eligible for headline binding. The
+continuation hardens usage parsing for provider-owned usage detail extensions and
+moves the dedicated state volume to v2 so the consumed v1 evidence is not reused,
+overwritten, or silently ignored.
+
 ## Continuation authority and non-delegable approvals
 
 The repository owner has authorized completion work after this contract was first
@@ -164,9 +172,10 @@ target is retained in the denominator; no target is retried, replaced, or silent
 omitted.
 
 The old one-shot image's approval, state volume, and credential are consumed evidence
-only. They must not be reused. A later exact execution must use a new dedicated
-credential path and a new state volume named
-`phase11c-gateb-headline-cohort-state-v1`.
+only. They must not be reused. The failed first headline-cohort DIAGNOSTIC state
+volume is also consumed evidence only. A later exact execution must use the
+dedicated credential path and the new state volume named
+`phase11c-gateb-headline-cohort-state-v2`.
 
 ### Freeze-chain implementation
 

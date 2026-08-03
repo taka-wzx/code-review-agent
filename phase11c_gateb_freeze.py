@@ -718,7 +718,7 @@ def _validate_rendered_compose(rendered: bytes, *, image_sha256: str) -> dict[st
     if not isinstance(volumes, dict) or set(volumes) != {"gateb-protocol-state"}:
         _fail("rendered_deployment_volumes_invalid")
     state_volume = volumes["gateb-protocol-state"]
-    if not isinstance(state_volume, dict) or state_volume != {"name": "phase11c-gateb-headline-cohort-state-v1"}:
+    if not isinstance(state_volume, dict) or state_volume != {"name": executor.STATE_VOLUME_NAME}:
         _fail("rendered_deployment_state_volume_invalid")
     return compose
 

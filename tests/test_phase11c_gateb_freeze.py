@@ -210,6 +210,7 @@ class ComposeValidationTests(unittest.TestCase):
             "gateb-protocol-recovery",
             "gateb-protocol-diagnostic-recovery",
         })
+        self.assertEqual(parsed["volumes"]["gateb-protocol-state"]["name"], protocol.STATE_VOLUME_NAME)
 
         tampered = _rendered_compose(image).replace(
             'image: "sha256:' + image + '"',

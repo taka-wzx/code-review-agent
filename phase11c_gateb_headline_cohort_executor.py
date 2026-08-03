@@ -98,6 +98,7 @@ MAX_PROVIDER_USAGE_COUNTER = 1_000_000
 STOP_POLICY = "stop_on_first_noncompleted_or_unknown_or_ambiguous"
 MAX_TOOL_CALL_ID_BYTES = 128
 MAX_TOOL_ARGUMENT_BYTES = 512
+STATE_VOLUME_NAME = "phase11c-gateb-headline-cohort-state-v2"
 
 CREDENTIAL_PATH = Path("/run/crag-gateb-protocol/glm_api_key")
 AUTHORIZATION_PATH = Path("/run/crag-gateb-headline/authorization.json")
@@ -1312,8 +1313,7 @@ class ParsedToolResponse:
 _PROVIDER_TOP_LEVEL_KEYS = frozenset(
     {"id", "object", "created", "model", "choices", "usage", "request_id", "service_tier", "system_fingerprint"}
 )
-_PROVIDER_USAGE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details"})
-_PROVIDER_PROMPT_DETAILS_KEYS = frozenset({"cached_tokens"})
+_PROVIDER_USAGE_REQUIRED_KEYS = frozenset({"prompt_tokens", "completion_tokens"})
 _PROVIDER_CHOICE_KEYS = frozenset({"index", "finish_reason", "message", "logprobs"})
 _PROVIDER_MESSAGE_KEYS = frozenset({"role", "content", "tool_calls", "reasoning_content", "refusal"})
 _PROVIDER_TOOL_CALL_KEYS = frozenset({"id", "type", "function", "index"})
@@ -1346,7 +1346,8 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> tuple[bool, int, int]:
         return False, 0, 0
     if not isinstance(usage, Mapping):
         _fail("provider_usage_schema_invalid")
-    _expect_known_keys(usage, _PROVIDER_USAGE_KEYS, "provider_usage_schema_invalid")
+    if not _PROVIDER_USAGE_REQUIRED_KEYS.issubset(set(usage)):
+        _fail("provider_usage_schema_invalid")
     input_tokens = _expect_nonnegative_int(usage.get("prompt_tokens"), "provider_usage_schema_invalid")
     output_tokens = _expect_nonnegative_int(usage.get("completion_tokens"), "provider_usage_schema_invalid")
     if input_tokens > MAX_PROVIDER_USAGE_COUNTER or output_tokens > MAX_PROVIDER_USAGE_COUNTER:
@@ -1358,10 +1359,11 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> tuple[bool, int, int]:
     if details is not None:
         if not isinstance(details, Mapping):
             _fail("provider_usage_schema_invalid")
-        _expect_known_keys(details, _PROVIDER_PROMPT_DETAILS_KEYS, "provider_usage_schema_invalid")
-        cached = _expect_nonnegative_int(details.get("cached_tokens"), "provider_usage_schema_invalid")
-        if cached > input_tokens:
-            _fail("provider_usage_schema_invalid")
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            cached_count = _expect_nonnegative_int(cached, "provider_usage_schema_invalid")
+            if cached_count > input_tokens:
+                _fail("provider_usage_schema_invalid")
     return True, input_tokens, output_tokens
 
 

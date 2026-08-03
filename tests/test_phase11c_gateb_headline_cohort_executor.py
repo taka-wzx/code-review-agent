@@ -150,6 +150,20 @@ def _diagnostic_response(content: str = protocol.DIAGNOSTIC_TERMINAL_TOKEN, *, u
     return protocol.HttpResult(200, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
 
 
+def _diagnostic_response_with_provider_usage_details() -> protocol.HttpResult:
+    payload: dict[str, object] = {
+        "choices": [{"message": {"content": protocol.DIAGNOSTIC_TERMINAL_TOKEN}}],
+        "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 7,
+            "total_tokens": 19,
+            "prompt_tokens_details": {"cached_tokens": 0, "provider_reserved_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+    return protocol.HttpResult(200, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
 def _completed_diagnostic() -> tuple[dict[str, object], dict[str, object]]:
     authorization = _diagnostic_authorization()
     binding = protocol.diagnostic_approval_binding_sha256(authorization)
@@ -299,6 +313,23 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(receipt["authorization_sha256"], authorization["authorization_sha256"])
         self.assertEqual(receipt["reserved_microcny"], 19584)
         self.assertTrue(receipt["redaction_applied"])
+        self.assertEqual(protocol.validate_completed_diagnostic_receipt(receipt), receipt)
+
+    def test_diagnostic_accepts_provider_usage_detail_extensions(self) -> None:
+        authorization = _diagnostic_authorization()
+        binding = protocol.diagnostic_approval_binding_sha256(authorization)
+        receipt = protocol.execute_diagnostic(
+            authorization,
+            protocol.expected_diagnostic_approval_text(binding),
+            store=protocol.InMemoryDiagnosticStateStore(),
+            credential_reader=FakeCredential(),
+            transport=FakeTransport([_diagnostic_response_with_provider_usage_details()]),
+            now_utc=NOW,
+        )
+        self.assertEqual(receipt["execution_status"], "completed")
+        self.assertTrue(receipt["usage_known"])
+        self.assertEqual(receipt["input_tokens_used"], 12)
+        self.assertEqual(receipt["output_tokens_used"], 7)
         self.assertEqual(protocol.validate_completed_diagnostic_receipt(receipt), receipt)
 
     def test_diagnostic_usage_or_terminal_mismatch_is_not_eligible(self) -> None:
