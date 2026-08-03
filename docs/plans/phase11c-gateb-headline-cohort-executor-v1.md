@@ -1,8 +1,11 @@
 # Phase 11C Gate B Headline Cohort Executor v1
 
-Status: **offline implementation refresh in progress. The user has authorized the
-non-payment continuation actions required to complete Phase 11C, including source
-changes, branch updates, ECS freeze, evidence collection, and PR maintenance.**
+Status: **live execution completed with an inconclusive HEADLINE_COHORT terminal
+receipt.** The refreshed same-image DIAGNOSTIC completed successfully, the
+HEADLINE_COHORT authorization was exactly approved and consumed, and the headline
+cohort stopped after target 1 returned a provider text-only response rather than
+the required tool-submit shape. This is a valid fail-closed terminal outcome, not
+a successful headline completion.
 
 Live DIAGNOSTIC attempt `receipt_sha256=600378cc1871aeef3e3d65c566246e0815c3986c4ca8c1e45514f3a0614b8188`
 consumed the first headline-cohort state volume and failed closed as
@@ -11,6 +14,46 @@ retained as counted evidence only and is not eligible for headline binding. The
 continuation hardens usage parsing for provider-owned usage detail extensions and
 moves the dedicated state volume to v2 so the consumed v1 evidence is not reused,
 overwritten, or silently ignored.
+
+Final live run evidence from commit `59aa4c979b64f65e57dc597382268a19775b74f5`
+is:
+
+- Source freeze archive SHA-256:
+  `896dba141d358c1fdf01d8716ad2ecf9e9b1d2cdea2cf28bc3b71948a567cdfb`.
+- Frozen image ID:
+  `sha256:7a667f410d96e1b2e9b78a8a068af958f63844f5ee30678820339fbc9a200a32`.
+- Runtime identity SHA-256:
+  `5f0bb392827efd0ec5ad0afde33f3d1cc643a98be1df610db99cb9209327ef64`.
+- DIAGNOSTIC authorization SHA-256:
+  `6c0838cb857ed3a64a6e51583a0f7e1638a663e4a09cdd7560f2bbed399fce5b`.
+- DIAGNOSTIC approval binding SHA-256:
+  `1cd38a699bdc6a8f3bd907444038e072bb58f765847fac30c30301729dfc9fc3`.
+- DIAGNOSTIC receipt SHA-256:
+  `97a887015e95e02e94460979dd170b36d01558ce71b882df272b1d2e8aa0a41c`.
+- DIAGNOSTIC terminal result: `completed`, `provider_terminal_match`,
+  `provider_call_count=1`, `http_attempt_count=1`, `estimated_microcny=564`,
+  `reserved_microcny=19,584`.
+- HEADLINE_COHORT authorization SHA-256:
+  `df8d82157a9b3490bc53810e5e7ecdd9163bd5f8b4c01f24257f97b40dd6ca00`.
+- HEADLINE_COHORT approval binding SHA-256:
+  `87541750aabe8a3d13b3eb47170b1dfa1dba77723157d40ce7c6d2c5deceea6a`.
+- HEADLINE_COHORT receipt SHA-256:
+  `107f664a6fb1f11caeb85682b648472e351f61b34b4db987ff7b32f3d0e1f146`.
+- HEADLINE_COHORT ledger SHA-256:
+  `680f3cc1938856cfcc00b1f9a9c1aa3dc233c97d6bd794f8409d039817760419`.
+- HEADLINE_COHORT terminal result: `inconclusive`; target 1 terminal category
+  `text_only_response`; targets 2 and 3 `not_run_gate_blocked`;
+  `completed_target_count=0`, `provider_call_count=2`, `http_attempt_count=2`,
+  `estimated_microcny=117,504`, `reserved_microcny=117,504`.
+- Final volume export hashes:
+  `cohort-receipt.json=56b2e652329449b3aca8dc5e20507111364086edba37fa33a4f577717fda58e7`,
+  `ledger.json=a2e1a68e1f51d922dfdde4890bb8e47d7c4bfc22e7828f43d55e65d7448d6c5d`,
+  `terminal-envelope.json=44c45d55e14d954de663cee5e044fb72946aae9cff8675b83d3d9a0ade0aac85`.
+- Final operator-retained evidence archive SHA-256:
+  `e269f4394a25a812b4a2ac08e3c7b1dbc396e9356b5f522286372bae65abb9f2`.
+- The operator reported deletion of the ECS one-time credential file and both
+  approval files after final evidence archival. The provider-side API key should
+  remain revoked or deleted if it was created only for Gate B.
 
 ## Continuation authority and non-delegable approvals
 
