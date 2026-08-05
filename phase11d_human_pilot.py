@@ -877,7 +877,9 @@ def build_gate_b_template() -> dict[str, Any]:
         "allow_auto_merge": False,
         "allow_agent_push_merge_master": False,
     }
-    required = {field: None for field in GATE_B_REQUIRED_FIELDS}
+    required: dict[str, Any] = {field: None for field in GATE_B_REQUIRED_FIELDS}
+    required["authorization_id"] = "phase11d-gate-b-human-pilot-v1-20260805-001"
+    required["github_app_installation_id"] = 149747930
     return {
         "schema_version": AUTHORIZATION_SCHEMA_VERSION,
         "template_id": "phase11d-gate-b-authorization-template-v1",

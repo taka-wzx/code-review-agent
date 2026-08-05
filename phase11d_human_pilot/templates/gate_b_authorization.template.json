@@ -18,7 +18,7 @@
   },
   "required_fields": {
     "allowed_base_branch_rule": null,
-    "authorization_id": null,
+    "authorization_id": "phase11d-gate-b-human-pilot-v1-20260805-001",
     "business_success_thresholds": null,
     "canonical_authorization_sha256": null,
     "cost_stop_thresholds": null,
@@ -35,7 +35,7 @@
     "frozen_runtime_identity_sha256": null,
     "frozen_runtime_image_sha256": null,
     "frozen_source_tree_sha256": null,
-    "github_app_installation_id": null,
+    "github_app_installation_id": 149747930,
     "github_repository_scopes": null,
     "human_approval_sla_seconds": null,
     "incident_owner": null,

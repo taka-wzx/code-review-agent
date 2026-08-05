@@ -108,7 +108,13 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         template = pilot.build_gate_b_template()
         allowed, blockers = pilot.evaluate_gate_b_template(template)
         self.assertFalse(allowed)
-        self.assertIn("missing:authorization_id", blockers)
+        self.assertNotIn("missing:authorization_id", blockers)
+        self.assertNotIn("missing:github_app_installation_id", blockers)
+        self.assertEqual(
+            template["required_fields"]["authorization_id"],
+            "phase11d-gate-b-human-pilot-v1-20260805-001",
+        )
+        self.assertEqual(template["required_fields"]["github_app_installation_id"], 149747930)
         self.assertIn("exact_approval_text_missing", blockers)
 
         filled = copy.deepcopy(template)
