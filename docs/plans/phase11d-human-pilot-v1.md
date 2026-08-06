@@ -1,6 +1,6 @@
 # Phase 11D: Human Review-to-Repair Pilot v1
 
-Status: **Gate A active - offline implementation only; Gate B real Pilot is closed**
+Status: **Gate A complete - default-closed Gate B executor implementation; real Pilot is closed pending exact approval**
 
 ## Scope revision: hash-only Gate B preparation (2026-08-05)
 
@@ -22,6 +22,50 @@ freezes and validates source, executable, runtime, deployment, and runtime-ident
 SHA-256 descriptors. The preflight has no credential input, no transport code, and
 always records `execution_capability=preflight_only` with every real-operation flag
 false. It may not be presented as a Gate B executor or used to enable a real Pilot.
+
+## Scope revision: default-closed Gate B executor implementation (2026-08-06)
+
+The repository owner explicitly requested continuation after Gate A delivery. This
+revision authorizes Codex to implement and test a real Gate B executor behind a
+separate, default-closed runtime gate. It does **not** by itself authorize a real
+Provider call, access to a raw credential, a real repository read, a branch push, or
+Draft Repair PR creation. Those effects remain conditional on the complete
+authorization bundle and the exact owner approval described below.
+
+The implementation may:
+
+- add `phase11d_gate_b_executor.py` and extend
+  `tests/test_phase11d_human_pilot.py` with standard-library fakes and negative cases;
+- read only explicitly supplied hash-only manifests and the explicitly supplied
+  credential file at execution time; raw credential bytes must remain in memory only,
+  never be printed, persisted, logged, or included in receipts;
+- use strict HTTPS transports limited to the frozen Zhipu chat endpoint and the
+  allowlisted GitHub App/repository read and Git object/Draft-PR endpoints;
+- enforce the frozen participant, repository, PR-selection, budget, retention,
+  kill-switch, and branch protections before any credential access or network call;
+- create at most one Pilot repair branch, one commit, one push, and one Draft Repair
+  PR, with comments/checks/labels/reviews, Ready, merge, and protected/default branch
+  mutation permanently disabled;
+- emit only sanitized, hash-bound receipts outside the repository's committed source
+  tree.
+
+The executor must remain `execution_capability=closed` unless all of these checks
+pass at the same invocation: the authorization bundle's canonical SHA matches the
+frozen inputs, the exact approval text and its SHA match the bundle, the UTC window is
+active, the credential fingerprints match, the repository installation identity and
+allowlist match, and the runtime kill switch is inactive. A generic request to
+continue is not a substitute for the exact approval text; the current external draft
+therefore remains closed until it is finalized and approved.
+
+The default-closed implementation includes a one-job human Finding/WRITE/DRAFT_PR
+state machine, an offline/non-root sandbox-evidence binding, a bounded GLM review
+budget, a GitHub Git-data/Draft-PR publisher with an external sanitized journal, and
+read-back restart reconciliation. All top-level credential/network execution paths,
+and the publisher before every publish or reconciliation attempt, re-hash the actual
+executing source/runtime before opening a transport. Lower-level dependency-injected
+clients have no user-facing command and are invoked only after their caller completes
+that gate. These implementation components do not create a real Pilot record,
+substitute for human decisions, or authorize a real operation by themselves.
 
 Task branch: `codex/phase11d-human-pilot-v1`
 
@@ -103,6 +147,7 @@ Codex owns exactly these paths for Phase 11D Gate A:
 - `docs/phase11d-human-pilot-v1.md`;
 - `phase11d_human_pilot.py`;
 - `phase11d_human_pilot/**`;
+- `phase11d_gate_b_executor.py` (default-closed Gate B executor);
 - `schemas/phase11d-authorization.schema.json`;
 - `schemas/phase11d-cohort.schema.json`;
 - `schemas/phase11d-review-receipt.schema.json`;
@@ -171,8 +216,10 @@ Tests must cover:
 
 ## Validation
 
-All commands are offline and must not access `eval/**`, credentials, provider APIs,
-GitHub product writes, cloud control planes, or paid services:
+The following delivery-validation commands are offline and must not access `eval/**`,
+credentials, provider APIs, GitHub product writes, cloud control planes, or paid
+services. The separately named Gate B executor commands remain default-closed and may
+open their exact allowlisted transport only after final authorization validation.
 
 ```powershell
 python -m unittest -v tests.test_phase11d_human_pilot
@@ -181,6 +228,7 @@ python phase11d_human_pilot.py generate-gate-b-template --output phase11d_human_
 python -m unittest discover -s tests
 python -m ruff check .
 python -m mypy src/code_review_agent phase11d_human_pilot.py
+python -m mypy phase11d_gate_b_executor.py
 python scripts/verify.py
 python -m pip check
 git diff --check

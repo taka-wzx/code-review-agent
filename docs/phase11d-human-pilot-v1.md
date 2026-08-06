@@ -1,7 +1,8 @@
 # Phase 11D Human Review-to-Repair Pilot v1
 
-Status: **Gate A offline implementation only**. Gate B real Pilot execution remains
-closed until a future owner approval exactly matches a frozen authorization bundle.
+Status: **Gate A complete; the default-closed Gate B executor, Repair control flow,
+and Draft PR publisher are implemented, but real Pilot execution remains closed** until
+an owner approval exactly matches the final frozen authorization bundle.
 
 ## Scope
 
@@ -13,6 +14,11 @@ python phase11d_human_pilot.py validate-bundle --bundle phase11d_human_pilot/exa
 python phase11d_human_pilot.py generate-gate-b-template --output phase11d_human_pilot/templates/gate_b_authorization.template.json
 python phase11d_human_pilot.py generate-credential-descriptor --help
 python phase11d_human_pilot.py freeze-gate-b-preflight --help
+python phase11d_gate_b_executor.py freeze-runtime --help
+python phase11d_gate_b_executor.py freeze-authorization --help
+python phase11d_gate_b_executor.py approve-authorization --help
+python phase11d_gate_b_executor.py validate-authorization --help
+python phase11d_gate_b_executor.py select-pull-requests --help
 ```
 
 The tool generates and validates synthetic receipts, reports, and a canonical manifest.
@@ -28,6 +34,47 @@ safe to keep in the restricted Gate B authorization directory.
 `freeze-gate-b-preflight` derives and self-binds the five runtime SHA-256 values
 needed by a future Gate B authorization. It has no credential argument and always
 records `execution_capability=preflight_only`; it cannot enable a real Pilot.
+
+`phase11d_gate_b_executor.py` is a separate, standard-library control plane for the
+future Gate B runtime. It freezes the actual executor source/runtime hashes, binds the
+authorization draft to the participant, repository, and credential descriptors,
+generates the canonical SHA-256 and exact owner approval text, and validates that text
+before enabling a transport. Its GitHub App path uses only a short-lived installation
+token minted from an explicitly named private-key file after the full local gate
+passes. It does not use `gh` state, PATs, Git credential helpers, or a merge API.
+
+Every top-level execution command that can reach a credential or network transport,
+and the publisher before each publish or reconciliation attempt, re-hashes the actual
+executing source, lock file, interpreter/runtime identity, and deployment descriptors
+before it reads a credential. Lower-level dependency-injected clients have no
+user-facing command and are invoked only after their caller completes that gate. A
+stale runtime descriptor, source-root mismatch, expired authorization, wrong
+installation identity, or inactive kill switch fails closed before a Provider or
+GitHub transport opens.
+
+The selection command is deterministic: it verifies the immutable GitHub repository
+ID and normalized locator hash, considers only in-window open non-draft PRs on the
+frozen base branch, ranks `pr-<number>` using the frozen seed plus a newline separator,
+and refuses to proceed unless it can select exactly the authorized 20--30 PRs. The GLM
+review client accepts only a structured `submit_review` tool call and records hashes,
+counts, and stable terminal categories, never raw diffs, prompts, responses, or
+credentials in a receipt.
+
+The one-job `GateBRepairCoordinator` requires the exact sequence: a confirmed
+maintainer/org-admin selects a completed-review Finding; an exact in-memory Repair Plan
+is hash-bound; a single-use WRITE approval is consumed; an isolated offline/non-root
+sandbox returns hash-bound patch, test, checkpoint, budget, reflection, tree, and
+commit evidence; a second single-use DRAFT_PR approval binds that exact commit; then
+the publisher may act. The coordinator does not invent selections, plans, approvals,
+or sandbox evidence.
+
+`GitHubDraftPublisher` is limited to repository verification, ref read-back, Git data
+objects, one dedicated `crag/phase11d/` branch, and one Draft PR. It has no PATCH, PUT,
+Ready, merge, comment, check, label, or review route. It writes a sanitized journal
+outside the source tree, verifies the exact tree/commit/ref and Draft state, and
+reconciles an ambiguous post-write restart by read-back; unresolved ambiguity is
+quarantined. The implementation tests use fakes only and have made no real Provider
+call, GitHub write, Pilot branch, or Pilot Draft PR.
 
 ## Preserved Boundaries
 
