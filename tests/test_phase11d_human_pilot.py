@@ -118,6 +118,26 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         with self.assertRaisesRegex(pilot.Phase11DError, "stable identifier"):
             pilot.validate_credential_descriptor(descriptor)
 
+    def test_gate_b_preflight_freezes_runtime_and_remains_closed(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        preflight = pilot.freeze_gate_b_preflight(
+            source_root=source_root,
+            authorization_id="phase11d-gate-b-human-pilot-v1-20260805-001",
+            preflight_id="phase11d-gate-b-preflight-20260806-001",
+            created_at_utc="2026-08-06T00:00:00Z",
+        )
+        self.assertEqual(preflight["execution_capability"], "preflight_only")
+        self.assertFalse(preflight["real_operations_enabled"])
+        self.assertFalse(preflight["credentials_read"])
+        self.assertFalse(preflight["network_opened"])
+        pilot.validate_gate_b_preflight(preflight)
+
+        tampered = copy.deepcopy(preflight)
+        tampered["real_operations_enabled"] = True
+        tampered["preflight_sha256"] = pilot._self_hash(tampered, "preflight_sha256")
+        with self.assertRaisesRegex(pilot.Phase11DError, "real operation is prohibited"):
+            pilot.validate_gate_b_preflight(tampered)
+
     def test_generate_and_validate_full_gate_a_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

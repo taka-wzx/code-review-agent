@@ -12,6 +12,7 @@ python phase11d_human_pilot.py generate-gate-a --output phase11d_human_pilot/exa
 python phase11d_human_pilot.py validate-bundle --bundle phase11d_human_pilot/examples/gate_a
 python phase11d_human_pilot.py generate-gate-b-template --output phase11d_human_pilot/templates/gate_b_authorization.template.json
 python phase11d_human_pilot.py generate-credential-descriptor --help
+python phase11d_human_pilot.py freeze-gate-b-preflight --help
 ```
 
 The tool generates and validates synthetic receipts, reports, and a canonical manifest.
@@ -23,6 +24,10 @@ comment, label, check, review, merge, or mutate protected/default branches.
 identifiers. It never accepts a private key, API key, token, or credential file;
 the resulting descriptor is self-bound by `credential_descriptor_sha256` and is
 safe to keep in the restricted Gate B authorization directory.
+
+`freeze-gate-b-preflight` derives and self-binds the five runtime SHA-256 values
+needed by a future Gate B authorization. It has no credential argument and always
+records `execution_capability=preflight_only`; it cannot enable a real Pilot.
 
 ## Preserved Boundaries
 

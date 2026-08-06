@@ -14,11 +14,13 @@ import json
 import math
 from pathlib import Path
 import re
+import sys
 from typing import Any, Iterable, Mapping, Sequence, cast
 
 
 AUTHORIZATION_SCHEMA_VERSION = "crag.phase11d.authorization/v1alpha1"
 CREDENTIAL_DESCRIPTOR_SCHEMA_VERSION = "crag.phase11d.credential-descriptor/v1alpha1"
+GATE_B_PREFLIGHT_SCHEMA_VERSION = "crag.phase11d.gate-b-preflight/v1alpha1"
 COHORT_SCHEMA_VERSION = "crag.phase11d.cohort/v1alpha1"
 REVIEW_RECEIPT_SCHEMA_VERSION = "crag.phase11d.review-receipt/v1alpha1"
 REPAIR_RECEIPT_SCHEMA_VERSION = "crag.phase11d.repair-receipt/v1alpha1"
@@ -631,6 +633,27 @@ CREDENTIAL_DESCRIPTOR_FIELDS = frozenset(
     }
 )
 
+GATE_B_PREFLIGHT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "preflight_id",
+        "authorization_id",
+        "created_at_utc",
+        "frozen_source_tree_sha256",
+        "frozen_executable_source_sha256",
+        "frozen_runtime_image_sha256",
+        "frozen_deployment_sha256",
+        "frozen_runtime_identity_sha256",
+        "execution_capability",
+        "real_operations_enabled",
+        "credentials_read",
+        "network_opened",
+        "preflight_sha256",
+    }
+)
+
+GATE_B_PREFLIGHT_SOURCE_FILES = ("phase11d_human_pilot.py", "requirements.lock")
+
 
 class Phase11DError(RuntimeError):
     """Stable offline validation failure."""
@@ -816,6 +839,131 @@ def validate_credential_descriptor(descriptor: Mapping[str, Any]) -> None:
     ]:
         raise Phase11DError("credential-descriptor.json: canonical hash mismatch")
     _scan_no_raw_content(descriptor, "credential-descriptor.json")
+
+
+def _sha256_file(path: Path, *, label: str) -> str:
+    try:
+        return sha256_bytes(path.read_bytes())
+    except OSError as exc:
+        raise Phase11DError(f"{label}: unable to read frozen input") from exc
+
+
+def _frozen_file_set_sha256(root: Path, relative_paths: Sequence[str], *, label: str) -> str:
+    entries: list[dict[str, str]] = []
+    for relative_path in relative_paths:
+        path = root / relative_path
+        if not path.is_file():
+            raise Phase11DError(f"{label}: required frozen input is missing")
+        entries.append(
+            {
+                "path": relative_path,
+                "sha256": _sha256_file(path, label=label),
+            }
+        )
+    return sha256_bytes(canonical_json({"kind": label, "artifacts": entries}))
+
+
+def freeze_gate_b_preflight(
+    *,
+    source_root: Path,
+    authorization_id: str,
+    preflight_id: str,
+    created_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """Freeze local runtime inputs without opening a credential or network transport."""
+    root = source_root.resolve()
+    if not root.is_dir():
+        raise Phase11DError("gate-b preflight: source root is unavailable")
+    _require_stable_id("authorization_id", authorization_id)
+    _require_stable_id("preflight_id", preflight_id)
+    timestamp = created_at_utc or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _require_utc("preflight.created_at_utc", timestamp)
+
+    source_tree_sha256 = _frozen_file_set_sha256(
+        root,
+        GATE_B_PREFLIGHT_SOURCE_FILES,
+        label="gate_b_source_tree",
+    )
+    executable_source_sha256 = _sha256_file(
+        root / "phase11d_human_pilot.py",
+        label="gate_b_executable_source",
+    )
+    runtime_image_sha256 = sha256_bytes(
+        canonical_json(
+            {
+                "runtime_kind": "python_venv",
+                "python_implementation": sys.implementation.name,
+                "python_version": ".".join(str(part) for part in sys.version_info[:3]),
+                "requirements_lock_sha256": _sha256_file(
+                    root / "requirements.lock",
+                    label="gate_b_runtime_image",
+                ),
+            }
+        )
+    )
+    deployment_sha256 = sha256_bytes(
+        canonical_json(
+            {
+                "deployment_mode": "owner_local_cli",
+                "network_default": "closed",
+                "provider_transport": "disabled",
+                "github_transport": "disabled",
+            }
+        )
+    )
+    runtime_identity_sha256 = sha256_bytes(
+        canonical_json(
+            {
+                "runtime_identity_kind": "local_owner_cli",
+                "authorization_id": authorization_id,
+                "execution_capability": "preflight_only",
+            }
+        )
+    )
+    preflight: dict[str, Any] = {
+        "schema_version": GATE_B_PREFLIGHT_SCHEMA_VERSION,
+        "preflight_id": preflight_id,
+        "authorization_id": authorization_id,
+        "created_at_utc": timestamp,
+        "frozen_source_tree_sha256": source_tree_sha256,
+        "frozen_executable_source_sha256": executable_source_sha256,
+        "frozen_runtime_image_sha256": runtime_image_sha256,
+        "frozen_deployment_sha256": deployment_sha256,
+        "frozen_runtime_identity_sha256": runtime_identity_sha256,
+        "execution_capability": "preflight_only",
+        "real_operations_enabled": False,
+        "credentials_read": False,
+        "network_opened": False,
+        "preflight_sha256": "",
+    }
+    validate_gate_b_preflight(_with_self_hash(preflight, "preflight_sha256"))
+    return preflight
+
+
+def validate_gate_b_preflight(preflight: Mapping[str, Any]) -> None:
+    _exact_fields("gate-b-preflight.json", preflight, GATE_B_PREFLIGHT_FIELDS)
+    if preflight["schema_version"] != GATE_B_PREFLIGHT_SCHEMA_VERSION:
+        raise Phase11DError("gate-b-preflight.json: unsupported schema")
+    _require_stable_id("preflight_id", preflight["preflight_id"])
+    _require_stable_id("authorization_id", preflight["authorization_id"])
+    _require_utc("preflight.created_at_utc", preflight["created_at_utc"])
+    for field in (
+        "frozen_source_tree_sha256",
+        "frozen_executable_source_sha256",
+        "frozen_runtime_image_sha256",
+        "frozen_deployment_sha256",
+        "frozen_runtime_identity_sha256",
+        "preflight_sha256",
+    ):
+        _require_sha256(f"preflight.{field}", preflight[field])
+    if preflight["execution_capability"] != "preflight_only":
+        raise Phase11DError("gate-b-preflight.json: real executor is not implemented")
+    for field in ("real_operations_enabled", "credentials_read", "network_opened"):
+        if _require_bool(f"preflight.{field}", preflight[field]):
+            raise Phase11DError("gate-b-preflight.json: real operation is prohibited")
+    if _self_hash(preflight, "preflight_sha256") != preflight["preflight_sha256"]:
+        raise Phase11DError("gate-b-preflight.json: canonical hash mismatch")
+    _scan_no_raw_content(preflight, "gate-b-preflight.json")
 
 
 def _exact_fields(name: str, value: Mapping[str, Any], expected: frozenset[str]) -> None:
@@ -2376,6 +2524,11 @@ def build_parser() -> argparse.ArgumentParser:
     credential.add_argument("--credential-delivery-mode", required=True)
     credential.add_argument("--credential-revoke-procedure", required=True)
     credential.add_argument("--output", required=True, type=Path)
+    preflight = subcommands.add_parser("freeze-gate-b-preflight")
+    preflight.add_argument("--source-root", required=True, type=Path)
+    preflight.add_argument("--authorization-id", required=True)
+    preflight.add_argument("--preflight-id", required=True)
+    preflight.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -2427,6 +2580,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "credential_descriptor_sha256": descriptor[
                             "credential_descriptor_sha256"
                         ],
+                        "output": str(args.output),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "freeze-gate-b-preflight":
+            preflight = freeze_gate_b_preflight(
+                source_root=args.source_root,
+                authorization_id=args.authorization_id,
+                preflight_id=args.preflight_id,
+            )
+            _write_json(args.output, preflight)
+            print(
+                json.dumps(
+                    {
+                        "generated": True,
+                        "execution_capability": preflight["execution_capability"],
+                        "preflight_sha256": preflight["preflight_sha256"],
                         "output": str(args.output),
                     },
                     sort_keys=True,

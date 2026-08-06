@@ -14,6 +14,15 @@ PRs, pushing a branch, creating a Pilot-generated Draft PR, or enabling Gate B.
 The exact real executor, frozen runtime/deployment digests, canonical authorization
 digest, and owner exact-approval text remain required before any real operation.
 
+## Scope revision: offline Gate B runtime preflight (2026-08-06)
+
+The repository owner directed Codex to continue Phase 11D after Gate A CI passed.
+This revision authorizes a standard-library-only, default-closed preflight that
+freezes and validates source, executable, runtime, deployment, and runtime-identity
+SHA-256 descriptors. The preflight has no credential input, no transport code, and
+always records `execution_capability=preflight_only` with every real-operation flag
+false. It may not be presented as a Gate B executor or used to enable a real Pilot.
+
 Task branch: `codex/phase11d-human-pilot-v1`
 
 Fetched baseline: `origin/master` at
