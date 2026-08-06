@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-repair-receipt.schema.json",
+  "title": "CRAG Phase 11D repair receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repair_job_id",
+    "pr_id",
+    "finding_id",
+    "row_kind",
+    "request_actor_role",
+    "request_actor_method",
+    "base_sha",
+    "head_sha",
+    "worktree_receipt_sha256",
+    "task_branch_sha256",
+    "plan_sha256",
+    "write_approval",
+    "patch_sha256",
+    "checkpoint_sha256",
+    "test_sha256",
+    "budget_sha256",
+    "sandbox",
+    "draft_pr_approval",
+    "commit_sha",
+    "publisher_status",
+    "final_status",
+    "failure_category",
+    "cost_micro_cny"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.repair-receipt/v1alpha1"},
+    "repair_job_id": {"type": "string", "minLength": 1},
+    "pr_id": {"type": "string", "minLength": 1},
+    "finding_id": {"type": "string", "minLength": 1},
+    "row_kind": {"const": "synthetic"},
+    "request_actor_role": {"enum": ["maintainer", "org_admin"]},
+    "request_actor_method": {"const": "human"},
+    "base_sha": {"$ref": "#/$defs/gitShaOrEmpty"},
+    "head_sha": {"$ref": "#/$defs/gitShaOrEmpty"},
+    "worktree_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "task_branch_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "write_approval": {"$ref": "#/$defs/approval"},
+    "patch_sha256": {"$ref": "#/$defs/sha256"},
+    "checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+    "test_sha256": {"$ref": "#/$defs/sha256"},
+    "budget_sha256": {"$ref": "#/$defs/sha256"},
+    "sandbox": {"$ref": "#/$defs/sandbox"},
+    "draft_pr_approval": {"$ref": "#/$defs/approval"},
+    "commit_sha": {"$ref": "#/$defs/gitShaOrEmpty"},
+    "publisher_status": {
+      "enum": ["draft_published", "not_published", "publisher_failed", "publisher_ambiguous_result", "quarantined"]
+    },
+    "final_status": {
+      "enum": ["draft_pr_created", "declined", "test_failed", "budget_exhausted", "publisher_failed", "quarantined", "not_run_gate_blocked"]
+    },
+    "failure_category": {
+      "enum": ["none", "approval_declined", "test_failure", "budget_exhausted", "publisher_failed", "publisher_ambiguous_result", "credential_revoked", "kill_switch_activated", "receipt_mismatch", "checkpoint_mismatch"]
+    },
+    "cost_micro_cny": {"type": "integer", "minimum": 0}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitShaOrEmpty": {"type": "string", "pattern": "^([0-9a-f]{40})?$"},
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approval_id", "decision", "actor_role", "actor_method", "binding_sha256", "consumed"],
+      "properties": {
+        "approval_id": {"type": "string", "minLength": 1},
+        "decision": {"enum": ["approved", "declined", "not_requested"]},
+        "actor_role": {"type": "string", "minLength": 1},
+        "actor_method": {"type": "string", "minLength": 1},
+        "binding_sha256": {"$ref": "#/$defs/sha256"},
+        "consumed": {"type": "boolean"}
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["docker", "network_mode", "non_root", "timeout_seconds", "output_limit_bytes", "tests_passed"],
+      "properties": {
+        "docker": {"const": true},
+        "network_mode": {"const": "none"},
+        "non_root": {"const": true},
+        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "output_limit_bytes": {"type": "integer", "minimum": 1},
+        "tests_passed": {"type": "boolean"}
+      }
+    }
+  }
+}

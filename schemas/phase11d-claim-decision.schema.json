@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-claim-decision.schema.json",
+  "title": "CRAG Phase 11D claim decision report v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "business_claim_allowed",
+    "business_claim_reason",
+    "model_quality_status",
+    "formal_quality_status",
+    "pilot_completed_does_not_equal_success",
+    "phase11c_provider_reliability_not_proven",
+    "auth004_unchanged",
+    "new_denominator",
+    "generalization_denied"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.claim-decision/v1alpha1"},
+    "report_id": {"type": "string", "minLength": 1},
+    "business_claim_allowed": {"const": false},
+    "business_claim_reason": {"type": "string", "minLength": 1},
+    "model_quality_status": {"const": "not_measured"},
+    "formal_quality_status": {"const": "incomplete"},
+    "pilot_completed_does_not_equal_success": {"const": true},
+    "phase11c_provider_reliability_not_proven": {"const": true},
+    "auth004_unchanged": {"const": true},
+    "new_denominator": {"const": true},
+    "generalization_denied": {"const": true}
+  }
+}

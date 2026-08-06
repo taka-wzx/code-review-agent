@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-review-receipt.schema.json",
+  "title": "CRAG Phase 11D review receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "receipt_id",
+    "pr_id",
+    "headline_id",
+    "row_kind",
+    "attempt_number",
+    "status",
+    "terminal_category",
+    "finding_ids",
+    "feedback_eligible_finding_ids",
+    "provider_call_count",
+    "http_attempt_count",
+    "input_tokens",
+    "output_tokens",
+    "cached_tokens",
+    "cost_micro_cny",
+    "latency_ms",
+    "trace_sha256",
+    "redaction_applied"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.review-receipt/v1alpha1"},
+    "receipt_id": {"type": "string", "minLength": 1},
+    "pr_id": {"type": "string", "minLength": 1},
+    "headline_id": {"type": "string", "minLength": 1},
+    "row_kind": {"const": "synthetic"},
+    "attempt_number": {"const": 1},
+    "status": {"enum": ["completed", "failed", "inconclusive"]},
+    "terminal_category": {
+      "enum": [
+        "completed",
+        "provider_text_only_response",
+        "provider_malformed_tool_response",
+        "provider_failure",
+        "provider_tool_call_mismatch",
+        "provider_schema_mismatch",
+        "provider_usage_ambiguity",
+        "missing_receipt_declared",
+        "receipt_mismatch",
+        "approval_declined",
+        "budget_exhausted",
+        "publisher_ambiguous_result",
+        "publisher_failed",
+        "kill_switch_activated",
+        "not_run_gate_blocked"
+      ]
+    },
+    "finding_ids": {"type": "array", "items": {"type": "string"}},
+    "feedback_eligible_finding_ids": {"type": "array", "items": {"type": "string"}},
+    "provider_call_count": {"type": "integer", "minimum": 0},
+    "http_attempt_count": {"type": "integer", "minimum": 0},
+    "input_tokens": {"type": "integer", "minimum": 0},
+    "output_tokens": {"type": "integer", "minimum": 0},
+    "cached_tokens": {"type": "integer", "minimum": 0},
+    "cost_micro_cny": {"type": "integer", "minimum": 0},
+    "latency_ms": {"type": "integer", "minimum": 0},
+    "trace_sha256": {"$ref": "#/$defs/sha256"},
+    "redaction_applied": {"const": true}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

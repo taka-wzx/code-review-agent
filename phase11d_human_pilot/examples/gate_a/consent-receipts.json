@@ -1,0 +1,35 @@
+{
+  "identity_map_committed": false,
+  "participants": [
+    {
+      "confirmed_real": false,
+      "consent_receipt_sha256": "82f7907270853099312268c085c0f646a9343572be06a518842b6f067395c0e2",
+      "consent_scope_sha256": "c6d28a92a706e26d5e14b4b42f2c6525ed1a55d934a3ef338d80fbfa69583970",
+      "participant_id": "synthetic-participant-001",
+      "retention_days": 0,
+      "role": "maintainer",
+      "row_kind": "synthetic"
+    },
+    {
+      "confirmed_real": false,
+      "consent_receipt_sha256": "3aef0a8ac83ef767ed00112fc61e62198f2bf9d5edcb670a26ef108c2a927ced",
+      "consent_scope_sha256": "78ca588eb366f100f02fe6c5ba2435a2df0a9bae4a8f061264b551a265058e1b",
+      "participant_id": "synthetic-participant-002",
+      "retention_days": 0,
+      "role": "maintainer",
+      "row_kind": "synthetic"
+    },
+    {
+      "confirmed_real": false,
+      "consent_receipt_sha256": "84fc1d99f994937b9f3b319c994f1cd1813a5e5ab36262bbb801926f00ce7829",
+      "consent_scope_sha256": "9478067f9d59af37b1c4f9e687c7ad74124ee25b2ddcba11c8df950f0f1d0e97",
+      "participant_id": "synthetic-participant-003",
+      "retention_days": 0,
+      "role": "org_admin",
+      "row_kind": "synthetic"
+    }
+  ],
+  "real_rows_present": false,
+  "schema_version": "crag.phase11d.consent-receipts/v1alpha1",
+  "synthetic_rows_present": true
+}

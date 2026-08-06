@@ -1,0 +1,14 @@
+{
+  "allowlist_id": "phase11d-gate-a-synthetic-repositories",
+  "raw_repository_locator_committed": false,
+  "repositories": [
+    {
+      "allowed_base_branch_rule_sha256": "5e4f25da8574d51b3757d37a02dae20bebb9c9f78d37cb866fed7062cef4a6bc",
+      "github_writes_allowed": false,
+      "locator_sha256": "e3757721a8dd9c27df857030ef345894654ef32318eaac5a8c01416057ca0bd7",
+      "repository_id": "synthetic-repo-001",
+      "row_kind": "synthetic"
+    }
+  ],
+  "schema_version": "crag.phase11d.repository-allowlist/v1alpha1"
+}

@@ -1,0 +1,76 @@
+{
+  "active_human_review_time_seconds": {
+    "p50": 30,
+    "p95": 57,
+    "sample_count": 20
+  },
+  "business_claim_allowed": false,
+  "claim_scope": "synthetic_gate_a_only",
+  "cohort_id": "phase11d-gate-a-synthetic-cohort",
+  "cost_micro_cny": {
+    "per_adopted_finding": 21207,
+    "per_selected_pr": 1060,
+    "total": 21207
+  },
+  "decision_counts": {
+    "accepted": 1,
+    "duplicate": 0,
+    "fixed": 0,
+    "rejected": 1,
+    "uncertain": 1
+  },
+  "draft_pr_adopted": {
+    "denominator": 3,
+    "numerator": 1,
+    "value": 0.3333333333333333
+  },
+  "draft_pr_approval": {
+    "approved": 1,
+    "declined": 0,
+    "denominator": 2
+  },
+  "draft_pr_created": {
+    "denominator": 2,
+    "numerator": 1,
+    "value": 0.5
+  },
+  "duplicate_external_write_count": 0,
+  "end_to_end_latency_ms": {
+    "p50": 1100,
+    "p95": 1190,
+    "sample_count": 20
+  },
+  "failure_counts": {
+    "missing_receipt_declared": 1,
+    "provider_failure": 1,
+    "provider_malformed_tool_response": 1,
+    "provider_text_only_response": 1
+  },
+  "feedback_coverage": {
+    "denominator": 3,
+    "numerator": 3,
+    "value": 1.0
+  },
+  "formal_quality_status": "incomplete",
+  "headline_completion": {
+    "denominator": 20,
+    "numerator": 16,
+    "value": 0.8
+  },
+  "model_quality_status": "not_measured",
+  "repair_requested": {
+    "denominator": 3,
+    "numerator": 2,
+    "value": 0.6666666666666666
+  },
+  "report_id": "phase11d-gate-a-synthetic-business-report",
+  "schema_version": "crag.phase11d.business-report/v1alpha1",
+  "selected_pr_count": 20,
+  "synthetic_rows_present": true,
+  "unauthorized_operation_count": 0,
+  "write_approval": {
+    "approved": 1,
+    "declined": 1,
+    "denominator": 2
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-cohort.schema.json",
+  "title": "CRAG Phase 11D cohort v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "cohort_id",
+    "authorization_id",
+    "synthetic_rows_present",
+    "real_rows_present",
+    "selection_seed_sha256",
+    "selection_window_start_utc",
+    "selection_window_end_utc",
+    "eligible_count",
+    "excluded_count",
+    "selected_pr_count",
+    "selected_prs",
+    "excluded"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.cohort/v1alpha1"},
+    "cohort_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "authorization_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "synthetic_rows_present": {"const": true},
+    "real_rows_present": {"const": false},
+    "selection_seed_sha256": {"$ref": "#/$defs/sha256"},
+    "selection_window_start_utc": {"$ref": "#/$defs/utcSecond"},
+    "selection_window_end_utc": {"$ref": "#/$defs/utcSecond"},
+    "eligible_count": {"type": "integer", "minimum": 1},
+    "excluded_count": {"type": "integer", "minimum": 0},
+    "selected_pr_count": {"type": "integer", "minimum": 20, "maximum": 30},
+    "selected_prs": {
+      "type": "array",
+      "minItems": 20,
+      "maxItems": 30,
+      "items": {"$ref": "#/$defs/selectedPr"}
+    },
+    "excluded": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/excludedPr"}
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcSecond": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "selectedPr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pr_id",
+        "row_kind",
+        "repository_id",
+        "snapshot_sha256",
+        "diff_sha256",
+        "headline_id",
+        "selection_rank_sha256"
+      ],
+      "properties": {
+        "pr_id": {"type": "string", "minLength": 1},
+        "row_kind": {"const": "synthetic"},
+        "repository_id": {"type": "string", "minLength": 1},
+        "snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "diff_sha256": {"$ref": "#/$defs/sha256"},
+        "headline_id": {"type": "string", "minLength": 1},
+        "selection_rank_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "excludedPr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "row_kind", "exclusion_reason"],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1},
+        "row_kind": {"const": "synthetic"},
+        "exclusion_reason": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
