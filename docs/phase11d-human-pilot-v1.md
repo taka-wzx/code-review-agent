@@ -11,12 +11,18 @@ This Gate A package adds a standard-library-only offline tool:
 python phase11d_human_pilot.py generate-gate-a --output phase11d_human_pilot/examples/gate_a
 python phase11d_human_pilot.py validate-bundle --bundle phase11d_human_pilot/examples/gate_a
 python phase11d_human_pilot.py generate-gate-b-template --output phase11d_human_pilot/templates/gate_b_authorization.template.json
+python phase11d_human_pilot.py generate-credential-descriptor --help
 ```
 
 The tool generates and validates synthetic receipts, reports, and a canonical manifest.
 It does not call providers, read credentials, open network transports, enroll real
 participants, push Pilot-generated branches, create Pilot-generated Draft Repair PRs,
 comment, label, check, review, merge, or mutate protected/default branches.
+
+`generate-credential-descriptor` accepts only SHA-256 fingerprints and stable
+identifiers. It never accepts a private key, API key, token, or credential file;
+the resulting descriptor is self-bound by `credential_descriptor_sha256` and is
+safe to keep in the restricted Gate B authorization directory.
 
 ## Preserved Boundaries
 

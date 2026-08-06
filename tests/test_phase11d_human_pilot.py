@@ -73,6 +73,51 @@ def _valid_parts() -> tuple[
 
 
 class Phase11DHumanPilotTests(unittest.TestCase):
+    def test_hash_only_credential_descriptor_is_self_bound(self) -> None:
+        descriptor = pilot.build_credential_descriptor(
+            authorization_id="phase11d-gate-b-human-pilot-v1-20260805-001",
+            credential_descriptor_id="phase11d-gate-b-credentials-20260805-001",
+            github_app_id=4421400,
+            github_app_installation_id=149747930,
+            github_app_private_key_fingerprint_sha256="a" * 64,
+            provider_id="zhipu",
+            provider_model_snapshot="glm-5.2",
+            provider_api_key_fingerprint_sha256="b" * 64,
+            credential_delivery_mode="local_secret_store_to_ephemeral_process_environment",
+            credential_revoke_procedure="github_delete_private_key_and_zhipu_disable_api_key",
+        )
+        self.assertEqual(
+            descriptor["credential_descriptor_sha256"],
+            pilot._self_hash(descriptor, "credential_descriptor_sha256"),
+        )
+        pilot.validate_credential_descriptor(descriptor)
+
+        tampered = copy.deepcopy(descriptor)
+        tampered["provider_model_snapshot"] = "glm-5.3"
+        with self.assertRaisesRegex(pilot.Phase11DError, "canonical hash mismatch"):
+            pilot.validate_credential_descriptor(tampered)
+
+    def test_credential_descriptor_rejects_raw_private_key_content(self) -> None:
+        descriptor = pilot.build_credential_descriptor(
+            authorization_id="phase11d-gate-b-human-pilot-v1-20260805-001",
+            credential_descriptor_id="phase11d-gate-b-credentials-20260805-001",
+            github_app_id=4421400,
+            github_app_installation_id=149747930,
+            github_app_private_key_fingerprint_sha256="a" * 64,
+            provider_id="zhipu",
+            provider_model_snapshot="glm-5.2",
+            provider_api_key_fingerprint_sha256="b" * 64,
+            credential_delivery_mode="local_secret_store_to_ephemeral_process_environment",
+            credential_revoke_procedure="github_delete_private_key_and_zhipu_disable_api_key",
+        )
+        descriptor["provider_model_snapshot"] = "-----BEGIN PRIVATE KEY-----"
+        descriptor["credential_descriptor_sha256"] = pilot._self_hash(
+            descriptor,
+            "credential_descriptor_sha256",
+        )
+        with self.assertRaisesRegex(pilot.Phase11DError, "stable identifier"):
+            pilot.validate_credential_descriptor(descriptor)
+
     def test_generate_and_validate_full_gate_a_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

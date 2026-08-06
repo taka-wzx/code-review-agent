@@ -18,6 +18,7 @@ from typing import Any, Iterable, Mapping, Sequence, cast
 
 
 AUTHORIZATION_SCHEMA_VERSION = "crag.phase11d.authorization/v1alpha1"
+CREDENTIAL_DESCRIPTOR_SCHEMA_VERSION = "crag.phase11d.credential-descriptor/v1alpha1"
 COHORT_SCHEMA_VERSION = "crag.phase11d.cohort/v1alpha1"
 REVIEW_RECEIPT_SCHEMA_VERSION = "crag.phase11d.review-receipt/v1alpha1"
 REPAIR_RECEIPT_SCHEMA_VERSION = "crag.phase11d.repair-receipt/v1alpha1"
@@ -613,6 +614,23 @@ GATE_B_REQUIRED_FIELDS = (
     "cost_stop_thresholds",
 )
 
+CREDENTIAL_DESCRIPTOR_FIELDS = frozenset(
+    {
+        "schema_version",
+        "credential_descriptor_id",
+        "authorization_id",
+        "github_app_id",
+        "github_app_installation_id",
+        "github_app_private_key_fingerprint_sha256",
+        "provider_id",
+        "provider_model_snapshot",
+        "provider_api_key_fingerprint_sha256",
+        "credential_delivery_mode",
+        "credential_revoke_procedure",
+        "credential_descriptor_sha256",
+    }
+)
+
 
 class Phase11DError(RuntimeError):
     """Stable offline validation failure."""
@@ -734,6 +752,70 @@ def _with_self_hash(value: dict[str, Any], field: str) -> dict[str, Any]:
     value[field] = ""
     value[field] = _self_hash(value, field)
     return value
+
+
+def _require_stable_id(name: str, value: Any) -> str:
+    result = _require_str(name, value)
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", result) is None:
+        raise Phase11DError(f"{name}: expected stable identifier")
+    return result
+
+
+def build_credential_descriptor(
+    *,
+    authorization_id: str,
+    credential_descriptor_id: str,
+    github_app_id: int,
+    github_app_installation_id: int,
+    github_app_private_key_fingerprint_sha256: str,
+    provider_id: str,
+    provider_model_snapshot: str,
+    provider_api_key_fingerprint_sha256: str,
+    credential_delivery_mode: str,
+    credential_revoke_procedure: str,
+) -> dict[str, Any]:
+    """Build a hash-only descriptor without ever accepting raw credentials."""
+    descriptor: dict[str, Any] = {
+        "schema_version": CREDENTIAL_DESCRIPTOR_SCHEMA_VERSION,
+        "credential_descriptor_id": credential_descriptor_id,
+        "authorization_id": authorization_id,
+        "github_app_id": github_app_id,
+        "github_app_installation_id": github_app_installation_id,
+        "github_app_private_key_fingerprint_sha256": github_app_private_key_fingerprint_sha256,
+        "provider_id": provider_id,
+        "provider_model_snapshot": provider_model_snapshot,
+        "provider_api_key_fingerprint_sha256": provider_api_key_fingerprint_sha256,
+        "credential_delivery_mode": credential_delivery_mode,
+        "credential_revoke_procedure": credential_revoke_procedure,
+        "credential_descriptor_sha256": "",
+    }
+    validate_credential_descriptor(_with_self_hash(descriptor, "credential_descriptor_sha256"))
+    return descriptor
+
+
+def validate_credential_descriptor(descriptor: Mapping[str, Any]) -> None:
+    _exact_fields("credential-descriptor.json", descriptor, CREDENTIAL_DESCRIPTOR_FIELDS)
+    if descriptor["schema_version"] != CREDENTIAL_DESCRIPTOR_SCHEMA_VERSION:
+        raise Phase11DError("credential-descriptor.json: unsupported schema")
+    _require_stable_id("credential_descriptor_id", descriptor["credential_descriptor_id"])
+    _require_stable_id("authorization_id", descriptor["authorization_id"])
+    for field in ("github_app_id", "github_app_installation_id"):
+        _require_int(f"credential.{field}", descriptor[field], minimum=1)
+    for field in (
+        "github_app_private_key_fingerprint_sha256",
+        "provider_api_key_fingerprint_sha256",
+        "credential_descriptor_sha256",
+    ):
+        _require_sha256(f"credential.{field}", descriptor[field])
+    _require_stable_id("provider_id", descriptor["provider_id"])
+    _require_stable_id("provider_model_snapshot", descriptor["provider_model_snapshot"])
+    _require_stable_id("credential_delivery_mode", descriptor["credential_delivery_mode"])
+    _require_stable_id("credential_revoke_procedure", descriptor["credential_revoke_procedure"])
+    if _self_hash(descriptor, "credential_descriptor_sha256") != descriptor[
+        "credential_descriptor_sha256"
+    ]:
+        raise Phase11DError("credential-descriptor.json: canonical hash mismatch")
+    _scan_no_raw_content(descriptor, "credential-descriptor.json")
 
 
 def _exact_fields(name: str, value: Mapping[str, Any], expected: frozenset[str]) -> None:
@@ -2282,6 +2364,18 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--bundle", required=True, type=Path)
     template = subcommands.add_parser("generate-gate-b-template")
     template.add_argument("--output", required=True, type=Path)
+    credential = subcommands.add_parser("generate-credential-descriptor")
+    credential.add_argument("--authorization-id", required=True)
+    credential.add_argument("--credential-descriptor-id", required=True)
+    credential.add_argument("--github-app-id", required=True, type=int)
+    credential.add_argument("--github-app-installation-id", required=True, type=int)
+    credential.add_argument("--github-app-private-key-fingerprint-sha256", required=True)
+    credential.add_argument("--provider-id", required=True)
+    credential.add_argument("--provider-model-snapshot", required=True)
+    credential.add_argument("--provider-api-key-fingerprint-sha256", required=True)
+    credential.add_argument("--credential-delivery-mode", required=True)
+    credential.add_argument("--credential-revoke-procedure", required=True)
+    credential.add_argument("--output", required=True, type=Path)
     return parser
 
 
@@ -2305,6 +2399,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "generated": True,
                         "gate_b_allowed": allowed,
                         "blocker_count": len(blockers),
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "generate-credential-descriptor":
+            descriptor = build_credential_descriptor(
+                authorization_id=args.authorization_id,
+                credential_descriptor_id=args.credential_descriptor_id,
+                github_app_id=args.github_app_id,
+                github_app_installation_id=args.github_app_installation_id,
+                github_app_private_key_fingerprint_sha256=(
+                    args.github_app_private_key_fingerprint_sha256
+                ),
+                provider_id=args.provider_id,
+                provider_model_snapshot=args.provider_model_snapshot,
+                provider_api_key_fingerprint_sha256=args.provider_api_key_fingerprint_sha256,
+                credential_delivery_mode=args.credential_delivery_mode,
+                credential_revoke_procedure=args.credential_revoke_procedure,
+            )
+            _write_json(args.output, descriptor)
+            print(
+                json.dumps(
+                    {
+                        "generated": True,
+                        "credential_descriptor_sha256": descriptor[
+                            "credential_descriptor_sha256"
+                        ],
+                        "output": str(args.output),
                     },
                     sort_keys=True,
                 )

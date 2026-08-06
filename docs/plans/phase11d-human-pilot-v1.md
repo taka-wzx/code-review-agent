@@ -2,6 +2,18 @@
 
 Status: **Gate A active - offline implementation only; Gate B real Pilot is closed**
 
+## Scope revision: hash-only Gate B preparation (2026-08-05)
+
+The repository owner directed Codex to prepare the remaining Gate B authorization
+inputs. This revision authorizes only offline generation and validation of a
+credential descriptor containing stable identifiers and SHA-256 fingerprints, plus
+an external restricted-directory Gate B draft. It does not authorize reading raw
+credentials, minting tokens, opening provider or GitHub transports, selecting real
+PRs, pushing a branch, creating a Pilot-generated Draft PR, or enabling Gate B.
+
+The exact real executor, frozen runtime/deployment digests, canonical authorization
+digest, and owner exact-approval text remain required before any real operation.
+
 Task branch: `codex/phase11d-human-pilot-v1`
 
 Fetched baseline: `origin/master` at
