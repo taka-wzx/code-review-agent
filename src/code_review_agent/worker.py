@@ -367,6 +367,20 @@ class ReviewWorker:
                 # provider/runner failure and must not be made terminal here.
                 return
             try:
+                scope_check = getattr(self.store, "repository_scope_active", None)
+                if callable(scope_check) and not scope_check(
+                    lease.organization_id, lease.repository_id
+                ):
+                    try:
+                        self.store.finish_failure(
+                            lease,
+                            "repository_unavailable",
+                            retryable=False,
+                            trace_key=None,
+                        )
+                    except (LeaseLost, SQLAlchemyError):
+                        pass
+                    return
                 alias, root = self.registry.resolve(lease.repository_alias)
                 payload = self.store.load_payload(lease)
                 request = ReviewRequest(

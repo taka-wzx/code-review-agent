@@ -420,7 +420,8 @@ def create_app(
         status = (
             404
             if isinstance(exc, RepairAuthorizationError)
-            and exc.code == "repair_cross_organization_denied"
+            and exc.code
+            in {"repair_cross_organization_denied", "repair_repository_not_found"}
             else 403
             if isinstance(exc, RepairAuthorizationError)
             else 409
@@ -561,9 +562,22 @@ def create_app(
             raise AuthorizationDenied("authenticated principal is required")
         return principal
 
-    def require_organization(request: Request, organization_id: str) -> Principal:
+    def require_organization(
+        request: Request,
+        organization_id: str,
+        *,
+        action: str = "organization.scope",
+    ) -> Principal:
         principal = request_principal(request)
         if principal.organization_id != organization_id:
+            service._audit(
+                principal,
+                action,
+                "organization",
+                "redacted",
+                "deny",
+                reason_code="cross_organization",
+            )
             raise JobNotFound("organization was not found")
         return principal
 
@@ -577,6 +591,14 @@ def create_app(
     ) -> dict[str, Any]:
         repository = service.store.database.authorized_repository(principal, identity)
         if repository is None:
+            service._audit(
+                principal,
+                "repair.start",
+                "repository",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
             raise JobNotFound("repository was not found")
         return repository
 
@@ -770,14 +792,18 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/memberships")
     def list_memberships(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.list"
+        )
         return {"memberships": service.list_members(principal)}
 
     @app.post("/v1/organizations/{organization_id}/memberships", status_code=201)
     def create_membership(
         request: Request, organization_id: str, body: MembershipCreate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.create"
+        )
         return service.create_member(
             subject=body.subject,
             display_name=body.display_name,
@@ -793,7 +819,9 @@ def create_app(
         membership_id: str,
         body: MembershipUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.update"
+        )
         return service.update_member(
             membership_id,
             role=body.role,
@@ -803,14 +831,18 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/repositories")
     def list_repositories(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.list"
+        )
         return {"repositories": service.list_repositories(principal)}
 
     @app.post("/v1/organizations/{organization_id}/repositories", status_code=201)
     def register_repository(
         request: Request, organization_id: str, body: RepositoryCreate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.create"
+        )
         return service.register_repository(
             body.repository,
             mode=body.mode,
@@ -828,7 +860,9 @@ def create_app(
         repository_id: str,
         body: RepositoryUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.update"
+        )
         return service.update_repository(
             repository_id,
             mode=body.mode,
@@ -839,7 +873,9 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/policy")
     def get_organization_policy(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.read"
+        )
         policy = service.get_organization_policy(principal=principal)
         return {"policy": policy}
 
@@ -847,7 +883,9 @@ def create_app(
     def put_organization_policy(
         request: Request, organization_id: str, body: OrganizationPolicyUpdate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.write"
+        )
         return {
             "policy": service.put_organization_policy(
                 principal=principal, **body.model_dump()
@@ -861,21 +899,27 @@ def create_app(
     def invalidate_organization_policy(
         request: Request, organization_id: str, version: str
     ) -> None:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.invalidate"
+        )
         service.invalidate_organization_policy(version, principal=principal)
 
     @app.get("/v1/organizations/{organization_id}/service-quota")
     def get_organization_service_quota(
         request: Request, organization_id: str
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.read"
+        )
         return service.get_service_quota(principal=principal)
 
     @app.patch("/v1/organizations/{organization_id}/service-quota")
     def update_organization_service_quota(
         request: Request, organization_id: str, body: ServiceQuotaUpdate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.update"
+        )
         return service.update_service_quota(
             principal=principal, **body.model_dump(exclude_unset=True)
         )
@@ -886,7 +930,9 @@ def create_app(
     def get_repository_service_quota(
         request: Request, organization_id: str, repository_id: str
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.read"
+        )
         return service.get_service_quota(
             repository_id=repository_id, principal=principal
         )
@@ -900,7 +946,9 @@ def create_app(
         repository_id: str,
         body: ServiceQuotaUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.update"
+        )
         return service.update_service_quota(
             repository_id=repository_id,
             principal=principal,
