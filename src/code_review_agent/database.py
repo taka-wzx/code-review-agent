@@ -698,6 +698,36 @@ class Database:
             ).first()
         return None if row is None else _mapping(row)
 
+    def repository_in_organization(
+        self,
+        organization_id: str,
+        repository_id: str,
+        *,
+        active_only: bool = True,
+    ) -> dict[str, Any] | None:
+        """Return a repository only when its tenant lineage is exact.
+
+        Internal workers do not have a user principal, so they cannot use
+        ``authorized_repository``.  This query is the system-actor boundary:
+        it verifies the composite organization/repository identity and, by
+        default, excludes repositories that have been deactivated.
+        """
+        active_clause = " AND active=:active" if active_only else ""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT id, organization_id, alias, mode, budget_microusd, "
+                    "policy_version, active FROM repositories "
+                    "WHERE id=:id AND organization_id=:org" + active_clause
+                ),
+                {
+                    "id": repository_id,
+                    "org": organization_id,
+                    "active": True,
+                },
+            ).first()
+        return None if row is None else _mapping(row)
+
     def repository_for_webhook(self, alias: str) -> dict[str, Any] | None:
         with self.engine.connect() as connection:
             row = connection.execute(
