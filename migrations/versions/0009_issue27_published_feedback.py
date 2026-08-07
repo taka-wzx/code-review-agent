@@ -1,7 +1,7 @@
 """Bind developer feedback to published finding versions.
 
 Revision ID: 0009_issue27_published_feedback
-Revises: 0008_phase11b_github_canary
+Revises: 0009_issue29_publish_outbox
 Create Date: 2026-08-07
 """
 from __future__ import annotations
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 
 revision = "0009_issue27_published_feedback"
-down_revision = "0008_phase11b_github_canary"
+down_revision = "0009_issue29_publish_outbox"
 branch_labels = None
 depends_on = None
 
