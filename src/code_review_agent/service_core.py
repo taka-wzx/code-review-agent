@@ -555,9 +555,49 @@ class ReviewService:
                 "deny",
                 reason_code="not_found",
             )
-            raise InvalidRequest("repository is not registered")
+            raise JobNotFound("repository was not found")
         _, root = self.registry.resolve(alias)
         return alias, root, record
+
+    def _repository_by_id(
+        self, principal: Principal, repository_id: str, action: str
+    ) -> Mapping[str, Any]:
+        record = self.store.database.authorized_repository(principal, repository_id)
+        if record is None:
+            self._audit(
+                principal,
+                action,
+                "repository",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
+            self._metric_increment(
+                "unauthorized_operations_total",
+                {"operation": self._operation_class(action)},
+            )
+            raise JobNotFound("repository was not found")
+        return record
+
+    def _validate_repository_ids(
+        self,
+        principal: Principal,
+        repository_ids: Iterable[str],
+        action: str,
+    ) -> None:
+        for repository_id in repository_ids:
+            if self.store.database.repository_in_organization(
+                principal.organization_id, repository_id, active_only=False
+            ) is None:
+                self._audit(
+                    principal,
+                    action,
+                    "repository",
+                    "redacted",
+                    "deny",
+                    reason_code="not_found",
+                )
+                raise JobNotFound("repository was not found")
 
     def _ensure_accepting(self) -> None:
         if not self._accepting:
@@ -623,6 +663,7 @@ class ReviewService:
             organization_id=actor.organization_id,
             repository_id=repository_id,
             submitted_by=actor.user_id,
+            principal=actor,
             correlation_id=correlation,
             submission_key=self._submission_key(
                 actor.organization_id,
@@ -692,6 +733,7 @@ class ReviewService:
             organization_id=actor.organization_id,
             repository_id=repository_id,
             submitted_by=actor.user_id,
+            principal=actor,
             correlation_id=correlation,
             submission_key=self._submission_key(
                 actor.organization_id,
@@ -888,6 +930,8 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_MEMBERS, "membership.create")
+        repository_ids = tuple(repository_ids)
+        self._validate_repository_ids(actor, repository_ids, "membership.create")
         record = self.store.database.create_membership(
             actor.organization_id,
             subject=subject,
@@ -914,6 +958,8 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_MEMBERS, "membership.update")
+        repository_ids = tuple(repository_ids)
+        self._validate_repository_ids(actor, repository_ids, "membership.update")
         own_membership = next(
             (
                 item
@@ -997,6 +1043,7 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "repository.update")
+        self._repository_by_id(actor, repository_id, "repository.update")
         record = self.store.database.update_repository(
             actor.organization_id,
             repository_id,
@@ -1025,12 +1072,19 @@ class ReviewService:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "service_quota.read")
         if repository_id is not None:
-            repository = self.store.database.authorized_repository(actor, repository_id)
-            if repository is None:
-                raise JobNotFound("repository was not found")
-        return self.store.get_quota(
+            self._repository_by_id(actor, repository_id, "service_quota.read")
+        record = self.store.get_quota(
             actor.organization_id, repository_id=repository_id
         )
+        self._audit(
+            actor,
+            "service_quota.read",
+            "repository" if repository_id is not None else "organization",
+            repository_id or actor.organization_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return record
 
     def update_service_quota(
         self,
@@ -1042,9 +1096,7 @@ class ReviewService:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "service_quota.update")
         if repository_id is not None:
-            repository = self.store.database.authorized_repository(actor, repository_id)
-            if repository is None:
-                raise JobNotFound("repository was not found")
+            self._repository_by_id(actor, repository_id, "service_quota.update")
         record = self.store.configure_quota(
             actor.organization_id, repository_id=repository_id, **values
         )
@@ -1182,6 +1234,14 @@ class ReviewService:
             actor.organization_id, version
         )
         if not changed:
+            self._audit(
+                actor,
+                "organization.policy.invalidate",
+                "organization_policy",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
             raise JobNotFound("organization policy was not found")
         self._audit(
             actor,

@@ -90,9 +90,27 @@ push, or PR publication requires explicit user authorization.
 
 ## Delivery report
 
-- Summary: pending.
-- Changed files: pending.
-- Commit: pending.
-- Commands run and results: pending.
-- Known risks or assumptions: pending.
-- Suggested review focus: repository scope checks and denial audit coverage.
+- Summary: Implemented organization and repository RBAC enforcement across
+  Review submission, durable worker claiming/execution, synthetic Repair
+  endpoints, and organization policy/quota management. Added bounded denial
+  auditing and explicit role fixtures/regression coverage.
+- Changed files: `src/code_review_agent/database.py`,
+  `src/code_review_agent/repair_service.py`,
+  `src/code_review_agent/service.py`,
+  `src/code_review_agent/service_core.py`,
+  `src/code_review_agent/service_queue.py`,
+  `src/code_review_agent/worker.py`, and
+  `tests/test_issue30_rbac_service_endpoints.py`.
+- Commit: the local task-branch commit SHA is reported in the handoff.
+- Commands and results: Issue #30 tests 5/5; Phase 9B 8/8; Phase 9C 46/46;
+  Phase 10 22/22; Week 7 service/core/MCP regressions passed; Ruff clean;
+  Mypy clean for 37 source files; `scripts/verify.py` passed 972 tests with
+  18 skips and 85% total coverage; `git diff --check` passed.
+- Known risks or assumptions: validation used fakes and temporary SQLite only;
+  no external Provider, GitHub, OAuth, Postgres, or network path was called.
+  The worker still leaves queued jobs for repositories that are inactive and
+  terminalizes only the already-leased race, preserving the existing recovery
+  model.
+- Suggested review focus: composite organization/repository lineage checks,
+  same-tenant repository denial behavior, worker deactivation races, and
+  bounded authorization audit events.
