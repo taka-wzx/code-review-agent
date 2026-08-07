@@ -37,6 +37,8 @@ from code_review_agent.identity import (
     AuthenticationRequired,
     DatabaseAuthBackend,
     LocalTokenAuthBackend,
+    OIDCConfiguration,
+    OIDCJWTAuthBackend,
     Principal,
     Role,
     bind_correlation_id,
@@ -188,6 +190,8 @@ class HttpSettings:
         local_token_enabled: bool = True,
         local_token_behind_loopback_publish: bool = False,
         worker_stale_seconds: float = 30.0,
+        auth_mode: str = "database",
+        oidc_configuration: OIDCConfiguration | None = None,
     ) -> None:
         if service_token and len(service_token.encode("utf-8")) < 32:
             raise InvalidRequest("CRAG_SERVICE_TOKEN must be at least 32 UTF-8 bytes")
@@ -218,6 +222,15 @@ class HttpSettings:
                 )
         if not 1 <= worker_stale_seconds <= 3600:
             raise InvalidRequest("CRAG_WORKER_STALE_SECONDS must be between 1 and 3600")
+        if auth_mode not in {"database", "oidc"}:
+            raise InvalidRequest("CRAG_AUTH_MODE must be database or oidc")
+        if auth_mode == "oidc":
+            if local_token_enabled:
+                raise InvalidRequest("OIDC mode cannot enable the local token backend")
+            if oidc_configuration is None:
+                raise InvalidRequest("OIDC mode requires complete OIDC configuration")
+        elif oidc_configuration is not None:
+            raise InvalidRequest("OIDC configuration requires CRAG_AUTH_MODE=oidc")
         self.service_token = service_token
         self.webhook_secret = webhook_secret.encode("utf-8")
         self.allowed_origins = allowed_origins
@@ -225,6 +238,8 @@ class HttpSettings:
         self.local_token_enabled = local_token_enabled
         self.local_token_behind_loopback_publish = local_token_behind_loopback_publish
         self.worker_stale_seconds = worker_stale_seconds
+        self.auth_mode = auth_mode
+        self.oidc_configuration = oidc_configuration
 
     @classmethod
     def from_env(cls) -> "HttpSettings":
@@ -249,6 +264,25 @@ class HttpSettings:
                 "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH must be boolean"
             )
         loopback_publish = raw_loopback_publish in {"1", "true", "yes"}
+        auth_mode = os.environ.get("CRAG_AUTH_MODE", "database").casefold()
+        oidc_variables = (
+            "CRAG_OIDC_ISSUER",
+            "CRAG_OIDC_AUDIENCE",
+            "CRAG_OIDC_JWKS_URL",
+            "CRAG_OIDC_ORGANIZATION_CLAIM",
+            "CRAG_OIDC_JWKS_CACHE_SECONDS",
+            "CRAG_OIDC_JWKS_TIMEOUT_SECONDS",
+            "CRAG_OIDC_LEEWAY_SECONDS",
+            "CRAG_OIDC_ALGORITHMS",
+        )
+        if auth_mode != "oidc" and any(name in os.environ for name in oidc_variables):
+            raise InvalidRequest("OIDC settings require CRAG_AUTH_MODE=oidc")
+        try:
+            oidc_configuration = (
+                OIDCConfiguration.from_environment(os.environ) if auth_mode == "oidc" else None
+            )
+        except ValueError as exc:
+            raise InvalidRequest(str(exc)) from exc
         try:
             worker_stale_seconds = float(
                 os.environ.get("CRAG_WORKER_STALE_SECONDS", "30")
@@ -265,6 +299,8 @@ class HttpSettings:
             local_token_enabled=local_token_enabled,
             local_token_behind_loopback_publish=loopback_publish,
             worker_stale_seconds=worker_stale_seconds,
+            auth_mode=auth_mode,
+            oidc_configuration=oidc_configuration,
         )
 
 
@@ -342,7 +378,11 @@ def create_app(
         )
     monotonic = metrics_clock or time.monotonic
     if auth_backend is None:
-        if http.local_token_enabled:
+        if http.auth_mode == "oidc":
+            if http.oidc_configuration is None:
+                raise InvalidRequest("OIDC mode requires complete OIDC configuration")
+            auth_backend = OIDCJWTAuthBackend(http.oidc_configuration, service.store.database)
+        elif http.local_token_enabled:
             local_principal = service.store.local_principal
             if local_principal is None:
                 raise InvalidRequest("local token mode requires a local service principal")

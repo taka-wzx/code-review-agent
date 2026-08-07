@@ -485,6 +485,30 @@ class Database:
             auth_method=auth_method,
         )
 
+    def principal_for_subject(
+        self, organization_id: str, subject: str, *, auth_method: str = "oidc"
+    ) -> Principal | None:
+        """Return an active principal only when the tenant already enrolled the subject."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT u.id AS user_id, m.role FROM users u "
+                    "JOIN memberships m ON m.organization_id=u.organization_id "
+                    "AND m.user_id=u.id WHERE u.subject=:subject "
+                    "AND u.organization_id=:org AND u.active=:active"
+                ),
+                {"subject": subject, "org": organization_id, "active": True},
+            ).first()
+        if row is None:
+            return None
+        return Principal(
+            principal_id=str(row._mapping["user_id"]),
+            user_id=str(row._mapping["user_id"]),
+            organization_id=organization_id,
+            role=Role(str(row._mapping["role"])),
+            auth_method=auth_method,
+        )
+
     def list_members(self, organization_id: str) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             rows = connection.execute(

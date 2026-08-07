@@ -47,9 +47,9 @@ so normal signing-key rotation succeeds without restarting the service.
 
 - Add a thread-safe, TTL-bounded JWKS cache and a configured OIDC JWT verifier
   using the already locked PyJWT runtime dependency.
-- Require `iss`, `sub`, `aud`, `exp`, `iat`, and `nbf`; reject unsigned,
-  symmetric, malformed, expired, future-not-valid, issuer-mismatched,
-  audience-mismatched, and unmapped tokens.
+- Require standard OIDC `iss`, `sub`, `aud`, `exp`, and `iat` claims; validate
+  `nbf` when present; reject unsigned, symmetric, malformed, expired,
+  future-not-valid, issuer-mismatched, audience-mismatched, and unmapped tokens.
 - Add a database lookup for an active principal by organization and external
   subject, then wire the OIDC backend into the default service factory only
   when explicit OIDC mode is configured.
