@@ -25,7 +25,11 @@ from code_review_agent.approval_publish import (
     PublishRequest,
     Publisher,
 )
-from code_review_agent.database import database_url_from_env, sqlite_database_url
+from code_review_agent.database import (
+    FeedbackBindingError,
+    database_url_from_env,
+    sqlite_database_url,
+)
 from code_review_agent.context_memory import (
     ContextMode,
     MemorySource,
@@ -87,6 +91,10 @@ class ModelCallBudgetExceeded(RuntimeError):
 
 class ApprovalConflict(IdempotencyConflict):
     code = "approval_conflict"
+
+
+class FeedbackConflict(IdempotencyConflict):
+    code = "feedback_conflict"
 
 
 class PublisherFailed(ServiceError):
@@ -1196,6 +1204,7 @@ class ReviewService:
         finding_id: str,
         *,
         decision: str,
+        finding_hash: str,
         reason: str | None = None,
         rationale: str | None = None,
         principal: Principal | None = None,
@@ -1204,6 +1213,8 @@ class ReviewService:
         self._require(actor, Permission.SUBMIT_FEEDBACK, "finding.feedback")
         if decision not in {"accepted", "rejected", "uncertain", "fixed", "duplicate"}:
             raise InvalidRequest("feedback decision is invalid")
+        if re.fullmatch(r"[0-9a-f]{64}", finding_hash) is None:
+            raise InvalidRequest("feedback finding hash is invalid")
         if reason is not None and rationale is not None:
             raise InvalidRequest("feedback rationale is ambiguous")
         rationale = rationale if rationale is not None else reason
@@ -1214,9 +1225,20 @@ class ReviewService:
         finding = self.store.database.finding_for_principal(actor, finding_id)
         if finding is None:
             raise JobNotFound("finding was not found")
-        record = self.store.database.create_feedback(
-            actor, finding, decision=decision, rationale=rationale
-        )
+        try:
+            record = self.store.database.create_feedback(
+                actor,
+                finding,
+                decision=decision,
+                expected_finding_hash=finding_hash,
+                rationale=rationale,
+            )
+        except FeedbackBindingError as error:
+            self._metric_increment(
+                "feedback_validation_failures_total",
+                {"reason": "hash_mismatch" if error.code == "feedback_hash_mismatch" else "unpublished"},
+            )
+            raise FeedbackConflict("feedback is not valid for the current finding") from error
         self._audit(
             actor,
             "finding.feedback",

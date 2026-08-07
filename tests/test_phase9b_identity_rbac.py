@@ -239,18 +239,30 @@ class Phase9BIdentityRBACTests(unittest.TestCase):
         self.assertEqual(viewer_submit.status_code, 403)
 
         _, finding_id = self.submit_review("reviewer_a", "owner/repo-a")
+        finding = self.client.get(
+            f"/v1/findings/{finding_id}", headers=self.auth("viewer_a")
+        )
+        self.assertEqual(finding.status_code, 200, finding.text)
         viewer_feedback = self.client.post(
             f"/v1/findings/{finding_id}/feedback",
             headers=self.auth("viewer_a"),
-            json={"decision": "accepted"},
+            json={
+                "decision": "accepted",
+                "finding_hash": finding.json()["content_sha256"],
+            },
         )
         self.assertEqual(viewer_feedback.status_code, 403)
         feedback = self.client.post(
             f"/v1/findings/{finding_id}/feedback",
             headers=self.auth("reviewer_a"),
-            json={"decision": "accepted", "reason": "actionable"},
+            json={
+                "decision": "accepted",
+                "finding_hash": finding.json()["content_sha256"],
+                "reason": "actionable",
+            },
         )
-        self.assertEqual(feedback.status_code, 201, feedback.text)
+        self.assertEqual(feedback.status_code, 409, feedback.text)
+        self.assertEqual(feedback.json()["error"]["code"], "feedback_conflict")
         reviewer_approval = self.client.post(
             f"/v1/findings/{finding_id}/decisions",
             headers=self.auth("reviewer_a"),
@@ -283,17 +295,25 @@ class Phase9BIdentityRBACTests(unittest.TestCase):
             f"/v1/findings/{finding_id}", headers=self.auth("viewer_a")
         )
         self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.json()["feedback"][0]["decision"], "accepted")
+        self.assertEqual(detail.json()["feedback"], [])
         self.assertEqual(detail.json()["approvals"][0]["decision"], "approved")
 
     def test_cross_tenant_job_trace_finding_feedback_and_approval_are_not_found(self):
         job_b, finding_b = self.submit_review("reviewer_b", "owner/repo-b")
+        finding = self.client.get(
+            f"/v1/findings/{finding_b}", headers=self.auth("reviewer_b")
+        )
+        self.assertEqual(finding.status_code, 200, finding.text)
         feedback = self.client.post(
             f"/v1/findings/{finding_b}/feedback",
             headers=self.auth("reviewer_b"),
-            json={"decision": "rejected", "reason": "low_value"},
+            json={
+                "decision": "rejected",
+                "finding_hash": finding.json()["content_sha256"],
+                "reason": "low_value",
+            },
         )
-        self.assertEqual(feedback.status_code, 201)
+        self.assertEqual(feedback.status_code, 409)
         approval = self.client.post(
             f"/v1/findings/{finding_b}/decisions",
             headers=self.auth("maintainer_b"),
