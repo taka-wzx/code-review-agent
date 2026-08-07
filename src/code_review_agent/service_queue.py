@@ -370,6 +370,17 @@ class JobStore:
             raise InvalidRequest("repository is not registered")
         return principal, record
 
+    def repository_scope_active(
+        self, organization_id: str, repository_id: str
+    ) -> bool:
+        """Check the worker's system-actor organization/repository lineage."""
+        return (
+            self.database.repository_in_organization(
+                organization_id, repository_id, active_only=True
+            )
+            is not None
+        )
+
     def _ensure_quota_rows(
         self,
         connection: Connection,
@@ -729,6 +740,7 @@ class JobStore:
         organization_id: str | None = None,
         repository_id: str | None = None,
         submitted_by: str | None = None,
+        principal: Principal | None = None,
         correlation_id: str | None = None,
         submission_key: str | None = None,
         idempotency_key_hash: str | None = None,
@@ -737,11 +749,31 @@ class JobStore:
         max_attempts: int = 3,
         now: datetime | None = None,
     ) -> tuple[str, bool]:
-        if organization_id is None or repository_id is None or submitted_by is None:
+        if principal is not None:
+            authorized = self.database.authorized_repository(principal, repository)
+            if authorized is None:
+                raise AuthorizationDenied("repository access is not permitted")
+            expected = (
+                principal.organization_id,
+                str(authorized["id"]),
+                principal.user_id,
+            )
+            supplied = (organization_id, repository_id, submitted_by)
+            if any(value is not None for value in supplied) and supplied != expected:
+                raise AuthorizationDenied("submission tenant identity is invalid")
+            organization_id, repository_id, submitted_by = expected
+        elif organization_id is None or repository_id is None or submitted_by is None:
             principal, record = self._local_repository(repository)
             organization_id = principal.organization_id
             repository_id = str(record["id"])
             submitted_by = principal.user_id
+        if organization_id is None or repository_id is None or submitted_by is None:
+            raise AuthorizationDenied("submission tenant identity is required")
+        scope = self.database.repository_in_organization(
+            organization_id, repository_id, active_only=True
+        )
+        if scope is None or str(scope["alias"]).casefold() != repository.casefold():
+            raise AuthorizationDenied("submission repository scope is not permitted")
         current = (now or utc_now()).astimezone(timezone.utc)
         source_fingerprint = _request_fingerprint(
             organization_id,
@@ -1312,16 +1344,20 @@ class JobStore:
                     page = connection.execute(
                         text(
                             "SELECT id, organization_id, repository_id FROM ("
-                            "SELECT id, organization_id, repository_id, available_at, "
-                            "queued_at, ROW_NUMBER() OVER (PARTITION BY organization_id, "
-                            "repository_id ORDER BY available_at, queued_at, id) AS scope_rank "
-                            "FROM review_jobs WHERE (state='queued' AND available_at<=:now) OR "
-                            "(state IN ('leased','running') AND lease_expires_at<=:now)) "
+                            "SELECT j.id, j.organization_id, j.repository_id, j.available_at, "
+                            "j.queued_at, ROW_NUMBER() OVER (PARTITION BY j.organization_id, "
+                            "j.repository_id ORDER BY j.available_at, j.queued_at, j.id) AS scope_rank "
+                            "FROM review_jobs j JOIN repositories r ON "
+                            "r.id=j.repository_id AND r.organization_id=j.organization_id "
+                            "AND r.active=:active WHERE ((j.state='queued' AND "
+                            "j.available_at<=:now) OR (j.state IN ('leased','running') "
+                            "AND j.lease_expires_at<=:now))) "
                             "AS eligible ORDER BY scope_rank, available_at, queued_at, id "
                             "LIMIT :page_size OFFSET :page_offset"
                         ),
                         {
                             "now": current,
+                            "active": True,
                             "page_size": self.CLAIM_PAGE_SIZE,
                             "page_offset": start_offset
                             + page_number * self.CLAIM_PAGE_SIZE,
@@ -1358,10 +1394,12 @@ class JobStore:
             with self.database.engine.connect() as connection:
                 requested = connection.execute(
                     text(
-                        "SELECT id, organization_id, repository_id FROM review_jobs "
-                        "WHERE id=:id"
+                        "SELECT j.id, j.organization_id, j.repository_id FROM review_jobs j "
+                        "JOIN repositories r ON r.id=j.repository_id "
+                        "AND r.organization_id=j.organization_id AND r.active=:active "
+                        "WHERE j.id=:id"
                     ),
-                    {"id": _job_id(requested_job_id)},
+                    {"id": _job_id(requested_job_id), "active": True},
                 ).first()
             candidates = [] if requested is None else [requested]
         for candidate in candidates:
@@ -1391,6 +1429,19 @@ class JobStore:
                     _coerce_datetime(row.get("available_at")) or current
                 ) <= current
                 if not queued and not expired:
+                    continue
+                repository_active = connection.execute(
+                    text(
+                        "SELECT 1 FROM repositories WHERE id=:repo AND "
+                        "organization_id=:org AND active=:active"
+                    ),
+                    {
+                        "repo": repository_id,
+                        "org": organization_id,
+                        "active": True,
+                    },
+                ).first()
+                if repository_active is None:
                     continue
                 quotas = (org_quota, repo_quota)
                 org_active, repo_active = self._active_counts(
