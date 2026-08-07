@@ -140,6 +140,7 @@ class CredentialCreate(BaseModel):
 class FeedbackCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     decision: str = Field(pattern="^(accepted|rejected|uncertain|fixed|duplicate)$")
+    finding_hash: str = Field(pattern="^[0-9a-f]{64}$")
     rationale: str | None = Field(default=None, max_length=512)
     reason: str | None = Field(default=None, max_length=512)
 
@@ -982,6 +983,7 @@ def create_app(
         return service.submit_feedback(
             finding_id,
             decision=body.decision,
+            finding_hash=body.finding_hash,
             reason=body.reason,
             rationale=body.rationale,
             principal=request_principal(request),

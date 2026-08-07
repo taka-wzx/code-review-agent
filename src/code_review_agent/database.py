@@ -54,6 +54,14 @@ class MigrationRequired(DatabaseError):
     """The database is not at the application schema head."""
 
 
+class FeedbackBindingError(DatabaseError):
+    """Stable feedback binding failure without leaking finding or payload text."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -960,7 +968,8 @@ class Database:
             feedback = connection.execute(
                 text(
                     "SELECT id, principal_id, decision, finding_hash, reason AS rationale, "
-                    "created_at "
+                    "publish_approval_id, published_payload_sha256, published_head_sha, "
+                    "published_finding_sha256, created_at "
                     "FROM finding_feedback WHERE finding_id=:finding "
                     "AND organization_id=:org ORDER BY created_at, id"
                 ),
@@ -978,14 +987,89 @@ class Database:
         finding["approvals"] = [_mapping(row) for row in approvals]
         return finding
 
+    @staticmethod
+    def _published_feedback_binding(
+        connection: Connection,
+        principal: Principal,
+        finding: Mapping[str, Any],
+        *,
+        expected_finding_hash: str,
+    ) -> dict[str, str]:
+        current_row = connection.execute(
+            text(
+                "SELECT id, organization_id, repository_id, review_job_id, status, "
+                "content_sha256 FROM findings WHERE id=:finding AND organization_id=:org "
+                "AND repository_id=:repo"
+            ),
+            {
+                "finding": finding["id"],
+                "org": principal.organization_id,
+                "repo": finding["repository_id"],
+            },
+        ).first()
+        if current_row is None:
+            raise FeedbackBindingError("feedback_not_published")
+        current = _mapping(current_row)
+        if current["content_sha256"] != expected_finding_hash:
+            raise FeedbackBindingError("feedback_hash_mismatch")
+        if current["status"] != "published":
+            raise FeedbackBindingError("feedback_not_published")
+
+        binding_row = connection.execute(
+            text(
+                "SELECT j.head_sha, j.state AS job_state, pa.id AS publish_approval_id, "
+                "pa.payload_sha256, pat.status AS publish_status "
+                "FROM review_jobs j "
+                "JOIN publish_approvals pa ON pa.organization_id=j.organization_id "
+                "AND pa.review_job_id=j.id AND pa.repository_id=j.repository_id "
+                "AND pa.decision='approved' "
+                "JOIN publish_attempts pat ON pat.organization_id=j.organization_id "
+                "AND pat.review_job_id=j.id AND pat.repository_id=j.repository_id "
+                "AND pat.approval_id=pa.id AND pat.status='succeeded' "
+                "WHERE j.id=:job AND j.organization_id=:org AND j.repository_id=:repo "
+                "AND j.state='published'"
+            ),
+            {
+                "job": current["review_job_id"],
+                "org": principal.organization_id,
+                "repo": current["repository_id"],
+            },
+        ).first()
+        if binding_row is None:
+            raise FeedbackBindingError("feedback_not_published")
+        binding = _mapping(binding_row)
+        published_finding_sha256 = sha256_hex(
+            canonical_json(
+                {
+                    "schema_version": "crag.published-finding-feedback/v1",
+                    "organization_id": principal.organization_id,
+                    "repository_id": str(current["repository_id"]),
+                    "review_job_id": str(current["review_job_id"]),
+                    "finding_id": str(current["id"]),
+                    "content_sha256": expected_finding_hash,
+                    "publish_approval_id": str(binding["publish_approval_id"]),
+                    "published_payload_sha256": str(binding["payload_sha256"]),
+                    "published_head_sha": str(binding["head_sha"]),
+                }
+            )
+        )
+        return {
+            "publish_approval_id": str(binding["publish_approval_id"]),
+            "published_payload_sha256": str(binding["payload_sha256"]),
+            "published_head_sha": str(binding["head_sha"]),
+            "published_finding_sha256": published_finding_sha256,
+        }
+
     def create_feedback(
         self,
         principal: Principal,
         finding: Mapping[str, Any],
         *,
         decision: str,
+        expected_finding_hash: str,
         rationale: str | None,
     ) -> dict[str, Any]:
+        now = utc_now()
         record = {
             "id": new_id(),
             "organization_id": principal.organization_id,
@@ -993,18 +1077,30 @@ class Database:
             "finding_id": finding["id"],
             "principal_id": principal.user_id,
             "decision": decision,
-            "finding_hash": finding["content_sha256"],
+            "finding_hash": expected_finding_hash,
             "reason": rationale,
-            "created_at": utc_now(),
+            "created_at": now,
         }
         with self.engine.begin() as connection:
+            record.update(
+                self._published_feedback_binding(
+                    connection,
+                    principal,
+                    finding,
+                    expected_finding_hash=expected_finding_hash,
+                )
+            )
             connection.execute(
                 text(
                     "INSERT INTO finding_feedback "
                     "(id, organization_id, repository_id, finding_id, principal_id, "
-                    "decision, finding_hash, reason, created_at) VALUES "
+                    "decision, finding_hash, reason, publish_approval_id, "
+                    "published_payload_sha256, published_head_sha, published_finding_sha256, "
+                    "created_at) VALUES "
                     "(:id, :organization_id, :repository_id, :finding_id, :principal_id, "
-                    ":decision, :finding_hash, :reason, :created_at)"
+                    ":decision, :finding_hash, :reason, :publish_approval_id, "
+                    ":published_payload_sha256, :published_head_sha, "
+                    ":published_finding_sha256, :created_at)"
                 ),
                 record,
             )
