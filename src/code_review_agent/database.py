@@ -1298,6 +1298,8 @@ class Database:
         return {
             "review_job_id": str(job["id"]),
             "repository_id": str(job["repository_id"]),
+            "repository": str(job["repository_alias"]),
+            "pull_request": str(job["source_ref"]),
             "head_sha": material["head_sha"],
             "payload_sha256": material["payload_sha256"],
             "finding_set_sha256": material["finding_set_sha256"],
@@ -1469,9 +1471,13 @@ class Database:
             "approval_id": approval_id,
             "review_job_id": str(job["id"]),
             "repository_id": str(job["repository_id"]),
+            "repository": str(job["repository_alias"]),
+            "pull_request": str(job["source_ref"]),
             "decision": decision,
+            "approver_id": principal.user_id,
             "head_sha": material["head_sha"],
             "payload_sha256": material["payload_sha256"],
+            "finding_set_sha256": material["finding_set_sha256"],
             "policy_version": material["policy_version"],
             "expires_at": str(proposal["expires_at"]),
             "used_at": now,
@@ -1691,9 +1697,17 @@ class Database:
                 return []
             rows = connection.execute(
                 text(
-                    "SELECT id, principal_id, decision, head_sha, payload_sha256, policy_version, "
-                    "expires_at, used_at, created_at FROM publish_approvals WHERE organization_id=:org "
-                    "AND review_job_id=:job ORDER BY created_at, id"
+                    "SELECT pa.id, pa.principal_id, pa.principal_id AS approver_id, "
+                    "pa.repository_id, pa.review_job_id, j.repository_alias AS repository, "
+                    "j.source_ref AS pull_request, pa.decision, pa.head_sha, "
+                    "pa.payload_sha256, pp.finding_set_sha256, pa.policy_version, "
+                    "pa.expires_at, pa.used_at, pa.created_at "
+                    "FROM publish_approvals pa JOIN review_jobs j "
+                    "ON j.organization_id=pa.organization_id AND j.id=pa.review_job_id "
+                    "JOIN publish_proposals pp ON pp.organization_id=pa.organization_id "
+                    "AND pp.id=pa.proposal_id "
+                    "WHERE pa.organization_id=:org AND pa.review_job_id=:job "
+                    "ORDER BY pa.created_at, pa.id"
                 ),
                 {"org": principal.organization_id, "job": review_job_id},
             ).all()
