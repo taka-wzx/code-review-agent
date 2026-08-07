@@ -67,6 +67,7 @@ class FakePublisher:
     def __init__(self, *, timeout_after_persist: bool = False) -> None:
         self.timeout_after_persist = timeout_after_persist
         self.calls: list[str] = []
+        self.lookup_calls: list[str] = []
         self._receipts: dict[str, PublishReceipt] = {}
 
     def publish(self, request: PublishRequest) -> PublishReceipt:
@@ -81,6 +82,7 @@ class FakePublisher:
         return receipt
 
     def lookup(self, idempotency_key: str) -> PublishReceipt | None:
+        self.lookup_calls.append(idempotency_key)
         return self._receipts.get(idempotency_key)
 
 
