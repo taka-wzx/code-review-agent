@@ -18,6 +18,7 @@ from code_review_agent.database import (
     _alembic_config,
     create_database_engine,
     current_revision,
+    schema_head,
     sqlite_database_url,
     upgrade_database,
 )
@@ -1103,7 +1104,7 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
         self.assertEqual(classify_github_failure(response.status, response.headers), GitHubFailure.REDIRECT_DENIED)
 
     def test_migration_is_additive_and_downgrades_to_phase11a_schema(self) -> None:
-        self.assertEqual(current_revision(self.database_url), "0008_phase11b_github_canary")
+        self.assertEqual(current_revision(self.database_url), schema_head())
         tables = set(inspect(self.engine).get_table_names())
         self.assertIn("repair_jobs", tables)
         self.assertIn("github_canary_approvals", tables)
@@ -1119,7 +1120,7 @@ class Phase11BGitHubSandboxCanaryTests(unittest.TestCase):
         finally:
             downgraded.dispose()
         upgrade_database(self.database_url)
-        self.assertEqual(current_revision(self.database_url), "0008_phase11b_github_canary")
+        self.assertEqual(current_revision(self.database_url), schema_head())
 
 
 if __name__ == "__main__":

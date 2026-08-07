@@ -199,10 +199,18 @@ class Phase9DApprovalFeedbackTests(unittest.TestCase):
         self.assertEqual(approvals.json()["approvals"][0]["used_at"], approved.json()["used_at"])
         self.assertNotIn(proposal["nonce"], approvals.text)
 
+        finding_detail = self.client.get(
+            f"/v1/findings/{finding_id}", headers=self.auth("viewer_a")
+        )
+        self.assertEqual(finding_detail.status_code, 200, finding_detail.text)
         feedback = self.client.post(
             f"/v1/findings/{finding_id}/feedback",
             headers=self.auth("reviewer_a"),
-            json={"decision": "fixed", "rationale": "verified in a follow-up commit"},
+            json={
+                "decision": "fixed",
+                "finding_hash": finding_detail.json()["content_sha256"],
+                "rationale": "verified in a follow-up commit",
+            },
         )
         self.assertEqual(feedback.status_code, 201, feedback.text)
         self.assertEqual(feedback.json()["principal_id"], self.principals["reviewer_a"].user_id)
