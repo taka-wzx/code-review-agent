@@ -24,7 +24,7 @@ from uuid import uuid4
 from sqlalchemy import Connection, Engine, text
 
 from code_review_agent.database import Database
-from code_review_agent.identity import Principal, Role
+from code_review_agent.identity import Principal, Role, current_correlation_id
 from code_review_agent.repair_approval import normalize_repo_paths
 from code_review_agent.repair_budget import (
     BudgetAccountingError,
@@ -790,8 +790,10 @@ class Phase10RepairService:
         actor: Principal,
         organization_id: str,
         *,
+        repository_id: str | None = None,
         operation: str = "other",
     ) -> None:
+        del repository_id
         if actor.organization_id != organization_id:
             self._metric("unauthorized_operations_total", {"operation": operation})
             raise RepairAuthorizationError("repair_cross_organization_denied")
@@ -802,10 +804,23 @@ class Phase10RepairService:
             self._metric("unauthorized_operations_total", {"operation": operation})
             raise RepairAuthorizationError("repair_actor_type_denied")
 
-    def _require_reader(self, actor: Principal, organization_id: str) -> None:
+    def _require_reader(
+        self,
+        actor: Principal,
+        organization_id: str,
+        *,
+        repository_id: str | None = None,
+    ) -> None:
+        del repository_id
         if actor.organization_id != organization_id:
             self._metric("unauthorized_operations_total", {"operation": "other"})
             raise RepairAuthorizationError("repair_cross_organization_denied")
+
+    def _worker_repository_available(
+        self, organization_id: str, repository_id: str
+    ) -> bool:
+        del organization_id, repository_id
+        return True
 
     def _metric(self, name: str, labels: Mapping[str, str]) -> None:
         if self.metrics is None:
@@ -901,7 +916,12 @@ class Phase10RepairService:
     def start_repair(
         self, request: StartRepairRequest, *, actor: Principal
     ) -> dict[str, Any]:
-        self._require_operator(actor, request.organization_id, operation="other")
+        self._require_operator(
+            actor,
+            request.organization_id,
+            repository_id=request.repository_id,
+            operation="other",
+        )
         job_id = f"repair-{secrets.token_hex(12)}"
         task_branch = f"repair/{job_id}"
         if task_branch.casefold() in {
@@ -946,12 +966,19 @@ class Phase10RepairService:
 
     def get_repair(self, job_id: str, *, actor: Principal) -> dict[str, Any]:
         job, checksum = self.store.load(job_id)
-        self._require_reader(actor, job.organization_id)
+        self._require_reader(
+            actor, job.organization_id, repository_id=job.repository_id
+        )
         return self._public(job, checksum)
 
     def write_approval_view(self, job_id: str, *, actor: Principal) -> dict[str, Any]:
         job, checksum = self.store.load(job_id)
-        self._require_operator(actor, job.organization_id, operation="approval")
+        self._require_operator(
+            actor,
+            job.organization_id,
+            repository_id=job.repository_id,
+            operation="approval",
+        )
         if job.state is not RepairJobState.AWAITING_WRITE_APPROVAL:
             raise RepairConflict("write_approval_not_pending")
         plan = job.plan_object
@@ -993,7 +1020,12 @@ class Phase10RepairService:
         at = float(self.clock() if now is None else now)
         with self.store.lock(job_id):
             job, checksum = self.store.load(job_id)
-            self._require_operator(actor, job.organization_id, operation="approval")
+            self._require_operator(
+                actor,
+                job.organization_id,
+                repository_id=job.repository_id,
+                operation="approval",
+            )
             if job.state is not RepairJobState.AWAITING_WRITE_APPROVAL:
                 self._approval_failure("replay")
                 raise RepairConflict("write_approval_not_pending")
@@ -1028,7 +1060,12 @@ class Phase10RepairService:
         self, job_id: str, *, actor: Principal
     ) -> dict[str, Any]:
         job, checksum = self.store.load(job_id)
-        self._require_operator(actor, job.organization_id, operation="approval")
+        self._require_operator(
+            actor,
+            job.organization_id,
+            repository_id=job.repository_id,
+            operation="approval",
+        )
         if job.state is not RepairJobState.AWAITING_DRAFT_PR_APPROVAL:
             raise RepairConflict("draft_pr_approval_not_pending")
         plan = job.plan_object
@@ -1074,7 +1111,12 @@ class Phase10RepairService:
         at = float(self.clock() if now is None else now)
         with self.store.lock(job_id):
             job, checksum = self.store.load(job_id)
-            self._require_operator(actor, job.organization_id, operation="approval")
+            self._require_operator(
+                actor,
+                job.organization_id,
+                repository_id=job.repository_id,
+                operation="approval",
+            )
             if job.state is not RepairJobState.AWAITING_DRAFT_PR_APPROVAL:
                 self._approval_failure("replay")
                 raise RepairConflict("draft_pr_approval_not_pending")
@@ -1125,6 +1167,12 @@ class Phase10RepairService:
             job, _checksum = self.store.load(job_id)
             if job.state in WAITING_STATES or job.state in TERMINAL_STATES:
                 return self._public(job, self.store.load(job_id)[1])
+            if not self._worker_repository_available(
+                job.organization_id, job.repository_id
+            ):
+                self._quarantine(job, "repair_repository_unavailable")
+                checksum = self.store.load(job_id)[1]
+                return self._public(job, checksum)
             newly_claimed = self._claim(job, worker_id)
             try:
                 if job.state is RepairJobState.PLANNING:
@@ -2882,6 +2930,117 @@ class SyntheticStagingRepairService(Phase10RepairService):
         self.quality_claim_allowed = False
         self.production_ready = False
 
+    def _audit_authorization(
+        self,
+        actor: Principal,
+        *,
+        organization_id: str,
+        repository_id: str | None,
+        action: str,
+        decision: str,
+        reason_code: str | None,
+    ) -> None:
+        same_organization = actor.organization_id == organization_id
+        self.postgres_store.database.audit(
+            principal=actor,
+            action=action,
+            resource_type="repository",
+            resource_id=(repository_id if same_organization and repository_id else "redacted"),
+            decision=decision,
+            repository_id=repository_id if same_organization else None,
+            reason_code=reason_code,
+            correlation_id=current_correlation_id(uuid4().hex),
+        )
+
+    def _require_repository_access(
+        self, actor: Principal, organization_id: str, repository_id: str | None
+    ) -> None:
+        if repository_id is None:
+            return
+        if self.postgres_store.database.authorized_repository(actor, repository_id) is None:
+            raise RepairAuthorizationError("repair_repository_not_found")
+
+    def _require_operator(
+        self,
+        actor: Principal,
+        organization_id: str,
+        *,
+        repository_id: str | None = None,
+        operation: str = "other",
+    ) -> None:
+        action = "repair.approval" if operation == "approval" else "repair.start"
+        try:
+            super()._require_operator(
+                actor,
+                organization_id,
+                repository_id=repository_id,
+                operation=operation,
+            )
+            self._require_repository_access(actor, organization_id, repository_id)
+        except RepairAuthorizationError as exc:
+            self._audit_authorization(
+                actor,
+                organization_id=organization_id,
+                repository_id=repository_id,
+                action=action,
+                decision="deny",
+                reason_code=exc.code,
+            )
+            if exc.code == "repair_repository_not_found":
+                self._metric("unauthorized_operations_total", {"operation": operation})
+            raise
+        self._audit_authorization(
+            actor,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            action=action,
+            decision="allow",
+            reason_code=None,
+        )
+
+    def _require_reader(
+        self,
+        actor: Principal,
+        organization_id: str,
+        *,
+        repository_id: str | None = None,
+    ) -> None:
+        try:
+            super()._require_reader(
+                actor, organization_id, repository_id=repository_id
+            )
+            self._require_repository_access(actor, organization_id, repository_id)
+        except RepairAuthorizationError as exc:
+            self._audit_authorization(
+                actor,
+                organization_id=organization_id,
+                repository_id=repository_id,
+                action="repair.read",
+                decision="deny",
+                reason_code=exc.code,
+            )
+            if exc.code == "repair_repository_not_found":
+                self._metric("unauthorized_operations_total", {"operation": "other"})
+            raise
+        self._audit_authorization(
+            actor,
+            organization_id=organization_id,
+            repository_id=repository_id,
+            action="repair.read",
+            decision="allow",
+            reason_code=None,
+        )
+
+    def _worker_repository_available(
+        self, organization_id: str, repository_id: str
+    ) -> bool:
+        return (
+            self.postgres_store.database.repository_in_organization(
+                organization_id, repository_id, active_only=True
+            )
+            is not None
+        )
+
     def _approval_view_extension(
         self,
         job: RepairJobCheckpoint,
@@ -2965,7 +3124,11 @@ class SyntheticStagingRepairService(Phase10RepairService):
 
     def redacted_receipt(self, job_id: str, *, actor: Principal) -> dict[str, Any]:
         checkpoint, _checksum = self.postgres_store.load(job_id)
-        self._require_reader(actor, checkpoint.organization_id)
+        self._require_reader(
+            actor,
+            checkpoint.organization_id,
+            repository_id=checkpoint.repository_id,
+        )
         return self.postgres_store.redacted_receipt(job_id)
 
 
