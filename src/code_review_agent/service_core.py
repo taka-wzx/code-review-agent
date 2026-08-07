@@ -93,6 +93,28 @@ class PublisherFailed(ServiceError):
     code = "publisher_failed"
 
 
+_AMBIGUOUS_PUBLISHER_CODES = frozenset(
+    {
+        "ambiguous_result",
+        "publisher_ambiguous",
+        "receipt_mismatch",
+        "timeout",
+    }
+)
+
+
+def _publisher_error_code(exc: BaseException) -> str:
+    if isinstance(exc, PublicationError) and re.fullmatch(r"[a-z0-9_]{1,64}", exc.code):
+        return exc.code
+    return "publisher_ambiguous"
+
+
+def _publisher_error_is_ambiguous(exc: BaseException) -> bool:
+    if isinstance(exc, PublicationError):
+        return exc.code in _AMBIGUOUS_PUBLISHER_CODES
+    return True
+
+
 def _without_sdk_retries(target: Any) -> Any:
     """Disable hidden SDK attempts so one budget unit is one HTTP attempt."""
 
@@ -555,9 +577,49 @@ class ReviewService:
                 "deny",
                 reason_code="not_found",
             )
-            raise InvalidRequest("repository is not registered")
+            raise JobNotFound("repository was not found")
         _, root = self.registry.resolve(alias)
         return alias, root, record
+
+    def _repository_by_id(
+        self, principal: Principal, repository_id: str, action: str
+    ) -> Mapping[str, Any]:
+        record = self.store.database.authorized_repository(principal, repository_id)
+        if record is None:
+            self._audit(
+                principal,
+                action,
+                "repository",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
+            self._metric_increment(
+                "unauthorized_operations_total",
+                {"operation": self._operation_class(action)},
+            )
+            raise JobNotFound("repository was not found")
+        return record
+
+    def _validate_repository_ids(
+        self,
+        principal: Principal,
+        repository_ids: Iterable[str],
+        action: str,
+    ) -> None:
+        for repository_id in repository_ids:
+            if self.store.database.repository_in_organization(
+                principal.organization_id, repository_id, active_only=False
+            ) is None:
+                self._audit(
+                    principal,
+                    action,
+                    "repository",
+                    "redacted",
+                    "deny",
+                    reason_code="not_found",
+                )
+                raise JobNotFound("repository was not found")
 
     def _ensure_accepting(self) -> None:
         if not self._accepting:
@@ -623,6 +685,7 @@ class ReviewService:
             organization_id=actor.organization_id,
             repository_id=repository_id,
             submitted_by=actor.user_id,
+            principal=actor,
             correlation_id=correlation,
             submission_key=self._submission_key(
                 actor.organization_id,
@@ -692,6 +755,7 @@ class ReviewService:
             organization_id=actor.organization_id,
             repository_id=repository_id,
             submitted_by=actor.user_id,
+            principal=actor,
             correlation_id=correlation,
             submission_key=self._submission_key(
                 actor.organization_id,
@@ -888,6 +952,8 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_MEMBERS, "membership.create")
+        repository_ids = tuple(repository_ids)
+        self._validate_repository_ids(actor, repository_ids, "membership.create")
         record = self.store.database.create_membership(
             actor.organization_id,
             subject=subject,
@@ -914,6 +980,8 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_MEMBERS, "membership.update")
+        repository_ids = tuple(repository_ids)
+        self._validate_repository_ids(actor, repository_ids, "membership.update")
         own_membership = next(
             (
                 item
@@ -997,6 +1065,7 @@ class ReviewService:
     ) -> dict[str, Any]:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "repository.update")
+        self._repository_by_id(actor, repository_id, "repository.update")
         record = self.store.database.update_repository(
             actor.organization_id,
             repository_id,
@@ -1025,12 +1094,19 @@ class ReviewService:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "service_quota.read")
         if repository_id is not None:
-            repository = self.store.database.authorized_repository(actor, repository_id)
-            if repository is None:
-                raise JobNotFound("repository was not found")
-        return self.store.get_quota(
+            self._repository_by_id(actor, repository_id, "service_quota.read")
+        record = self.store.get_quota(
             actor.organization_id, repository_id=repository_id
         )
+        self._audit(
+            actor,
+            "service_quota.read",
+            "repository" if repository_id is not None else "organization",
+            repository_id or actor.organization_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return record
 
     def update_service_quota(
         self,
@@ -1042,9 +1118,7 @@ class ReviewService:
         actor = self._principal(principal)
         self._require(actor, Permission.MANAGE_REPOSITORIES, "service_quota.update")
         if repository_id is not None:
-            repository = self.store.database.authorized_repository(actor, repository_id)
-            if repository is None:
-                raise JobNotFound("repository was not found")
+            self._repository_by_id(actor, repository_id, "service_quota.update")
         record = self.store.configure_quota(
             actor.organization_id, repository_id=repository_id, **values
         )
@@ -1182,6 +1256,14 @@ class ReviewService:
             actor.organization_id, version
         )
         if not changed:
+            self._audit(
+                actor,
+                "organization.policy.invalidate",
+                "organization_policy",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
             raise JobNotFound("organization policy was not found")
         self._audit(
             actor,
@@ -1285,20 +1367,45 @@ class ReviewService:
             payload_sha256=str(record["payload_sha256"]),
             idempotency_key=str(publish["idempotency_key"]),
         )
+        attempt = self.store.database.start_publish_attempt(
+            approval_id=str(record["approval_id"]),
+            review_job_id=str(record["review_job_id"]),
+            attempt_id=str(publish["attempt_id"]),
+        )
+        attempt_status = str(attempt["status"])
+        if attempt_status == "succeeded":
+            record["state"] = "published"
+            return record
+        if attempt_status in {"failed", "quarantined"}:
+            raise PublisherFailed("publisher attempt is already terminal")
+        if attempt_status not in {"prepared", "publishing"}:
+            raise PublisherFailed("publisher attempt state is invalid")
         receipt: PublishReceipt | None = None
-        try:
-            receipt = self.publisher.publish(request)
-        except Exception:
+        error_code: str | None = None
+        quarantined = attempt_status == "publishing"
+        if attempt_status == "prepared":
+            try:
+                receipt = self.publisher.publish(request)
+            except Exception as exc:
+                error_code = _publisher_error_code(exc)
+                quarantined = _publisher_error_is_ambiguous(exc)
+        if receipt is None:
             try:
                 receipt = self.publisher.lookup(request.idempotency_key)
-            except Exception:
-                receipt = None
+            except Exception as exc:
+                if error_code is None:
+                    error_code = _publisher_error_code(exc)
+                quarantined = quarantined or attempt_status == "publishing"
         if receipt is None:
+            final_error = error_code or (
+                "publisher_ambiguous" if quarantined else "publisher_failed"
+            )
             self.store.database.finish_publish_attempt(
                 approval_id=str(record["approval_id"]),
                 review_job_id=str(record["review_job_id"]),
                 receipt_id=None,
-                error_code="publisher_failed",
+                error_code=final_error,
+                quarantined=quarantined,
             )
             self._audit(
                 actor,
@@ -1307,7 +1414,7 @@ class ReviewService:
                 str(record["review_job_id"]),
                 "error",
                 repository_id=str(record["repository_id"]),
-                reason_code="publisher_failed",
+                reason_code=final_error,
             )
             raise PublisherFailed("publisher did not return an idempotent receipt")
         self.store.database.finish_publish_attempt(
@@ -1326,6 +1433,25 @@ class ReviewService:
         )
         record["state"] = "published"
         return record
+
+    def reconcile_publish_outbox(
+        self, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.APPROVE_PUBLICATION, "publication.reconcile")
+        try:
+            records = self.store.database.publish_attempts_for_reconciliation(actor)
+        except PublicationError as error:
+            self._raise_approval_error(error)
+        completed = [self._finish_publication(actor, record) for record in records]
+        self._audit(
+            actor,
+            "publication.reconcile",
+            "organization",
+            actor.organization_id,
+            "allow",
+        )
+        return completed
 
     def decide_review_publication(
         self,
