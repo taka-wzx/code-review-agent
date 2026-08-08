@@ -23,6 +23,7 @@ import uvicorn
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from code_review_agent.database import DatabaseError
+from code_review_agent.github_webhook import GitHubWebhookProcessor
 from code_review_agent.mcp_server import create_mcp
 from code_review_agent.production_metrics import CONTENT_TYPE
 from code_review_agent.repair_service import (
@@ -64,7 +65,6 @@ from code_review_agent.service_core import (
 
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
-_PULL_REQUEST_ACTIONS = frozenset({"opened", "reopened", "synchronize", "ready_for_review"})
 
 
 class DiffSubmission(BaseModel):
@@ -335,24 +335,6 @@ def _webhook_signature(body: bytes, header: str, secret: bytes) -> None:
         raise ServiceError("webhook authentication failed")
 
 
-def _webhook_fields(payload: Any) -> tuple[str, str, str]:
-    if not isinstance(payload, dict) or payload.get("action") not in _PULL_REQUEST_ACTIONS:
-        raise InvalidRequest("pull_request action is not reviewable")
-    repository = payload.get("repository")
-    pull_request = payload.get("pull_request")
-    if not isinstance(repository, dict) or not isinstance(pull_request, dict):
-        raise InvalidRequest("webhook payload is missing repository or pull_request")
-    alias = repository.get("full_name")
-    number = pull_request.get("number")
-    head = pull_request.get("head")
-    head_sha = head.get("sha") if isinstance(head, dict) else None
-    if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
-        raise InvalidRequest("webhook repository or pull_request identity is invalid")
-    if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-fA-F]{40,64}", head_sha) is None:
-        raise InvalidRequest("webhook pull_request head SHA is invalid")
-    return alias, str(number), head_sha.casefold()
-
-
 async def _bounded_body(request: Request, limit: int) -> bytes:
     body = bytearray()
     async for chunk in request.stream():
@@ -390,6 +372,11 @@ def create_app(
             auth_backend = LocalTokenAuthBackend(http.service_token, local_principal)
         else:
             auth_backend = DatabaseAuthBackend(service.store.database)
+    github_webhooks = GitHubWebhookProcessor(
+        service.store.database,
+        submit_pull_request=service.submit_webhook_pr,
+        get_job=service.store.get,
+    )
     mcp = create_mcp(
         service,
         principal_provider=current_principal,
@@ -417,6 +404,7 @@ def create_app(
     app.state.review_service = service
     app.state.http_settings = http
     app.state.auth_backend = auth_backend
+    app.state.github_webhooks = github_webhooks
     app.state.repair_service = repair_service
 
     @app.exception_handler(ServiceError)
@@ -1060,33 +1048,26 @@ def create_app(
             verified = True
             event = request.headers.get("x-github-event", "")
             delivery = request.headers.get("x-github-delivery", "")
-            if event == "ping":
-                return JSONResponse(
-                    status_code=200,
-                    content={"schema_version": SCHEMA_VERSION, "status": "pong"},
-                )
-            if event != "pull_request":
-                return JSONResponse(
-                    status_code=202,
-                    content={"schema_version": SCHEMA_VERSION, "status": "ignored"},
-                )
             if not delivery:
                 raise InvalidRequest("webhook delivery ID is required")
-            try:
-                payload = json.loads(body)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
-            repository, pull_request, head_sha = _webhook_fields(payload)
-            job, duplicate = await anyio.to_thread.run_sync(
-                lambda: service.submit_webhook_pr(
-                    repository,
-                    pull_request,
+            payload: Any = None
+            if event in {"installation", "pull_request"}:
+                try:
+                    payload = json.loads(body)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
+            acknowledgement = await anyio.to_thread.run_sync(
+                lambda: github_webhooks.acknowledge(
+                    event=event,
                     delivery_id=delivery,
-                    correlation_id=delivery,
-                    head_sha=head_sha,
+                    body=body,
+                    payload=payload,
                 )
             )
-            return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})
+            return JSONResponse(
+                status_code=acknowledgement.status_code,
+                content=acknowledgement.body,
+            )
         finally:
             if verified:
                 try:
