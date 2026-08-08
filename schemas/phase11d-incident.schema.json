@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-incident.schema.json",
+  "title": "CRAG Phase 11D incident and stop receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "incident_id",
+    "row_kind",
+    "severity",
+    "stop_reason",
+    "kill_switch_activated",
+    "new_tasks_stopped",
+    "unresolved",
+    "credential_revoked_or_isolated",
+    "quarantine_count",
+    "unauthorized_operation_count",
+    "duplicate_external_write_count",
+    "redaction_applied",
+    "recorded_at_utc"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.incident/v1alpha1"},
+    "incident_id": {"type": "string", "minLength": 1},
+    "row_kind": {"const": "synthetic"},
+    "severity": {"enum": ["none", "sev1", "sev2", "sev3"]},
+    "stop_reason": {"type": "string", "minLength": 1},
+    "kill_switch_activated": {"const": false},
+    "new_tasks_stopped": {"const": false},
+    "unresolved": {"const": false},
+    "credential_revoked_or_isolated": {"const": true},
+    "quarantine_count": {"type": "integer", "minimum": 0},
+    "unauthorized_operation_count": {"const": 0},
+    "duplicate_external_write_count": {"const": 0},
+    "redaction_applied": {"const": true},
+    "recorded_at_utc": {"$ref": "#/$defs/utcSecond"}
+  },
+  "$defs": {
+    "utcSecond": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "cohort_id": "phase11d-gate-a-synthetic-cohort",
+  "eligible_count": 22,
+  "excluded_count": 2,
+  "replacement_after_failure_allowed": false,
+  "schema_version": "crag.phase11d.selection-receipt/v1alpha1",
+  "selected_count": 20,
+  "selected_pr_ids_sha256": "64fa7543fbc084b9ee71d08d0f65e857ef2f4b97fb69b5bc0d782d0a94aa80f3",
+  "selection_before_agent_output": true,
+  "selection_receipt_id": "phase11d-gate-a-synthetic-selection",
+  "selection_seed_sha256": "fa98b993678ffd7179125126621190c13560e118515bc2aca9ef81233afb0d53"
+}

@@ -37,6 +37,8 @@ from code_review_agent.identity import (
     AuthenticationRequired,
     DatabaseAuthBackend,
     LocalTokenAuthBackend,
+    OIDCConfiguration,
+    OIDCJWTAuthBackend,
     Principal,
     Role,
     bind_correlation_id,
@@ -140,6 +142,7 @@ class CredentialCreate(BaseModel):
 class FeedbackCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     decision: str = Field(pattern="^(accepted|rejected|uncertain|fixed|duplicate)$")
+    finding_hash: str = Field(pattern="^[0-9a-f]{64}$")
     rationale: str | None = Field(default=None, max_length=512)
     reason: str | None = Field(default=None, max_length=512)
 
@@ -188,6 +191,8 @@ class HttpSettings:
         local_token_enabled: bool = True,
         local_token_behind_loopback_publish: bool = False,
         worker_stale_seconds: float = 30.0,
+        auth_mode: str = "database",
+        oidc_configuration: OIDCConfiguration | None = None,
     ) -> None:
         if service_token and len(service_token.encode("utf-8")) < 32:
             raise InvalidRequest("CRAG_SERVICE_TOKEN must be at least 32 UTF-8 bytes")
@@ -218,6 +223,15 @@ class HttpSettings:
                 )
         if not 1 <= worker_stale_seconds <= 3600:
             raise InvalidRequest("CRAG_WORKER_STALE_SECONDS must be between 1 and 3600")
+        if auth_mode not in {"database", "oidc"}:
+            raise InvalidRequest("CRAG_AUTH_MODE must be database or oidc")
+        if auth_mode == "oidc":
+            if local_token_enabled:
+                raise InvalidRequest("OIDC mode cannot enable the local token backend")
+            if oidc_configuration is None:
+                raise InvalidRequest("OIDC mode requires complete OIDC configuration")
+        elif oidc_configuration is not None:
+            raise InvalidRequest("OIDC configuration requires CRAG_AUTH_MODE=oidc")
         self.service_token = service_token
         self.webhook_secret = webhook_secret.encode("utf-8")
         self.allowed_origins = allowed_origins
@@ -225,6 +239,8 @@ class HttpSettings:
         self.local_token_enabled = local_token_enabled
         self.local_token_behind_loopback_publish = local_token_behind_loopback_publish
         self.worker_stale_seconds = worker_stale_seconds
+        self.auth_mode = auth_mode
+        self.oidc_configuration = oidc_configuration
 
     @classmethod
     def from_env(cls) -> "HttpSettings":
@@ -249,6 +265,25 @@ class HttpSettings:
                 "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH must be boolean"
             )
         loopback_publish = raw_loopback_publish in {"1", "true", "yes"}
+        auth_mode = os.environ.get("CRAG_AUTH_MODE", "database").casefold()
+        oidc_variables = (
+            "CRAG_OIDC_ISSUER",
+            "CRAG_OIDC_AUDIENCE",
+            "CRAG_OIDC_JWKS_URL",
+            "CRAG_OIDC_ORGANIZATION_CLAIM",
+            "CRAG_OIDC_JWKS_CACHE_SECONDS",
+            "CRAG_OIDC_JWKS_TIMEOUT_SECONDS",
+            "CRAG_OIDC_LEEWAY_SECONDS",
+            "CRAG_OIDC_ALGORITHMS",
+        )
+        if auth_mode != "oidc" and any(name in os.environ for name in oidc_variables):
+            raise InvalidRequest("OIDC settings require CRAG_AUTH_MODE=oidc")
+        try:
+            oidc_configuration = (
+                OIDCConfiguration.from_environment(os.environ) if auth_mode == "oidc" else None
+            )
+        except ValueError as exc:
+            raise InvalidRequest(str(exc)) from exc
         try:
             worker_stale_seconds = float(
                 os.environ.get("CRAG_WORKER_STALE_SECONDS", "30")
@@ -265,6 +300,8 @@ class HttpSettings:
             local_token_enabled=local_token_enabled,
             local_token_behind_loopback_publish=loopback_publish,
             worker_stale_seconds=worker_stale_seconds,
+            auth_mode=auth_mode,
+            oidc_configuration=oidc_configuration,
         )
 
 
@@ -342,7 +379,11 @@ def create_app(
         )
     monotonic = metrics_clock or time.monotonic
     if auth_backend is None:
-        if http.local_token_enabled:
+        if http.auth_mode == "oidc":
+            if http.oidc_configuration is None:
+                raise InvalidRequest("OIDC mode requires complete OIDC configuration")
+            auth_backend = OIDCJWTAuthBackend(http.oidc_configuration, service.store.database)
+        elif http.local_token_enabled:
             local_principal = service.store.local_principal
             if local_principal is None:
                 raise InvalidRequest("local token mode requires a local service principal")
@@ -419,7 +460,8 @@ def create_app(
         status = (
             404
             if isinstance(exc, RepairAuthorizationError)
-            and exc.code == "repair_cross_organization_denied"
+            and exc.code
+            in {"repair_cross_organization_denied", "repair_repository_not_found"}
             else 403
             if isinstance(exc, RepairAuthorizationError)
             else 409
@@ -560,9 +602,22 @@ def create_app(
             raise AuthorizationDenied("authenticated principal is required")
         return principal
 
-    def require_organization(request: Request, organization_id: str) -> Principal:
+    def require_organization(
+        request: Request,
+        organization_id: str,
+        *,
+        action: str = "organization.scope",
+    ) -> Principal:
         principal = request_principal(request)
         if principal.organization_id != organization_id:
+            service._audit(
+                principal,
+                action,
+                "organization",
+                "redacted",
+                "deny",
+                reason_code="cross_organization",
+            )
             raise JobNotFound("organization was not found")
         return principal
 
@@ -576,6 +631,14 @@ def create_app(
     ) -> dict[str, Any]:
         repository = service.store.database.authorized_repository(principal, identity)
         if repository is None:
+            service._audit(
+                principal,
+                "repair.start",
+                "repository",
+                "redacted",
+                "deny",
+                reason_code="not_found",
+            )
             raise JobNotFound("repository was not found")
         return repository
 
@@ -769,14 +832,18 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/memberships")
     def list_memberships(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.list"
+        )
         return {"memberships": service.list_members(principal)}
 
     @app.post("/v1/organizations/{organization_id}/memberships", status_code=201)
     def create_membership(
         request: Request, organization_id: str, body: MembershipCreate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.create"
+        )
         return service.create_member(
             subject=body.subject,
             display_name=body.display_name,
@@ -792,7 +859,9 @@ def create_app(
         membership_id: str,
         body: MembershipUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="membership.update"
+        )
         return service.update_member(
             membership_id,
             role=body.role,
@@ -802,14 +871,18 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/repositories")
     def list_repositories(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.list"
+        )
         return {"repositories": service.list_repositories(principal)}
 
     @app.post("/v1/organizations/{organization_id}/repositories", status_code=201)
     def register_repository(
         request: Request, organization_id: str, body: RepositoryCreate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.create"
+        )
         return service.register_repository(
             body.repository,
             mode=body.mode,
@@ -827,7 +900,9 @@ def create_app(
         repository_id: str,
         body: RepositoryUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="repository.update"
+        )
         return service.update_repository(
             repository_id,
             mode=body.mode,
@@ -838,7 +913,9 @@ def create_app(
 
     @app.get("/v1/organizations/{organization_id}/policy")
     def get_organization_policy(request: Request, organization_id: str) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.read"
+        )
         policy = service.get_organization_policy(principal=principal)
         return {"policy": policy}
 
@@ -846,7 +923,9 @@ def create_app(
     def put_organization_policy(
         request: Request, organization_id: str, body: OrganizationPolicyUpdate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.write"
+        )
         return {
             "policy": service.put_organization_policy(
                 principal=principal, **body.model_dump()
@@ -860,21 +939,27 @@ def create_app(
     def invalidate_organization_policy(
         request: Request, organization_id: str, version: str
     ) -> None:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="organization.policy.invalidate"
+        )
         service.invalidate_organization_policy(version, principal=principal)
 
     @app.get("/v1/organizations/{organization_id}/service-quota")
     def get_organization_service_quota(
         request: Request, organization_id: str
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.read"
+        )
         return service.get_service_quota(principal=principal)
 
     @app.patch("/v1/organizations/{organization_id}/service-quota")
     def update_organization_service_quota(
         request: Request, organization_id: str, body: ServiceQuotaUpdate
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.update"
+        )
         return service.update_service_quota(
             principal=principal, **body.model_dump(exclude_unset=True)
         )
@@ -885,7 +970,9 @@ def create_app(
     def get_repository_service_quota(
         request: Request, organization_id: str, repository_id: str
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.read"
+        )
         return service.get_service_quota(
             repository_id=repository_id, principal=principal
         )
@@ -899,7 +986,9 @@ def create_app(
         repository_id: str,
         body: ServiceQuotaUpdate,
     ) -> dict[str, Any]:
-        principal = require_organization(request, organization_id)
+        principal = require_organization(
+            request, organization_id, action="service_quota.update"
+        )
         return service.update_service_quota(
             repository_id=repository_id,
             principal=principal,
@@ -934,6 +1023,7 @@ def create_app(
         return service.submit_feedback(
             finding_id,
             decision=body.decision,
+            finding_hash=body.finding_hash,
             reason=body.reason,
             rationale=body.rationale,
             principal=request_principal(request),

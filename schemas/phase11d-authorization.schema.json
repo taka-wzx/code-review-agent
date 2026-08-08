@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-authorization.schema.json",
+  "title": "CRAG Phase 11D authorization v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "gate",
+    "authorization_id",
+    "canonical_authorization_sha256",
+    "created_at_utc",
+    "baseline",
+    "phase11c_facts",
+    "auth004_boundary",
+    "permissions",
+    "participants_declared_count",
+    "confirmed_real_participant_count",
+    "selected_pr_count",
+    "synthetic_rows_present",
+    "real_rows_present",
+    "repository_allowlist_sha256",
+    "cohort_sha256",
+    "selection_sha256",
+    "headline_manifest_sha256",
+    "limits",
+    "provider_policy",
+    "github_policy",
+    "retention_policy",
+    "incident_policy",
+    "claim_boundary",
+    "gate_b_required_fields_complete"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.authorization/v1alpha1"},
+    "gate": {"const": "gate_a"},
+    "authorization_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "canonical_authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "created_at_utc": {"$ref": "#/$defs/utcSecond"},
+    "baseline": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["origin_master_sha", "local_master_at_start", "master_mutated_by_codex"],
+      "properties": {
+        "origin_master_sha": {"$ref": "#/$defs/gitSha"},
+        "local_master_at_start": {"$ref": "#/$defs/gitSha"},
+        "local_master_equal_origin_master": {"type": "boolean"},
+        "master_mutated_by_codex": {"const": false}
+      }
+    },
+    "phase11c_facts": {"type": "object", "additionalProperties": true},
+    "auth004_boundary": {"type": "object", "additionalProperties": true},
+    "permissions": {"$ref": "#/$defs/gateAClosedPermissions"},
+    "participants_declared_count": {"type": "integer", "minimum": 3, "maximum": 5},
+    "confirmed_real_participant_count": {"const": 0},
+    "selected_pr_count": {"type": "integer", "minimum": 20, "maximum": 30},
+    "synthetic_rows_present": {"const": true},
+    "real_rows_present": {"const": false},
+    "repository_allowlist_sha256": {"$ref": "#/$defs/sha256"},
+    "cohort_sha256": {"$ref": "#/$defs/sha256"},
+    "selection_sha256": {"$ref": "#/$defs/sha256"},
+    "headline_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "limits": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "provider_policy": {"type": "object", "additionalProperties": true},
+    "github_policy": {"type": "object", "additionalProperties": true},
+    "retention_policy": {"type": "object", "additionalProperties": true},
+    "incident_policy": {"type": "object", "additionalProperties": true},
+    "claim_boundary": {"$ref": "#/$defs/claimBoundary"},
+    "gate_b_required_fields_complete": {"const": false}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "utcSecond": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"},
+    "gateAClosedPermissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "allow_real_provider_calls",
+        "allow_real_github_repair_branch_push",
+        "allow_real_draft_repair_pr",
+        "allow_comments_checks_labels_reviews",
+        "allow_pilot_pr_ready",
+        "allow_pilot_pr_merge",
+        "allow_default_branch_mutation",
+        "allow_auto_merge",
+        "allow_agent_push_merge_master"
+      ],
+      "properties": {
+        "allow_real_provider_calls": {"const": false},
+        "allow_real_github_repair_branch_push": {"const": false},
+        "allow_real_draft_repair_pr": {"const": false},
+        "allow_comments_checks_labels_reviews": {"const": false},
+        "allow_pilot_pr_ready": {"const": false},
+        "allow_pilot_pr_merge": {"const": false},
+        "allow_default_branch_mutation": {"const": false},
+        "allow_auto_merge": {"const": false},
+        "allow_agent_push_merge_master": {"const": false}
+      }
+    },
+    "claimBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "real_model_calls",
+        "real_github_writes",
+        "real_pilot_executed",
+        "business_claim_allowed",
+        "model_quality_status",
+        "formal_quality_status",
+        "production_ready"
+      ],
+      "properties": {
+        "real_model_calls": {"const": false},
+        "real_github_writes": {"const": false},
+        "real_pilot_executed": {"const": false},
+        "business_claim_allowed": {"const": false},
+        "model_quality_status": {"const": "not_measured"},
+        "formal_quality_status": {"const": "incomplete"},
+        "production_ready": {"const": false}
+      }
+    }
+  }
+}

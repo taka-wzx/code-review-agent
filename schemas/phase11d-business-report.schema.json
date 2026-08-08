@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-business-report.schema.json",
+  "title": "CRAG Phase 11D business report v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "cohort_id",
+    "selected_pr_count",
+    "synthetic_rows_present",
+    "headline_completion",
+    "feedback_coverage",
+    "decision_counts",
+    "repair_requested",
+    "write_approval",
+    "draft_pr_approval",
+    "draft_pr_created",
+    "draft_pr_adopted",
+    "active_human_review_time_seconds",
+    "end_to_end_latency_ms",
+    "cost_micro_cny",
+    "failure_counts",
+    "unauthorized_operation_count",
+    "duplicate_external_write_count",
+    "business_claim_allowed",
+    "model_quality_status",
+    "formal_quality_status",
+    "claim_scope"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.business-report/v1alpha1"},
+    "report_id": {"type": "string", "minLength": 1},
+    "cohort_id": {"type": "string", "minLength": 1},
+    "selected_pr_count": {"type": "integer", "minimum": 20, "maximum": 30},
+    "synthetic_rows_present": {"const": true},
+    "headline_completion": {"$ref": "#/$defs/rate"},
+    "feedback_coverage": {"$ref": "#/$defs/rate"},
+    "decision_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "repair_requested": {"$ref": "#/$defs/rate"},
+    "write_approval": {"$ref": "#/$defs/approvalCounts"},
+    "draft_pr_approval": {"$ref": "#/$defs/approvalCounts"},
+    "draft_pr_created": {"$ref": "#/$defs/rate"},
+    "draft_pr_adopted": {"$ref": "#/$defs/rate"},
+    "active_human_review_time_seconds": {"$ref": "#/$defs/percentiles"},
+    "end_to_end_latency_ms": {"$ref": "#/$defs/percentiles"},
+    "cost_micro_cny": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "per_selected_pr", "per_adopted_finding"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "per_selected_pr": {"type": "integer", "minimum": 0},
+        "per_adopted_finding": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "failure_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "unauthorized_operation_count": {"const": 0},
+    "duplicate_external_write_count": {"const": 0},
+    "business_claim_allowed": {"const": false},
+    "model_quality_status": {"const": "not_measured"},
+    "formal_quality_status": {"const": "incomplete"},
+    "claim_scope": {"const": "synthetic_gate_a_only"}
+  },
+  "$defs": {
+    "rate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator", "value"],
+      "properties": {
+        "numerator": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0},
+        "value": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      }
+    },
+    "approvalCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["approved", "declined", "denominator"],
+      "properties": {
+        "approved": {"type": "integer", "minimum": 0},
+        "declined": {"type": "integer", "minimum": 0},
+        "denominator": {"type": "integer", "minimum": 0}
+      }
+    },
+    "percentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p95", "sample_count"],
+      "properties": {
+        "p50": {"type": ["integer", "null"], "minimum": 0},
+        "p95": {"type": ["integer", "null"], "minimum": 0},
+        "sample_count": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

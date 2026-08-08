@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-draft-pr-receipt.schema.json",
+  "title": "CRAG Phase 11D Draft PR receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "draft_pr_id",
+    "repair_job_id",
+    "pr_id",
+    "row_kind",
+    "head_branch_sha256",
+    "base_branch",
+    "commit_sha",
+    "draft",
+    "ready",
+    "merged",
+    "comments_checks_labels_reviews",
+    "publisher_status",
+    "receipt_sha256",
+    "redaction_applied"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.draft-pr-receipt/v1alpha1"},
+    "draft_pr_id": {"type": "string", "minLength": 1},
+    "repair_job_id": {"type": "string", "minLength": 1},
+    "pr_id": {"type": "string", "minLength": 1},
+    "row_kind": {"const": "synthetic"},
+    "head_branch_sha256": {"$ref": "#/$defs/sha256"},
+    "base_branch": {"type": "string", "minLength": 1},
+    "commit_sha": {"$ref": "#/$defs/gitSha"},
+    "draft": {"const": true},
+    "ready": {"const": false},
+    "merged": {"const": false},
+    "comments_checks_labels_reviews": {"const": 0},
+    "publisher_status": {"const": "draft_published"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "redaction_applied": {"const": true}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitSha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+  }
+}

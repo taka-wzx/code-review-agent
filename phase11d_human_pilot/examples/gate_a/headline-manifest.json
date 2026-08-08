@@ -1,0 +1,130 @@
+{
+  "authorization_id": "phase11d-gate-a-synthetic-auth",
+  "cohort_id": "phase11d-gate-a-synthetic-cohort",
+  "diagnostic_may_replace_headline": false,
+  "headlines": [
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-001",
+      "pr_id": "synthetic-pr-001",
+      "review_receipt_id": "review-receipt-001"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-002",
+      "pr_id": "synthetic-pr-002",
+      "review_receipt_id": "review-receipt-002"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-003",
+      "pr_id": "synthetic-pr-003",
+      "review_receipt_id": "review-receipt-003"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-004",
+      "pr_id": "synthetic-pr-004",
+      "review_receipt_id": "review-receipt-004"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-005",
+      "pr_id": "synthetic-pr-005",
+      "review_receipt_id": "review-receipt-005"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-006",
+      "pr_id": "synthetic-pr-006",
+      "review_receipt_id": "review-receipt-006"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-007",
+      "pr_id": "synthetic-pr-007",
+      "review_receipt_id": "review-receipt-007"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-008",
+      "pr_id": "synthetic-pr-008",
+      "review_receipt_id": "review-receipt-008"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-009",
+      "pr_id": "synthetic-pr-009",
+      "review_receipt_id": "review-receipt-009"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-010",
+      "pr_id": "synthetic-pr-010",
+      "review_receipt_id": "review-receipt-010"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-011",
+      "pr_id": "synthetic-pr-011",
+      "review_receipt_id": "review-receipt-011"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-012",
+      "pr_id": "synthetic-pr-012",
+      "review_receipt_id": "review-receipt-012"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-013",
+      "pr_id": "synthetic-pr-013",
+      "review_receipt_id": "review-receipt-013"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-014",
+      "pr_id": "synthetic-pr-014",
+      "review_receipt_id": "review-receipt-014"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-015",
+      "pr_id": "synthetic-pr-015",
+      "review_receipt_id": "review-receipt-015"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-016",
+      "pr_id": "synthetic-pr-016",
+      "review_receipt_id": "review-receipt-016"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-017",
+      "pr_id": "synthetic-pr-017",
+      "review_receipt_id": "review-receipt-017"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-018",
+      "pr_id": "synthetic-pr-018",
+      "review_receipt_id": "review-receipt-018"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-019",
+      "pr_id": "synthetic-pr-019",
+      "review_receipt_id": "review-receipt-019"
+    },
+    {
+      "attempt_number": 1,
+      "headline_id": "headline-020",
+      "pr_id": "synthetic-pr-020",
+      "review_receipt_id": "review-receipt-020"
+    }
+  ],
+  "immutable_headline_count": 20,
+  "manifest_id": "phase11d-gate-a-synthetic-headlines",
+  "schema_version": "crag.phase11d.headline-manifest/v1alpha1"
+}

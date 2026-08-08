@@ -43,6 +43,7 @@ def _migration_layout() -> tuple[Path, Path]:
 LOCAL_ORGANIZATION_ID = "local-development-organization"
 LOCAL_USER_ID = "local-development-principal"
 LOCAL_MEMBERSHIP_ID = "local-development-membership"
+PUBLISH_ATTEMPT_RECONCILIATION_GRACE = timedelta(minutes=5)
 
 
 class DatabaseError(RuntimeError):
@@ -51,6 +52,14 @@ class DatabaseError(RuntimeError):
 
 class MigrationRequired(DatabaseError):
     """The database is not at the application schema head."""
+
+
+class FeedbackBindingError(DatabaseError):
+    """Stable feedback binding failure without leaking finding or payload text."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 def utc_now() -> str:
@@ -485,6 +494,30 @@ class Database:
             auth_method=auth_method,
         )
 
+    def principal_for_subject(
+        self, organization_id: str, subject: str, *, auth_method: str = "oidc"
+    ) -> Principal | None:
+        """Return an active principal only when the tenant already enrolled the subject."""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT u.id AS user_id, m.role FROM users u "
+                    "JOIN memberships m ON m.organization_id=u.organization_id "
+                    "AND m.user_id=u.id WHERE u.subject=:subject "
+                    "AND u.organization_id=:org AND u.active=:active"
+                ),
+                {"subject": subject, "org": organization_id, "active": True},
+            ).first()
+        if row is None:
+            return None
+        return Principal(
+            principal_id=str(row._mapping["user_id"]),
+            user_id=str(row._mapping["user_id"]),
+            organization_id=organization_id,
+            role=Role(str(row._mapping["role"])),
+            auth_method=auth_method,
+        )
+
     def list_members(self, organization_id: str) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             rows = connection.execute(
@@ -695,6 +728,36 @@ class Database:
                     "AND (lower(r.alias)=:identity OR r.id=:identity)" + access_clause
                 ),
                 parameters,
+            ).first()
+        return None if row is None else _mapping(row)
+
+    def repository_in_organization(
+        self,
+        organization_id: str,
+        repository_id: str,
+        *,
+        active_only: bool = True,
+    ) -> dict[str, Any] | None:
+        """Return a repository only when its tenant lineage is exact.
+
+        Internal workers do not have a user principal, so they cannot use
+        ``authorized_repository``.  This query is the system-actor boundary:
+        it verifies the composite organization/repository identity and, by
+        default, excludes repositories that have been deactivated.
+        """
+        active_clause = " AND active=:active" if active_only else ""
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT id, organization_id, alias, mode, budget_microusd, "
+                    "policy_version, active FROM repositories "
+                    "WHERE id=:id AND organization_id=:org" + active_clause
+                ),
+                {
+                    "id": repository_id,
+                    "org": organization_id,
+                    "active": True,
+                },
             ).first()
         return None if row is None else _mapping(row)
 
@@ -929,7 +992,8 @@ class Database:
             feedback = connection.execute(
                 text(
                     "SELECT id, principal_id, decision, finding_hash, reason AS rationale, "
-                    "created_at "
+                    "publish_approval_id, published_payload_sha256, published_head_sha, "
+                    "published_finding_sha256, created_at "
                     "FROM finding_feedback WHERE finding_id=:finding "
                     "AND organization_id=:org ORDER BY created_at, id"
                 ),
@@ -947,14 +1011,89 @@ class Database:
         finding["approvals"] = [_mapping(row) for row in approvals]
         return finding
 
+    @staticmethod
+    def _published_feedback_binding(
+        connection: Connection,
+        principal: Principal,
+        finding: Mapping[str, Any],
+        *,
+        expected_finding_hash: str,
+    ) -> dict[str, str]:
+        current_row = connection.execute(
+            text(
+                "SELECT id, organization_id, repository_id, review_job_id, status, "
+                "content_sha256 FROM findings WHERE id=:finding AND organization_id=:org "
+                "AND repository_id=:repo"
+            ),
+            {
+                "finding": finding["id"],
+                "org": principal.organization_id,
+                "repo": finding["repository_id"],
+            },
+        ).first()
+        if current_row is None:
+            raise FeedbackBindingError("feedback_not_published")
+        current = _mapping(current_row)
+        if current["content_sha256"] != expected_finding_hash:
+            raise FeedbackBindingError("feedback_hash_mismatch")
+        if current["status"] != "published":
+            raise FeedbackBindingError("feedback_not_published")
+
+        binding_row = connection.execute(
+            text(
+                "SELECT j.head_sha, j.state AS job_state, pa.id AS publish_approval_id, "
+                "pa.payload_sha256, pat.status AS publish_status "
+                "FROM review_jobs j "
+                "JOIN publish_approvals pa ON pa.organization_id=j.organization_id "
+                "AND pa.review_job_id=j.id AND pa.repository_id=j.repository_id "
+                "AND pa.decision='approved' "
+                "JOIN publish_attempts pat ON pat.organization_id=j.organization_id "
+                "AND pat.review_job_id=j.id AND pat.repository_id=j.repository_id "
+                "AND pat.approval_id=pa.id AND pat.status='succeeded' "
+                "WHERE j.id=:job AND j.organization_id=:org AND j.repository_id=:repo "
+                "AND j.state='published'"
+            ),
+            {
+                "job": current["review_job_id"],
+                "org": principal.organization_id,
+                "repo": current["repository_id"],
+            },
+        ).first()
+        if binding_row is None:
+            raise FeedbackBindingError("feedback_not_published")
+        binding = _mapping(binding_row)
+        published_finding_sha256 = sha256_hex(
+            canonical_json(
+                {
+                    "schema_version": "crag.published-finding-feedback/v1",
+                    "organization_id": principal.organization_id,
+                    "repository_id": str(current["repository_id"]),
+                    "review_job_id": str(current["review_job_id"]),
+                    "finding_id": str(current["id"]),
+                    "content_sha256": expected_finding_hash,
+                    "publish_approval_id": str(binding["publish_approval_id"]),
+                    "published_payload_sha256": str(binding["payload_sha256"]),
+                    "published_head_sha": str(binding["head_sha"]),
+                }
+            )
+        )
+        return {
+            "publish_approval_id": str(binding["publish_approval_id"]),
+            "published_payload_sha256": str(binding["payload_sha256"]),
+            "published_head_sha": str(binding["head_sha"]),
+            "published_finding_sha256": published_finding_sha256,
+        }
+
     def create_feedback(
         self,
         principal: Principal,
         finding: Mapping[str, Any],
         *,
         decision: str,
+        expected_finding_hash: str,
         rationale: str | None,
     ) -> dict[str, Any]:
+        now = utc_now()
         record = {
             "id": new_id(),
             "organization_id": principal.organization_id,
@@ -962,18 +1101,30 @@ class Database:
             "finding_id": finding["id"],
             "principal_id": principal.user_id,
             "decision": decision,
-            "finding_hash": finding["content_sha256"],
+            "finding_hash": expected_finding_hash,
             "reason": rationale,
-            "created_at": utc_now(),
+            "created_at": now,
         }
         with self.engine.begin() as connection:
+            record.update(
+                self._published_feedback_binding(
+                    connection,
+                    principal,
+                    finding,
+                    expected_finding_hash=expected_finding_hash,
+                )
+            )
             connection.execute(
                 text(
                     "INSERT INTO finding_feedback "
                     "(id, organization_id, repository_id, finding_id, principal_id, "
-                    "decision, finding_hash, reason, created_at) VALUES "
+                    "decision, finding_hash, reason, publish_approval_id, "
+                    "published_payload_sha256, published_head_sha, published_finding_sha256, "
+                    "created_at) VALUES "
                     "(:id, :organization_id, :repository_id, :finding_id, :principal_id, "
-                    ":decision, :finding_hash, :reason, :created_at)"
+                    ":decision, :finding_hash, :reason, :publish_approval_id, "
+                    ":published_payload_sha256, :published_head_sha, "
+                    ":published_finding_sha256, :created_at)"
                 ),
                 record,
             )
@@ -1267,6 +1418,8 @@ class Database:
         return {
             "review_job_id": str(job["id"]),
             "repository_id": str(job["repository_id"]),
+            "repository": str(job["repository_alias"]),
+            "pull_request": str(job["source_ref"]),
             "head_sha": material["head_sha"],
             "payload_sha256": material["payload_sha256"],
             "finding_set_sha256": material["finding_set_sha256"],
@@ -1438,9 +1591,13 @@ class Database:
             "approval_id": approval_id,
             "review_job_id": str(job["id"]),
             "repository_id": str(job["repository_id"]),
+            "repository": str(job["repository_alias"]),
+            "pull_request": str(job["source_ref"]),
             "decision": decision,
+            "approver_id": principal.user_id,
             "head_sha": material["head_sha"],
             "payload_sha256": material["payload_sha256"],
+            "finding_set_sha256": material["finding_set_sha256"],
             "policy_version": material["policy_version"],
             "expires_at": str(proposal["expires_at"]),
             "used_at": now,
@@ -1448,12 +1605,55 @@ class Database:
         if attempt is not None:
             result["_publish"] = {
                 "attempt_id": attempt["id"],
+                "attempt_status": attempt["status"],
                 "idempotency_key": attempt["idempotency_key"],
                 "payload": material["payload"],
                 "repository_alias": str(job["repository_alias"]),
                 "pull_request": str(job["source_ref"]),
             }
         return result
+
+    def start_publish_attempt(
+        self,
+        *,
+        approval_id: str,
+        review_job_id: str,
+        attempt_id: str,
+    ) -> dict[str, Any]:
+        with self._write_transaction() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT id, status, idempotency_key FROM publish_attempts "
+                    "WHERE id=:attempt AND approval_id=:approval AND review_job_id=:job"
+                ),
+                {"attempt": attempt_id, "approval": approval_id, "job": review_job_id},
+            ).first()
+            if row is None:
+                raise PublicationError("publish_attempt_not_found")
+            attempt = _mapping(row)
+            if attempt["status"] == "prepared":
+                now = utc_now()
+                reconcile_after = (
+                    datetime.now(timezone.utc) + PUBLISH_ATTEMPT_RECONCILIATION_GRACE
+                ).isoformat().replace("+00:00", "Z")
+                updated = connection.execute(
+                    text(
+                        "UPDATE publish_attempts SET status='publishing', "
+                        "publishing_started_at=:started, reconcile_after=:reconcile_after "
+                        "WHERE id=:attempt AND approval_id=:approval AND review_job_id=:job "
+                        "AND status='prepared'"
+                    ),
+                    {
+                        "attempt": attempt_id,
+                        "approval": approval_id,
+                        "job": review_job_id,
+                        "started": now,
+                        "reconcile_after": reconcile_after,
+                    },
+                )
+                if updated.rowcount != 1:
+                    raise PublicationError("publish_attempt_state_conflict")
+            return attempt
 
     def finish_publish_attempt(
         self,
@@ -1462,8 +1662,11 @@ class Database:
         review_job_id: str,
         receipt_id: str | None,
         error_code: str | None,
+        quarantined: bool = False,
     ) -> None:
         success = receipt_id is not None
+        status = "succeeded" if success else ("quarantined" if quarantined else "failed")
+        stable_error = None if success else (error_code or "publisher_failed")
         now = utc_now()
         with self._write_transaction() as connection:
             approval = connection.execute(
@@ -1480,12 +1683,12 @@ class Database:
                 text(
                     "UPDATE publish_attempts SET status=:status, receipt_sha256=:receipt, "
                     "error_code=:error, completed_at=:completed WHERE approval_id=:approval "
-                    "AND review_job_id=:job AND status='prepared'"
+                    "AND review_job_id=:job AND status IN ('prepared','publishing')"
                 ),
                 {
-                    "status": "succeeded" if success else "failed",
+                    "status": status,
                     "receipt": sha256_hex(str(receipt_id).encode("utf-8")) if success else None,
-                    "error": None if success else (error_code or "publisher_failed"),
+                    "error": stable_error,
                     "completed": now,
                     "approval": approval_id,
                     "job": review_job_id,
@@ -1501,7 +1704,7 @@ class Database:
                 ),
                 {
                     "state": target_state,
-                    "error": None if success else (error_code or "publisher_failed"),
+                    "error": stable_error,
                     "updated": datetime.now(timezone.utc),
                     "job": review_job_id,
                     "org": row["organization_id"],
@@ -1522,10 +1725,88 @@ class Database:
                 review_job_id=review_job_id,
                 approval_id=approval_id,
                 principal_id=str(row["principal_id"]),
-                event_type="publication.published" if success else "publication.failed",
+                event_type=(
+                    "publication.published"
+                    if success
+                    else (
+                        "publication.quarantined"
+                        if quarantined
+                        else "publication.failed"
+                    )
+                ),
                 subject_sha256=str(row["payload_sha256"]),
                 occurred_at=now,
             )
+
+    def publish_attempts_for_reconciliation(
+        self, principal: Principal
+    ) -> list[dict[str, Any]]:
+        access_clause = ""
+        if principal.role is not Role.ORG_ADMIN:
+            access_clause = (
+                " AND EXISTS (SELECT 1 FROM repository_access access "
+                "WHERE access.organization_id=j.organization_id "
+                "AND access.repository_id=j.repository_id AND access.user_id=:user)"
+            )
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    "SELECT j.id, j.organization_id, j.repository_id, j.repository_alias, "
+                    "j.source_kind, j.source_ref, j.source_sha256, j.head_sha, j.state, "
+                    "r.policy_version, pa.id AS attempt_id, pa.status AS attempt_status, "
+                    "pa.approval_id, pa.idempotency_key, a.payload_sha256 AS approval_payload_sha256, "
+                    "a.head_sha AS approval_head_sha, a.policy_version AS approval_policy_version "
+                    "FROM publish_attempts pa "
+                    "JOIN publish_approvals a ON a.id=pa.approval_id "
+                    "AND a.organization_id=pa.organization_id "
+                    "AND a.review_job_id=pa.review_job_id "
+                    "JOIN review_jobs j ON j.id=pa.review_job_id "
+                    "AND j.organization_id=pa.organization_id "
+                    "JOIN repositories r ON r.id=j.repository_id "
+                    "AND r.organization_id=j.organization_id "
+                    "WHERE pa.organization_id=:org "
+                    "AND (pa.status='prepared' OR (pa.status='publishing' "
+                    "AND pa.reconcile_after <= :reconcile_at)) "
+                    "AND j.state='approved'"
+                    + access_clause
+                    + " ORDER BY pa.created_at, pa.id"
+                ),
+                {
+                    "org": principal.organization_id,
+                    "user": principal.user_id,
+                    "reconcile_at": utc_now(),
+                },
+            ).all()
+            records: list[dict[str, Any]] = []
+            for raw in rows:
+                row = _mapping(raw)
+                material = self._publication_material(connection, row)
+                if (
+                    material["payload_sha256"] != row["approval_payload_sha256"]
+                    or material["head_sha"] != row["approval_head_sha"]
+                    or material["policy_version"] != row["approval_policy_version"]
+                ):
+                    raise PublicationError("approval_payload_mismatch")
+                records.append(
+                    {
+                        "approval_id": str(row["approval_id"]),
+                        "review_job_id": str(row["id"]),
+                        "repository_id": str(row["repository_id"]),
+                        "decision": "approved",
+                        "head_sha": material["head_sha"],
+                        "payload_sha256": material["payload_sha256"],
+                        "policy_version": material["policy_version"],
+                        "_publish": {
+                            "attempt_id": str(row["attempt_id"]),
+                            "attempt_status": str(row["attempt_status"]),
+                            "idempotency_key": str(row["idempotency_key"]),
+                            "payload": material["payload"],
+                            "repository_alias": str(row["repository_alias"]),
+                            "pull_request": str(row["source_ref"]),
+                        },
+                    }
+                )
+        return records
 
     def publish_approvals_for_review(
         self, principal: Principal, review_job_id: str
@@ -1536,9 +1817,17 @@ class Database:
                 return []
             rows = connection.execute(
                 text(
-                    "SELECT id, principal_id, decision, head_sha, payload_sha256, policy_version, "
-                    "expires_at, used_at, created_at FROM publish_approvals WHERE organization_id=:org "
-                    "AND review_job_id=:job ORDER BY created_at, id"
+                    "SELECT pa.id, pa.principal_id, pa.principal_id AS approver_id, "
+                    "pa.repository_id, pa.review_job_id, j.repository_alias AS repository, "
+                    "j.source_ref AS pull_request, pa.decision, pa.head_sha, "
+                    "pa.payload_sha256, pp.finding_set_sha256, pa.policy_version, "
+                    "pa.expires_at, pa.used_at, pa.created_at "
+                    "FROM publish_approvals pa JOIN review_jobs j "
+                    "ON j.organization_id=pa.organization_id AND j.id=pa.review_job_id "
+                    "JOIN publish_proposals pp ON pp.organization_id=pa.organization_id "
+                    "AND pp.id=pa.proposal_id "
+                    "WHERE pa.organization_id=:org AND pa.review_job_id=:job "
+                    "ORDER BY pa.created_at, pa.id"
                 ),
                 {"org": principal.organization_id, "job": review_job_id},
             ).all()

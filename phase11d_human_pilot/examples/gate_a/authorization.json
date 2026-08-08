@@ -1,0 +1,100 @@
+{
+  "auth004_boundary": {
+    "authorization_id": "auth-004",
+    "completed": 0,
+    "failed": 5,
+    "headline_attempts": 5,
+    "no_backfill": true,
+    "no_replacement": true,
+    "no_rerun": true,
+    "selected_pr_count": 5,
+    "stable_category": "provider_or_pipeline_RuntimeError"
+  },
+  "authorization_id": "phase11d-gate-a-synthetic-auth",
+  "baseline": {
+    "local_master_at_start": "21344a2b72be8cb83361875b5cc8f2952e99ffbf",
+    "local_master_equal_origin_master": false,
+    "master_mutated_by_codex": false,
+    "origin_master_sha": "4af4b2756e8d2de6764d08e17a6e12040e24975e"
+  },
+  "canonical_authorization_sha256": "e885a322fc04919f124e29e3ad8626753316c1f2a388769b63e7e80052167a68",
+  "claim_boundary": {
+    "business_claim_allowed": false,
+    "formal_quality_status": "incomplete",
+    "model_quality_status": "not_measured",
+    "production_ready": false,
+    "real_github_writes": false,
+    "real_model_calls": false,
+    "real_pilot_executed": false
+  },
+  "cohort_sha256": "d68241d5358d57f8a9793effeedcb1112ce89c93c0076a1f6497c1647acaa724",
+  "confirmed_real_participant_count": 0,
+  "created_at_utc": "2026-08-03T00:00:00Z",
+  "gate": "gate_a",
+  "gate_b_required_fields_complete": false,
+  "github_policy": {
+    "comments_checks_labels_reviews_available": false,
+    "merge_api_available": false,
+    "protected_branch_mutation_available": false,
+    "publisher_mode": "fake_only"
+  },
+  "headline_manifest_sha256": "b4c3c4c2006ab03dff7d0e2dde3f03b5e4ff2fa2dd333b7b3f911bcf6e234077",
+  "incident_policy": {
+    "incident_owner_sha256": "01ebd910a39ec713c008d62cb95d465c904f35bfd0acac0d01849dfe17c80be3",
+    "kill_switch_active": false,
+    "kill_switch_sha256": "6ce5a890916d9704edc01f366953532720f467f987f3754d16b65c7bcad6541c"
+  },
+  "limits": {
+    "max_cached_tokens": 0,
+    "max_http_attempts": 0,
+    "max_input_tokens": 0,
+    "max_logical_calls": 0,
+    "max_micro_cny": 0,
+    "max_output_tokens": 0,
+    "max_real_branches": 0,
+    "max_real_commits": 0,
+    "max_real_draft_repair_prs": 0,
+    "max_real_pushes": 0,
+    "max_repair_jobs": 2,
+    "max_wall_clock_seconds": 0
+  },
+  "participants_declared_count": 3,
+  "permissions": {
+    "allow_agent_push_merge_master": false,
+    "allow_auto_merge": false,
+    "allow_comments_checks_labels_reviews": false,
+    "allow_default_branch_mutation": false,
+    "allow_pilot_pr_merge": false,
+    "allow_pilot_pr_ready": false,
+    "allow_real_draft_repair_pr": false,
+    "allow_real_github_repair_branch_push": false,
+    "allow_real_provider_calls": false
+  },
+  "phase11c_facts": {
+    "diagnostic_receipt_sha256": "97a887015e95e02e94460979dd170b36d01558ce71b882df272b1d2e8aa0a41c",
+    "diagnostic_status": "completed",
+    "final_evidence_archive_sha256": "e269f4394a25a812b4a2ac08e3c7b1dbc396e9356b5f522286372bae65abb9f2",
+    "headline_cohort_receipt_sha256": "107f664a6fb1f11caeb85682b648472e351f61b34b4db987ff7b32f3d0e1f146",
+    "headline_cohort_status": "inconclusive",
+    "headline_ledger_sha256": "680f3cc1938856cfcc00b1f9a9c1aa3dc233c97d6bd794f8409d039817760419",
+    "headline_terminal_category": "text_only_response"
+  },
+  "provider_policy": {
+    "provider_endpoint_allowlist": [],
+    "provider_model_snapshot": "not_authorized_gate_a",
+    "provider_text_only_response_terminal": true,
+    "usage_ambiguity_terminal": true
+  },
+  "real_rows_present": false,
+  "repository_allowlist_sha256": "2c83e92511396e15e567835538e4653ae7320ee80cb35b31ef538f92db871dba",
+  "retention_policy": {
+    "deletion_owner_process_sha256": "4211b9611994bdb61f8fd25c6e683227388cce69581d79a3513e1af68b8fc9a5",
+    "feedback_retention_days": 0,
+    "metadata_retention_days": 0,
+    "raw_content_retention_days": 0
+  },
+  "schema_version": "crag.phase11d.authorization/v1alpha1",
+  "selected_pr_count": 20,
+  "selection_sha256": "c59bc6d2a29e08d9da430904778648295c8dc3fd3c27d31cbd486b90d2eb24e2",
+  "synthetic_rows_present": true
+}
