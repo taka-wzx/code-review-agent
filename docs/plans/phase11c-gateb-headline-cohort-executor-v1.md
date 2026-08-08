@@ -1,8 +1,59 @@
 # Phase 11C Gate B Headline Cohort Executor v1
 
-Status: **offline implementation refresh in progress. The user has authorized the
-non-payment continuation actions required to complete Phase 11C, including source
-changes, branch updates, ECS freeze, evidence collection, and PR maintenance.**
+Status: **live execution completed with an inconclusive HEADLINE_COHORT terminal
+receipt.** The refreshed same-image DIAGNOSTIC completed successfully, the
+HEADLINE_COHORT authorization was exactly approved and consumed, and the headline
+cohort stopped after target 1 returned a provider text-only response rather than
+the required tool-submit shape. This is a valid fail-closed terminal outcome, not
+a successful headline completion.
+
+Live DIAGNOSTIC attempt `receipt_sha256=600378cc1871aeef3e3d65c566246e0815c3986c4ca8c1e45514f3a0614b8188`
+consumed the first headline-cohort state volume and failed closed as
+`provider_usage_schema_invalid` after exactly one 2xx provider attempt. It is
+retained as counted evidence only and is not eligible for headline binding. The
+continuation hardens usage parsing for provider-owned usage detail extensions and
+moves the dedicated state volume to v2 so the consumed v1 evidence is not reused,
+overwritten, or silently ignored.
+
+Final live run evidence from commit `59aa4c979b64f65e57dc597382268a19775b74f5`
+is:
+
+- Source freeze archive SHA-256:
+  `896dba141d358c1fdf01d8716ad2ecf9e9b1d2cdea2cf28bc3b71948a567cdfb`.
+- Frozen image ID:
+  `sha256:7a667f410d96e1b2e9b78a8a068af958f63844f5ee30678820339fbc9a200a32`.
+- Runtime identity SHA-256:
+  `5f0bb392827efd0ec5ad0afde33f3d1cc643a98be1df610db99cb9209327ef64`.
+- DIAGNOSTIC authorization SHA-256:
+  `6c0838cb857ed3a64a6e51583a0f7e1638a663e4a09cdd7560f2bbed399fce5b`.
+- DIAGNOSTIC approval binding SHA-256:
+  `1cd38a699bdc6a8f3bd907444038e072bb58f765847fac30c30301729dfc9fc3`.
+- DIAGNOSTIC receipt SHA-256:
+  `97a887015e95e02e94460979dd170b36d01558ce71b882df272b1d2e8aa0a41c`.
+- DIAGNOSTIC terminal result: `completed`, `provider_terminal_match`,
+  `provider_call_count=1`, `http_attempt_count=1`, `estimated_microcny=564`,
+  `reserved_microcny=19,584`.
+- HEADLINE_COHORT authorization SHA-256:
+  `df8d82157a9b3490bc53810e5e7ecdd9163bd5f8b4c01f24257f97b40dd6ca00`.
+- HEADLINE_COHORT approval binding SHA-256:
+  `87541750aabe8a3d13b3eb47170b1dfa1dba77723157d40ce7c6d2c5deceea6a`.
+- HEADLINE_COHORT receipt SHA-256:
+  `107f664a6fb1f11caeb85682b648472e351f61b34b4db987ff7b32f3d0e1f146`.
+- HEADLINE_COHORT ledger SHA-256:
+  `680f3cc1938856cfcc00b1f9a9c1aa3dc233c97d6bd794f8409d039817760419`.
+- HEADLINE_COHORT terminal result: `inconclusive`; target 1 terminal category
+  `text_only_response`; targets 2 and 3 `not_run_gate_blocked`;
+  `completed_target_count=0`, `provider_call_count=2`, `http_attempt_count=2`,
+  `estimated_microcny=117,504`, `reserved_microcny=117,504`.
+- Final volume export hashes:
+  `cohort-receipt.json=56b2e652329449b3aca8dc5e20507111364086edba37fa33a4f577717fda58e7`,
+  `ledger.json=a2e1a68e1f51d922dfdde4890bb8e47d7c4bfc22e7828f43d55e65d7448d6c5d`,
+  `terminal-envelope.json=44c45d55e14d954de663cee5e044fb72946aae9cff8675b83d3d9a0ade0aac85`.
+- Final operator-retained evidence archive SHA-256:
+  `e269f4394a25a812b4a2ac08e3c7b1dbc396e9356b5f522286372bae65abb9f2`.
+- The operator reported deletion of the ECS one-time credential file and both
+  approval files after final evidence archival. The provider-side API key should
+  remain revoked or deleted if it was created only for Gate B.
 
 ## Continuation authority and non-delegable approvals
 
@@ -43,11 +94,12 @@ image, runtime, credential binding, and policy/tariff evidence that will later b
 used by the headline cohort. Only its new sanitized receipt may enter the subsequent
 `HEADLINE_COHORT` binding.
 
-This task may only create and test the combined separate executor, schema,
-deployment definition, and candidate binding mechanism. It must not read a
-credential, open a provider socket, create an ECS resource, build an ECS image, push
-a branch, or execute either stage until a later exact freeze and the applicable
-one-use human approval.
+The offline implementation and tests must not read a credential or open a provider
+socket. The owner has separately authorized the existing ECS to be used for the
+later offline freeze, image build, deployment evidence collection, and credential
+metadata/fingerprint check. Those preparation actions do not authorize a provider
+dispatch. A live DIAGNOSTIC or headline request still requires its newly generated,
+one-use exact approval text.
 
 ## Implemented offline boundary
 
@@ -94,15 +146,19 @@ Codex is the sole writer for exactly these new files:
 
 - `docs/plans/phase11c-gateb-headline-cohort-executor-v1.md`;
 - `phase11c_gateb_headline_cohort_executor.py`;
+- `phase11c_gateb_freeze.py`;
 - `schemas/phase11c-gateb-protocol-diagnostic-authorization.schema.json`;
 - `schemas/phase11c-gateb-protocol-diagnostic-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-authorization.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-target-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-receipt.schema.json`;
 - `schemas/phase11c-gateb-headline-cohort-ledger.schema.json`;
+- `schemas/phase11c-gateb-execution-freeze.schema.json`;
+- `schemas/phase11c-gateb-preflight.schema.json`;
 - `Dockerfile.phase11c-gateb-headline`;
 - `compose.phase11c-gateb-headline.yml`;
 - `tests/test_phase11c_gateb_headline_cohort_executor.py`.
+- `tests/test_phase11c_gateb_freeze.py`.
 
 Every other path is read-only. In particular, Phase 11B artifacts, the prior Gate A
 executor, the prior DIAGNOSTIC executor and receipt, `src/`, public interfaces,
@@ -159,9 +215,37 @@ target is retained in the denominator; no target is retried, replaced, or silent
 omitted.
 
 The old one-shot image's approval, state volume, and credential are consumed evidence
-only. They must not be reused. A later exact execution must use a new dedicated
-credential path and a new state volume named
-`phase11c-gateb-headline-cohort-state-v1`.
+only. They must not be reused. The failed first headline-cohort DIAGNOSTIC state
+volume is also consumed evidence only. A later exact execution must use the
+dedicated credential path and the new state volume named
+`phase11c-gateb-headline-cohort-state-v2`.
+
+### Freeze-chain implementation
+
+`phase11c_gateb_freeze.py` creates a single-direction, offline chain:
+
+```text
+immutable execution materials → execution-freeze → preflight → authorization → exact human approval
+```
+
+It derives the authorization ID deterministically from the stage and immutable freeze
+subject, checks that the source archive contains the exact executable tree, hashes
+only the rendered deployment/runtime/policy/tariff evidence, and checks the dedicated
+credential file without emitting its value. The execution freeze is deliberately
+stage-specific; its SHA and the preflight SHA are direct fields of the matching
+authorization and exact approval binding. The headline freeze is only permitted after
+it verifies the completed, same-image diagnostic lineage.
+
+The live executor reads the matching sealed execution-freeze and preflight files
+before it reads an approval, credential, or opens a provider connection. It
+reconstructs the freeze subject, authorization ID, baseline, policy, time-window,
+budget, ownership, deployment, and preflight-check bindings; a standalone authorization
+seal is therefore insufficient for dispatch.
+
+The freeze/preflight output contains no credential value, provider response, raw
+prompt, tool arguments, host path, public IP, hostname, or runtime evidence body. It
+may retain the policy URLs required by the original Phase 11C contract, canonical
+hashes, fixed enums, booleans, UTC timestamps, and non-negative integer budgets.
 
 ## Offline command interface
 
@@ -182,6 +266,18 @@ credential path and a new state volume named
   terminal receipt exits nonzero. The supplied Compose file contains no `build:`
   stanza and pins `pull_policy: never`; future deployment must use the exact local
   image ID and must not rebuild or pull during execution.
+- `phase11c_gateb_freeze.py freeze-diagnostic` and `freeze-headline` are offline
+  host-side preparation commands. They produce sealed authorization, runtime,
+  tariff, preflight, and execution-freeze JSON but do not construct a transport or
+  call a provider. `capture-runtime-evidence` only hashes an existing Docker-server
+  inventory and local OS metadata for the already-authorized ECS instance.
+  Each command writes the Compose control names directly into its distinct output
+  directory: `authorization.json`, `runtime-config.json`, `tariff-manifest.json`,
+  `preflight.json`, and `execution-freeze.json`.
+- The rendered deployment evidence must include every service, including the profile
+  services: use `docker compose --profile headline --profile recovery -f
+  compose.phase11c-gateb-headline.yml config --format yaml` on the ECS before the
+  freeze command. The default profile output is intentionally rejected as incomplete.
 
 ## Offline acceptance and validation
 

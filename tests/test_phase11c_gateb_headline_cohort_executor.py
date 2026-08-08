@@ -7,7 +7,9 @@ import inspect
 import json
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+import phase11c_gateb_freeze as freeze
 import phase11c_gateb_headline_cohort_executor as protocol
 
 
@@ -22,14 +24,22 @@ def _sha(character: str) -> str:
 
 def _freeze_values() -> dict[str, object]:
     return {
+        "authorization_id": "p11c-gateb-0123456789abcdef0123456789abcdef",
+        "execution_freeze_sha256": _sha("f"),
+        "executable_commit_sha": "d" * 40,
         "source_tree_sha256": _sha("1"),
+        "source_archive_sha256": _sha("b"),
         "dockerfile_sha256": _sha("2"),
         "compose_sha256": _sha("3"),
         "image_sha256": _sha("4"),
         "deployment_sha256": _sha("5"),
+        "runtime_config_sha256": _sha("c"),
         "runtime_identity_sha256": _sha("6"),
+        "aliyun_runtime_identity_sha256": _sha("6"),
         "provider_policy_evidence_sha256": _sha("8"),
         "provider_tariff_evidence_sha256": _sha("9"),
+        "provider_tariff_manifest_sha256": _sha("e"),
+        "preflight_verdict_sha256": _sha("a"),
         "credential_fingerprint_sha256": hashlib.sha256(b"fake-key").hexdigest(),
         "authorization_window_start_utc": (NOW - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "authorization_window_end_utc": (NOW + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -140,6 +150,20 @@ def _diagnostic_response(content: str = protocol.DIAGNOSTIC_TERMINAL_TOKEN, *, u
     return protocol.HttpResult(200, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
 
 
+def _diagnostic_response_with_provider_usage_details() -> protocol.HttpResult:
+    payload: dict[str, object] = {
+        "choices": [{"message": {"content": protocol.DIAGNOSTIC_TERMINAL_TOKEN}}],
+        "usage": {
+            "prompt_tokens": 12,
+            "completion_tokens": 7,
+            "total_tokens": 19,
+            "prompt_tokens_details": {"cached_tokens": 0, "provider_reserved_tokens": 0},
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        },
+    }
+    return protocol.HttpResult(200, json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+
+
 def _completed_diagnostic() -> tuple[dict[str, object], dict[str, object]]:
     authorization = _diagnostic_authorization()
     binding = protocol.diagnostic_approval_binding_sha256(authorization)
@@ -168,6 +192,79 @@ def _lineage() -> tuple[dict[str, object], dict[str, object], dict[str, object]]
 
 
 class CanonicalAndAuthorizationTests(unittest.TestCase):
+    def test_live_control_chain_requires_exact_freeze_and_preflight(self) -> None:
+        materials = freeze.FreezeMaterials(
+            executable_source_sha256=protocol.source_sha256(),
+            executable_commit_sha="d" * 40,
+            source_tree_sha256=_sha("1"),
+            source_archive_sha256=_sha("2"),
+            dockerfile_sha256=_sha("3"),
+            compose_sha256=_sha("4"),
+            image_sha256=_sha("5"),
+            deployment_sha256=_sha("6"),
+            runtime_identity_sha256=_sha("7"),
+            provider_policy_evidence_sha256=_sha("8"),
+            provider_tariff_evidence_sha256=_sha("9"),
+            credential_fingerprint_sha256=hashlib.sha256(b"fake-key").hexdigest(),
+        )
+        result = freeze.freeze_diagnostic(
+            materials=materials,
+            window_start_utc=(NOW - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            window_end_utc=(NOW + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            policy_url=freeze.POLICY_URL,
+            retention_policy_url=freeze.RETENTION_POLICY_URL,
+            policy_reviewed_at_utc="2030-01-02T03:00:00Z",
+            tariff_observed_at_utc="2030-01-02T03:00:00Z",
+            tariff_effective_date="2030-01-02",
+            now_utc=SEAL_NOW,
+        )
+        authorization = result["authorization"]
+        controls = [
+            protocol.canonical_json(result["execution_freeze"]),
+            protocol.canonical_json(result["preflight"]),
+        ]
+        with patch.object(protocol, "_read_fixed_control_file", side_effect=controls):
+            protocol._validate_live_control_chain(
+                authorization,
+                stage="DIAGNOSTIC",
+                execution_freeze_path=protocol.DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+                preflight_path=protocol.DIAGNOSTIC_PREFLIGHT_PATH,
+            )
+        tampered = dict(result["preflight"])
+        tampered["canary_allowed"] = False
+        with patch.object(
+            protocol,
+            "_read_fixed_control_file",
+            side_effect=[protocol.canonical_json(result["execution_freeze"]), protocol.canonical_json(tampered)],
+        ):
+            with self.assertRaisesRegex(protocol.HeadlineCohortError, "preflight_sha256_mismatch"):
+                protocol._validate_live_control_chain(
+                    authorization,
+                    stage="DIAGNOSTIC",
+                    execution_freeze_path=protocol.DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+                    preflight_path=protocol.DIAGNOSTIC_PREFLIGHT_PATH,
+                )
+
+    def test_live_path_requires_stage_control_documents(self) -> None:
+        reads: list[Path] = []
+
+        def fake_read(path: Path, *, maximum_bytes: int, exact_mode: int) -> bytes:
+            reads.append(path)
+            return b"{}"
+
+        with patch.object(protocol, "_read_fixed_control_file", side_effect=fake_read):
+            with self.assertRaisesRegex(protocol.HeadlineCohortError, "control_document_keys_invalid"):
+                protocol._validate_live_control_chain(
+                    {},
+                    stage="DIAGNOSTIC",
+                    execution_freeze_path=protocol.DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+                    preflight_path=protocol.DIAGNOSTIC_PREFLIGHT_PATH,
+                )
+        self.assertEqual(
+            reads,
+            [protocol.DIAGNOSTIC_EXECUTION_FREEZE_PATH, protocol.DIAGNOSTIC_PREFLIGHT_PATH],
+        )
+
     def test_strict_json_rejects_duplicate_keys_and_floats(self) -> None:
         with self.assertRaisesRegex(protocol.HeadlineCohortError, "duplicate_json_key"):
             protocol.strict_json_loads('{"a":1,"a":2}')
@@ -216,6 +313,23 @@ class DiagnosticTests(unittest.TestCase):
         self.assertEqual(receipt["authorization_sha256"], authorization["authorization_sha256"])
         self.assertEqual(receipt["reserved_microcny"], 19584)
         self.assertTrue(receipt["redaction_applied"])
+        self.assertEqual(protocol.validate_completed_diagnostic_receipt(receipt), receipt)
+
+    def test_diagnostic_accepts_provider_usage_detail_extensions(self) -> None:
+        authorization = _diagnostic_authorization()
+        binding = protocol.diagnostic_approval_binding_sha256(authorization)
+        receipt = protocol.execute_diagnostic(
+            authorization,
+            protocol.expected_diagnostic_approval_text(binding),
+            store=protocol.InMemoryDiagnosticStateStore(),
+            credential_reader=FakeCredential(),
+            transport=FakeTransport([_diagnostic_response_with_provider_usage_details()]),
+            now_utc=NOW,
+        )
+        self.assertEqual(receipt["execution_status"], "completed")
+        self.assertTrue(receipt["usage_known"])
+        self.assertEqual(receipt["input_tokens_used"], 12)
+        self.assertEqual(receipt["output_tokens_used"], 7)
         self.assertEqual(protocol.validate_completed_diagnostic_receipt(receipt), receipt)
 
     def test_diagnostic_usage_or_terminal_mismatch_is_not_eligible(self) -> None:
@@ -554,6 +668,14 @@ class ArtifactAndSourceGuardTests(unittest.TestCase):
         self.assertNotIn("build:", compose)
         self.assertIn("read_only: true", compose)
         self.assertIn("cap_drop:", compose)
+        diagnostic = compose.split("gateb-protocol-diagnostic:", 1)[1].split("gateb-protocol-headline:", 1)[0]
+        self.assertIn("run-diagnostic", diagnostic)
+        self.assertNotIn("/run/crag-gateb-headline/", diagnostic)
+        headline = compose.split("gateb-protocol-headline:", 1)[1].split("gateb-protocol-recovery:", 1)[0]
+        self.assertIn("run-headline", headline)
+        self.assertNotIn("/run/crag-gateb-diagnostic/approval.txt", headline)
+        self.assertIn("/run/crag-gateb-diagnostic/execution-freeze.json", headline)
+        self.assertIn("/run/crag-gateb-diagnostic/preflight.json", headline)
         self.assertIn("gateb-protocol-recovery:", compose)
         recovery = compose.split("gateb-protocol-recovery:", 1)[1]
         self.assertIn("network_mode: none", recovery)

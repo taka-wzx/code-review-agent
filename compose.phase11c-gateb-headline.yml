@@ -1,5 +1,5 @@
 services:
-  gateb-protocol:
+  gateb-protocol-diagnostic:
     image: "${PHASE11C_GATEB_HEADLINE_IMAGE:?set PHASE11C_GATEB_HEADLINE_IMAGE to the frozen local sha256 image ID}"
     pull_policy: never
     user: "0:0"
@@ -30,12 +30,67 @@ services:
         target: /run/crag-gateb-diagnostic/approval.txt
         read_only: true
       - type: bind
+        source: /run/crag-gateb-diagnostic/execution-freeze.json
+        target: /run/crag-gateb-diagnostic/execution-freeze.json
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-diagnostic/preflight.json
+        target: /run/crag-gateb-diagnostic/preflight.json
+        read_only: true
+      - type: volume
+        source: gateb-protocol-state
+        target: /var/lib/crag-gateb-headline
+
+  gateb-protocol-headline:
+    profiles: ["headline"]
+    image: "${PHASE11C_GATEB_HEADLINE_IMAGE:?set PHASE11C_GATEB_HEADLINE_IMAGE to the frozen local sha256 image ID}"
+    pull_policy: never
+    user: "0:0"
+    command: ["run-headline"]
+    restart: "no"
+    network_mode: bridge
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    cpus: 0.50
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=4m,mode=0700
+    volumes:
+      - type: bind
+        source: /run/crag-gateb-protocol/glm_api_key
+        target: /run/crag-gateb-protocol/glm_api_key
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-diagnostic/authorization.json
+        target: /run/crag-gateb-diagnostic/authorization.json
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-diagnostic/execution-freeze.json
+        target: /run/crag-gateb-diagnostic/execution-freeze.json
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-diagnostic/preflight.json
+        target: /run/crag-gateb-diagnostic/preflight.json
+        read_only: true
+      - type: bind
         source: /run/crag-gateb-headline/authorization.json
         target: /run/crag-gateb-headline/authorization.json
         read_only: true
       - type: bind
         source: /run/crag-gateb-headline/approval.txt
         target: /run/crag-gateb-headline/approval.txt
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-headline/execution-freeze.json
+        target: /run/crag-gateb-headline/execution-freeze.json
+        read_only: true
+      - type: bind
+        source: /run/crag-gateb-headline/preflight.json
+        target: /run/crag-gateb-headline/preflight.json
         read_only: true
       - type: volume
         source: gateb-protocol-state
@@ -97,4 +152,4 @@ services:
 
 volumes:
   gateb-protocol-state:
-    name: phase11c-gateb-headline-cohort-state-v1
+    name: phase11c-gateb-headline-cohort-state-v2

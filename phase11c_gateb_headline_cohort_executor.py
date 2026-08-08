@@ -40,6 +40,8 @@ LEDGER_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-ledger/v1"
 TERMINAL_ENVELOPE_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-terminal-envelope/v1"
 STATE_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-state/v1"
 APPROVAL_BINDING_SCHEMA_VERSION = "phase11c-gateb-headline-cohort-approval-binding/v1"
+EXECUTION_FREEZE_SCHEMA_VERSION = "phase11c-gateb-execution-freeze/v1"
+PREFLIGHT_SCHEMA_VERSION = "phase11c-gateb-preflight/v1"
 
 OWNER_ACCOUNT = "taka-wzx"
 PROVIDER = "glm"
@@ -49,6 +51,16 @@ ENDPOINT_ID = "glm_standard_v4"
 ENDPOINT_HOST = "open.bigmodel.cn"
 ENDPOINT_PORT = 443
 ENDPOINT_PATH = "/api/paas/v4/chat/completions"
+
+BASELINE_MASTER_SHA = "4af4b2756e8d2de6764d08e17a6e12040e24975e"
+BASELINE_CI_RUN = 30_451_250_259
+BASELINE_CI_ATTEMPT = 1
+BASELINE_CI_CONCLUSION = "success"
+PHASE11B_ACCEPTANCE_REPORT_SHA256 = "354398234ee34773f26b1811ece62a5ccc7ed9fd18472adb11e1907bec25c6f7"
+PHASE11B_AUTHORIZATION_SHA256 = "73c8367ce00ce4ad77798dbd1bcbf0f3995528096b18924f2a198ba290796745"
+PHASE11B_RUNTIME_CONFIG_SHA256 = "e1a3d3adadc78ab0b11e8d28b60ba05552c503edf7b91661e895d24cb5ea8bdc"
+POLICY_URL = "https://docs.bigmodel.cn/cn/terms/service-agreement"
+RETENTION_POLICY_URL = "https://docs.bigmodel.cn/cn/terms/privacy-policy"
 
 # Historical evidence only.  A headline authorization must bind a fresh receipt
 # produced by this exact final executable and image.
@@ -86,12 +98,17 @@ MAX_PROVIDER_USAGE_COUNTER = 1_000_000
 STOP_POLICY = "stop_on_first_noncompleted_or_unknown_or_ambiguous"
 MAX_TOOL_CALL_ID_BYTES = 128
 MAX_TOOL_ARGUMENT_BYTES = 512
+STATE_VOLUME_NAME = "phase11c-gateb-headline-cohort-state-v2"
 
 CREDENTIAL_PATH = Path("/run/crag-gateb-protocol/glm_api_key")
 AUTHORIZATION_PATH = Path("/run/crag-gateb-headline/authorization.json")
 APPROVAL_PATH = Path("/run/crag-gateb-headline/approval.txt")
 DIAGNOSTIC_AUTHORIZATION_PATH = Path("/run/crag-gateb-diagnostic/authorization.json")
 DIAGNOSTIC_APPROVAL_PATH = Path("/run/crag-gateb-diagnostic/approval.txt")
+DIAGNOSTIC_EXECUTION_FREEZE_PATH = Path("/run/crag-gateb-diagnostic/execution-freeze.json")
+DIAGNOSTIC_PREFLIGHT_PATH = Path("/run/crag-gateb-diagnostic/preflight.json")
+HEADLINE_EXECUTION_FREEZE_PATH = Path("/run/crag-gateb-headline/execution-freeze.json")
+HEADLINE_PREFLIGHT_PATH = Path("/run/crag-gateb-headline/preflight.json")
 STATE_DIRECTORY = Path("/var/lib/crag-gateb-headline")
 STATE_PATH = STATE_DIRECTORY / "state.json"
 COHORT_RECEIPT_PATH = STATE_DIRECTORY / "cohort-receipt.json"
@@ -102,11 +119,30 @@ LOCK_PATH = STATE_DIRECTORY / "state.lock"
 PENDING_FREEZE = "PENDING_FREEZE"
 ZERO_SHA256 = "0" * 64
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_GIT_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _OWNER = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\Z")
+_AUTHORIZATION_ID = re.compile(r"p11c-gateb-[0-9a-f]{32}\Z")
 _TOOL_CALL_ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _FCHMOD = getattr(os, "fchmod", None)
+
+CONTROL_FREEZE_BINDING_FIELDS = frozenset(
+    {
+        "runtime_config_sha256", "executable_commit_sha", "executable_source_sha256", "source_tree_sha256",
+        "source_archive_sha256", "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256",
+        "runtime_identity_sha256", "cohort_manifest_sha256", "provider_policy_evidence_sha256",
+        "provider_tariff_evidence_sha256", "provider_tariff_manifest_sha256", "credential_fingerprint_sha256",
+    }
+)
+CONTROL_PREFLIGHT_CHECK_FIELDS = frozenset(
+    {
+        "baseline_verified", "offline_fixtures_verified", "redaction_verified", "endpoint_tls_verified",
+        "redirect_denied", "retry_policy_verified", "budget_reservation_verified", "cohort_nonoverlap_verified",
+        "credential_file_security_verified", "provider_policy_accepted", "authorization_window_valid",
+        "kill_switch_bound", "publisher_fake_only", "binding_hashes_match",
+    }
+)
 
 # These identifiers and payload hashes are the first three manifest entries generated
 # by the Gate A deterministic cohort.  They are safe metadata, not source material.
@@ -512,12 +548,16 @@ def diagnostic_request_sha256() -> str:
 
 SAME_IMAGE_FREEZE_FIELDS = (
     "executable_source_sha256",
+    "executable_commit_sha",
     "source_tree_sha256",
+    "source_archive_sha256",
     "dockerfile_sha256",
     "compose_sha256",
     "image_sha256",
     "deployment_sha256",
+    "runtime_config_sha256",
     "runtime_identity_sha256",
+    "aliyun_runtime_identity_sha256",
     "provider",
     "request_model_id",
     "api_surface",
@@ -525,6 +565,7 @@ SAME_IMAGE_FREEZE_FIELDS = (
     "endpoint_sha256",
     "provider_policy_evidence_sha256",
     "provider_tariff_evidence_sha256",
+    "provider_tariff_manifest_sha256",
     "credential_delivery_mode",
     "credential_fingerprint_sha256",
     "owner_account",
@@ -533,15 +574,18 @@ SAME_IMAGE_FREEZE_FIELDS = (
 
 AUTHORIZATION_FIELDS = frozenset(
     {
-        "schema_version", "phase_id", "stage", "authorization_status", "authorization_sha256",
-        "executable_source_sha256", "source_tree_sha256", "dockerfile_sha256", "compose_sha256",
-        "image_sha256", "deployment_sha256", "runtime_identity_sha256", "diagnostic_receipt_sha256",
+        "schema_version", "phase_id", "stage", "authorization_id", "authorization_status", "authorization_sha256",
+        "execution_freeze_sha256",
+        "executable_source_sha256", "executable_commit_sha", "source_tree_sha256", "source_archive_sha256",
+        "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256", "runtime_config_sha256",
+        "runtime_identity_sha256", "aliyun_runtime_identity_sha256", "diagnostic_receipt_sha256",
         "diagnostic_authorization_sha256", "diagnostic_approval_binding_sha256",
         "cohort_manifest_sha256", "parent_gate_a_cohort_manifest_sha256", "auth004_nonoverlap_evidence_sha256",
         "auth004_intersection_count", "exact_headline_denominator", "target_bindings", "provider",
         "request_model_id", "api_surface", "endpoint_id", "endpoint_sha256", "request_protocol_sha256",
         "initial_request_template_sha256", "tool_schema_sha256", "synthetic_tool_result_sha256",
-        "provider_policy_evidence_sha256", "provider_policy_accepted", "provider_tariff_evidence_sha256", "credential_delivery_mode",
+        "provider_policy_evidence_sha256", "provider_policy_accepted", "provider_tariff_evidence_sha256",
+        "provider_tariff_manifest_sha256", "preflight_verdict_sha256", "credential_delivery_mode",
         "credential_fingerprint_sha256", "owner_account", "owner_reconfirmed", "kill_switch_bound",
         "authorization_window_start_utc", "authorization_window_end_utc", "headline_logical_call_cap",
         "headline_http_attempt_cap", "headline_input_token_cap", "headline_output_token_cap",
@@ -559,15 +603,21 @@ def build_authorization_template() -> dict[str, Any]:
         "schema_version": AUTHORIZATION_SCHEMA_VERSION,
         "phase_id": PHASE_ID,
         "stage": "HEADLINE_COHORT",
+        "authorization_id": PENDING_FREEZE,
         "authorization_status": "frozen_pending_exact_approval",
         "authorization_sha256": "",
+        "execution_freeze_sha256": PENDING_FREEZE,
         "executable_source_sha256": source_sha256(),
+        "executable_commit_sha": PENDING_FREEZE,
         "source_tree_sha256": PENDING_FREEZE,
+        "source_archive_sha256": PENDING_FREEZE,
         "dockerfile_sha256": PENDING_FREEZE,
         "compose_sha256": PENDING_FREEZE,
         "image_sha256": PENDING_FREEZE,
         "deployment_sha256": PENDING_FREEZE,
+        "runtime_config_sha256": PENDING_FREEZE,
         "runtime_identity_sha256": PENDING_FREEZE,
+        "aliyun_runtime_identity_sha256": PENDING_FREEZE,
         "diagnostic_receipt_sha256": PENDING_FREEZE,
         "diagnostic_authorization_sha256": PENDING_FREEZE,
         "diagnostic_approval_binding_sha256": PENDING_FREEZE,
@@ -589,6 +639,8 @@ def build_authorization_template() -> dict[str, Any]:
         "provider_policy_evidence_sha256": PENDING_FREEZE,
         "provider_policy_accepted": True,
         "provider_tariff_evidence_sha256": PENDING_FREEZE,
+        "provider_tariff_manifest_sha256": PENDING_FREEZE,
+        "preflight_verdict_sha256": PENDING_FREEZE,
         "credential_delivery_mode": "fixed_linux_ecs_one_time_file",
         "credential_fingerprint_sha256": PENDING_FREEZE,
         "owner_account": OWNER_ACCOUNT,
@@ -636,6 +688,8 @@ def _validate_authorization_common(
         _fail("authorization_identity_mismatch")
     if authorization["stage"] != "HEADLINE_COHORT" or authorization["authorization_status"] != "frozen_pending_exact_approval":
         _fail("authorization_status_mismatch")
+    if not isinstance(authorization["authorization_id"], str) or not _AUTHORIZATION_ID.fullmatch(authorization["authorization_id"]):
+        _fail("authorization_id_mismatch")
     if sealed:
         _validate_seal(authorization, "authorization_sha256", "authorization_sha256_mismatch")
     elif authorization["authorization_sha256"] != "":
@@ -643,12 +697,18 @@ def _validate_authorization_common(
     if authorization["executable_source_sha256"] != _expect_sha256(executable_source_digest, "invalid_source", allow_zero=False):
         _fail("executable_source_sha256_drift")
     for field in (
-        "source_tree_sha256", "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256",
-        "runtime_identity_sha256", "provider_policy_evidence_sha256", "provider_tariff_evidence_sha256",
+        "source_tree_sha256", "source_archive_sha256", "dockerfile_sha256", "compose_sha256", "image_sha256",
+        "deployment_sha256", "runtime_config_sha256", "runtime_identity_sha256", "aliyun_runtime_identity_sha256",
+        "provider_policy_evidence_sha256", "provider_tariff_evidence_sha256", "provider_tariff_manifest_sha256",
+        "execution_freeze_sha256",
         "credential_fingerprint_sha256", "diagnostic_receipt_sha256", "diagnostic_authorization_sha256",
-        "diagnostic_approval_binding_sha256", "auth004_nonoverlap_evidence_sha256",
+        "diagnostic_approval_binding_sha256", "auth004_nonoverlap_evidence_sha256", "preflight_verdict_sha256",
     ):
         _expect_sha256(authorization[field], f"invalid_{field}", allow_zero=False)
+    if not isinstance(authorization["executable_commit_sha"], str) or not _GIT_COMMIT.fullmatch(authorization["executable_commit_sha"]):
+        _fail("invalid_executable_commit_sha")
+    if authorization["runtime_identity_sha256"] != authorization["aliyun_runtime_identity_sha256"]:
+        _fail("runtime_identity_binding_mismatch")
     expected = {
         "cohort_manifest_sha256": cohort_manifest_sha256(),
         "parent_gate_a_cohort_manifest_sha256": GATE_A_COHORT_MANIFEST_SHA256,
@@ -758,21 +818,39 @@ def approval_binding_sha256(authorization: Mapping[str, Any]) -> str:
         canonical_json(
             {
                 "authorization_sha256": authorization["authorization_sha256"],
+                "authorization_id": authorization["authorization_id"],
+                "execution_freeze_sha256": authorization["execution_freeze_sha256"],
                 "authorization_window_end_utc": authorization["authorization_window_end_utc"],
                 "authorization_window_start_utc": authorization["authorization_window_start_utc"],
+                "aggregate_remaining_microcny": authorization["aggregate_remaining_microcny"],
+                "aggregate_remaining_after_reservation_microcny": authorization["aggregate_remaining_after_reservation_microcny"],
                 "cohort_manifest_sha256": authorization["cohort_manifest_sha256"],
+                "compose_sha256": authorization["compose_sha256"],
                 "credential_fingerprint_sha256": authorization["credential_fingerprint_sha256"],
+                "deployment_sha256": authorization["deployment_sha256"],
                 "diagnostic_receipt_sha256": authorization["diagnostic_receipt_sha256"],
                 "diagnostic_authorization_sha256": authorization["diagnostic_authorization_sha256"],
                 "diagnostic_approval_binding_sha256": authorization["diagnostic_approval_binding_sha256"],
                 "endpoint_sha256": authorization["endpoint_sha256"],
                 "exact_headline_denominator": authorization["exact_headline_denominator"],
                 "executable_source_sha256": authorization["executable_source_sha256"],
+                "executable_commit_sha": authorization["executable_commit_sha"],
                 "headline_budget_microcny": authorization["headline_budget_microcny"],
+                "headline_http_attempt_cap": authorization["headline_http_attempt_cap"],
+                "headline_input_token_cap": authorization["headline_input_token_cap"],
+                "headline_logical_call_cap": authorization["headline_logical_call_cap"],
+                "headline_output_token_cap": authorization["headline_output_token_cap"],
                 "image_sha256": authorization["image_sha256"],
                 "phase_id": PHASE_ID,
                 "provider_policy_evidence_sha256": authorization["provider_policy_evidence_sha256"],
                 "provider_tariff_evidence_sha256": authorization["provider_tariff_evidence_sha256"],
+                "provider_tariff_manifest_sha256": authorization["provider_tariff_manifest_sha256"],
+                "preflight_verdict_sha256": authorization["preflight_verdict_sha256"],
+                "runtime_config_sha256": authorization["runtime_config_sha256"],
+                "runtime_identity_sha256": authorization["runtime_identity_sha256"],
+                "source_tree_sha256": authorization["source_tree_sha256"],
+                "source_archive_sha256": authorization["source_archive_sha256"],
+                "dockerfile_sha256": authorization["dockerfile_sha256"],
                 "request_model_id": authorization["request_model_id"],
                 "schema_version": APPROVAL_BINDING_SCHEMA_VERSION,
                 "stage": "HEADLINE_COHORT",
@@ -794,11 +872,14 @@ def validate_approval_text(value: Any, binding_sha256: str) -> None:
 
 DIAGNOSTIC_AUTHORIZATION_FIELDS = frozenset(
     {
-        "schema_version", "phase_id", "stage", "authorization_status", "authorization_sha256",
-        "executable_source_sha256", "source_tree_sha256", "dockerfile_sha256", "compose_sha256",
-        "image_sha256", "deployment_sha256", "runtime_identity_sha256", "provider", "request_model_id",
+        "schema_version", "phase_id", "stage", "authorization_id", "authorization_status", "authorization_sha256",
+        "execution_freeze_sha256",
+        "executable_source_sha256", "executable_commit_sha", "source_tree_sha256", "source_archive_sha256",
+        "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256", "runtime_config_sha256",
+        "runtime_identity_sha256", "aliyun_runtime_identity_sha256", "provider", "request_model_id",
         "api_surface", "endpoint_id", "endpoint_sha256", "diagnostic_request_sha256",
-        "provider_policy_evidence_sha256", "provider_policy_accepted", "provider_tariff_evidence_sha256", "credential_delivery_mode",
+        "provider_policy_evidence_sha256", "provider_policy_accepted", "provider_tariff_evidence_sha256",
+        "provider_tariff_manifest_sha256", "preflight_verdict_sha256", "credential_delivery_mode",
         "credential_fingerprint_sha256", "owner_account", "owner_reconfirmed", "kill_switch_bound",
         "authorization_window_start_utc", "authorization_window_end_utc", "max_logical_calls",
         "max_http_attempts", "max_input_tokens", "max_output_tokens", "input_rate_microcny_per_million",
@@ -814,15 +895,21 @@ def build_diagnostic_authorization_template() -> dict[str, Any]:
         "schema_version": "phase11c-gateb-protocol-diagnostic-authorization/v1",
         "phase_id": PHASE_ID,
         "stage": "DIAGNOSTIC",
+        "authorization_id": PENDING_FREEZE,
         "authorization_status": "frozen_pending_exact_approval",
         "authorization_sha256": "",
+        "execution_freeze_sha256": PENDING_FREEZE,
         "executable_source_sha256": source_sha256(),
+        "executable_commit_sha": PENDING_FREEZE,
         "source_tree_sha256": PENDING_FREEZE,
+        "source_archive_sha256": PENDING_FREEZE,
         "dockerfile_sha256": PENDING_FREEZE,
         "compose_sha256": PENDING_FREEZE,
         "image_sha256": PENDING_FREEZE,
         "deployment_sha256": PENDING_FREEZE,
+        "runtime_config_sha256": PENDING_FREEZE,
         "runtime_identity_sha256": PENDING_FREEZE,
+        "aliyun_runtime_identity_sha256": PENDING_FREEZE,
         "provider": PROVIDER,
         "request_model_id": REQUEST_MODEL_ID,
         "api_surface": API_SURFACE,
@@ -832,6 +919,8 @@ def build_diagnostic_authorization_template() -> dict[str, Any]:
         "provider_policy_evidence_sha256": PENDING_FREEZE,
         "provider_policy_accepted": True,
         "provider_tariff_evidence_sha256": PENDING_FREEZE,
+        "provider_tariff_manifest_sha256": PENDING_FREEZE,
+        "preflight_verdict_sha256": PENDING_FREEZE,
         "credential_delivery_mode": "fixed_linux_ecs_one_time_file",
         "credential_fingerprint_sha256": PENDING_FREEZE,
         "owner_account": OWNER_ACCOUNT,
@@ -875,6 +964,8 @@ def _validate_diagnostic_authorization_common(
         or authorization["authorization_status"] != "frozen_pending_exact_approval"
     ):
         _fail("diagnostic_authorization_identity_mismatch")
+    if not isinstance(authorization["authorization_id"], str) or not _AUTHORIZATION_ID.fullmatch(authorization["authorization_id"]):
+        _fail("diagnostic_authorization_id_mismatch")
     if sealed:
         _validate_seal(authorization, "authorization_sha256", "diagnostic_authorization_sha256_mismatch")
     elif authorization["authorization_sha256"] != "":
@@ -882,11 +973,17 @@ def _validate_diagnostic_authorization_common(
     if authorization["executable_source_sha256"] != _expect_sha256(executable_source_digest, "invalid_source", allow_zero=False):
         _fail("diagnostic_executable_source_sha256_drift")
     for field in (
-        "source_tree_sha256", "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256",
-        "runtime_identity_sha256", "provider_policy_evidence_sha256", "provider_tariff_evidence_sha256",
-        "credential_fingerprint_sha256",
+        "source_tree_sha256", "source_archive_sha256", "dockerfile_sha256", "compose_sha256", "image_sha256",
+        "deployment_sha256", "runtime_config_sha256", "runtime_identity_sha256", "aliyun_runtime_identity_sha256",
+        "provider_policy_evidence_sha256", "provider_tariff_evidence_sha256", "provider_tariff_manifest_sha256",
+        "execution_freeze_sha256",
+        "credential_fingerprint_sha256", "preflight_verdict_sha256",
     ):
         _expect_sha256(authorization[field], f"invalid_diagnostic_{field}", allow_zero=False)
+    if not isinstance(authorization["executable_commit_sha"], str) or not _GIT_COMMIT.fullmatch(authorization["executable_commit_sha"]):
+        _fail("invalid_diagnostic_executable_commit_sha")
+    if authorization["runtime_identity_sha256"] != authorization["aliyun_runtime_identity_sha256"]:
+        _fail("diagnostic_runtime_identity_binding_mismatch")
     expected = {
         "provider": PROVIDER,
         "request_model_id": REQUEST_MODEL_ID,
@@ -975,9 +1072,33 @@ def diagnostic_approval_binding_sha256(authorization: Mapping[str, Any]) -> str:
         canonical_json(
             {
                 "authorization_sha256": authorization["authorization_sha256"],
+                "authorization_id": authorization["authorization_id"],
+                "authorization_window_end_utc": authorization["authorization_window_end_utc"],
+                "authorization_window_start_utc": authorization["authorization_window_start_utc"],
+                "aggregate_remaining_microcny": authorization["aggregate_remaining_microcny"],
+                "aggregate_remaining_after_reservation_microcny": authorization["aggregate_remaining_after_reservation_microcny"],
+                "api_surface": authorization["api_surface"],
+                "credential_fingerprint_sha256": authorization["credential_fingerprint_sha256"],
+                "diagnostic_budget_microcny": authorization["diagnostic_budget_microcny"],
+                "diagnostic_request_sha256": authorization["diagnostic_request_sha256"],
+                "endpoint_id": authorization["endpoint_id"],
+                "endpoint_sha256": authorization["endpoint_sha256"],
+                "execution_freeze_sha256": authorization["execution_freeze_sha256"],
+                "executable_commit_sha": authorization["executable_commit_sha"],
+                "max_http_attempts": authorization["max_http_attempts"],
+                "max_input_tokens": authorization["max_input_tokens"],
+                "max_logical_calls": authorization["max_logical_calls"],
+                "max_output_tokens": authorization["max_output_tokens"],
+                "preflight_verdict_sha256": authorization["preflight_verdict_sha256"],
                 "phase_id": PHASE_ID,
+                "provider": authorization["provider"],
+                "request_model_id": authorization["request_model_id"],
                 "schema_version": "phase11c-gateb-protocol-diagnostic-approval-binding/v1",
                 "stage": "DIAGNOSTIC",
+                "source_archive_sha256": authorization["source_archive_sha256"],
+                "runtime_config_sha256": authorization["runtime_config_sha256"],
+                "runtime_identity_sha256": authorization["runtime_identity_sha256"],
+                "provider_tariff_manifest_sha256": authorization["provider_tariff_manifest_sha256"],
             }
         )
     )
@@ -1192,8 +1313,7 @@ class ParsedToolResponse:
 _PROVIDER_TOP_LEVEL_KEYS = frozenset(
     {"id", "object", "created", "model", "choices", "usage", "request_id", "service_tier", "system_fingerprint"}
 )
-_PROVIDER_USAGE_KEYS = frozenset({"prompt_tokens", "completion_tokens", "total_tokens", "prompt_tokens_details"})
-_PROVIDER_PROMPT_DETAILS_KEYS = frozenset({"cached_tokens"})
+_PROVIDER_USAGE_REQUIRED_KEYS = frozenset({"prompt_tokens", "completion_tokens"})
 _PROVIDER_CHOICE_KEYS = frozenset({"index", "finish_reason", "message", "logprobs"})
 _PROVIDER_MESSAGE_KEYS = frozenset({"role", "content", "tool_calls", "reasoning_content", "refusal"})
 _PROVIDER_TOOL_CALL_KEYS = frozenset({"id", "type", "function", "index"})
@@ -1226,7 +1346,8 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> tuple[bool, int, int]:
         return False, 0, 0
     if not isinstance(usage, Mapping):
         _fail("provider_usage_schema_invalid")
-    _expect_known_keys(usage, _PROVIDER_USAGE_KEYS, "provider_usage_schema_invalid")
+    if not _PROVIDER_USAGE_REQUIRED_KEYS.issubset(set(usage)):
+        _fail("provider_usage_schema_invalid")
     input_tokens = _expect_nonnegative_int(usage.get("prompt_tokens"), "provider_usage_schema_invalid")
     output_tokens = _expect_nonnegative_int(usage.get("completion_tokens"), "provider_usage_schema_invalid")
     if input_tokens > MAX_PROVIDER_USAGE_COUNTER or output_tokens > MAX_PROVIDER_USAGE_COUNTER:
@@ -1238,10 +1359,11 @@ def _usage_from_payload(payload: Mapping[str, Any]) -> tuple[bool, int, int]:
     if details is not None:
         if not isinstance(details, Mapping):
             _fail("provider_usage_schema_invalid")
-        _expect_known_keys(details, _PROVIDER_PROMPT_DETAILS_KEYS, "provider_usage_schema_invalid")
-        cached = _expect_nonnegative_int(details.get("cached_tokens"), "provider_usage_schema_invalid")
-        if cached > input_tokens:
-            _fail("provider_usage_schema_invalid")
+        cached = details.get("cached_tokens")
+        if cached is not None:
+            cached_count = _expect_nonnegative_int(cached, "provider_usage_schema_invalid")
+            if cached_count > input_tokens:
+                _fail("provider_usage_schema_invalid")
     return True, input_tokens, output_tokens
 
 
@@ -2143,6 +2265,16 @@ def _path_entry_exists(path: Path) -> bool:
     return True
 
 
+def _has_atomic_temp_artifact() -> bool:
+    """Treat an interrupted atomic write as durable evidence of an unsafe restart."""
+
+    try:
+        with os.scandir(STATE_DIRECTORY) as entries:
+            return any(entry.name.startswith(".") and entry.name.endswith(".tmp") for entry in entries)
+    except OSError as exc:
+        raise HeadlineCohortError("state_persistence_failure") from exc
+
+
 class FileCohortStateStore:
     """Dedicated fsync-backed, no-replay state store for headline execution."""
 
@@ -2179,6 +2311,8 @@ class FileCohortStateStore:
                 _fail("state_store_platform_unsupported")
             _FCHMOD(self._lock_descriptor, 0o600)
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            if _has_atomic_temp_artifact():
+                _fail("cohort_quarantined")
             if self._recovery:
                 if _path_entry_exists(TERMINAL_ENVELOPE_PATH):
                     self._terminal_envelope = validate_terminal_envelope(
@@ -2508,7 +2642,7 @@ def _validate_diagnostic_state(value: Any) -> dict[str, Any]:
         _expect_bool(state_value[field], f"invalid_diagnostic_state_{field}")
     attempts = _expect_nonnegative_int(state_value["http_attempt_count"], "invalid_diagnostic_state_attempt_count")
     status = state_value["execution_status"]
-    if status in {"budget_reserved", "credential_opened", "credential_validated", "http_attempted"} and state_value["budget_reserved"] is not True:
+    if status in {"budget_reserved", "credential_opened", "credential_validated", "http_attempted", "terminal"} and state_value["budget_reserved"] is not True:
         _fail("diagnostic_state_budget_order_invalid")
     if status in {"credential_opened", "credential_validated", "http_attempted"} and state_value["credential_file_opened"] is not True:
         _fail("diagnostic_state_credential_open_order_invalid")
@@ -2516,6 +2650,8 @@ def _validate_diagnostic_state(value: Any) -> dict[str, Any]:
         _fail("diagnostic_state_credential_validation_order_invalid")
     if attempts > 1 or (status == "http_attempted" and attempts != 1):
         _fail("diagnostic_state_attempt_invalid")
+    if attempts > 0 and state_value["credential_validated"] is not True:
+        _fail("diagnostic_state_attempt_credential_invariant_failed")
     _validate_seal(state_value, "state_sha256", "diagnostic_state_sha256_mismatch")
     return state_value
 
@@ -2591,6 +2727,8 @@ class FileDiagnosticStateStore:
                 _fail("diagnostic_state_store_platform_unsupported")
             _FCHMOD(self._lock_descriptor, 0o600)
             fcntl.flock(self._lock_descriptor, fcntl.LOCK_EX)
+            if _has_atomic_temp_artifact():
+                _fail("diagnostic_quarantined")
             if self._recovery:
                 if _path_entry_exists(DIAGNOSTIC_RECEIPT_PATH):
                     self.recovered_receipt = validate_diagnostic_receipt(
@@ -3549,6 +3687,212 @@ def read_fixed_headline_authorization(
     )
 
 
+def _control_baseline() -> dict[str, Any]:
+    return {
+        "master_sha": BASELINE_MASTER_SHA,
+        "ci_run_id": BASELINE_CI_RUN,
+        "ci_attempt": BASELINE_CI_ATTEMPT,
+        "ci_conclusion": BASELINE_CI_CONCLUSION,
+        "phase11b_acceptance_report_sha256": PHASE11B_ACCEPTANCE_REPORT_SHA256,
+        "phase11b_authorization_sha256": PHASE11B_AUTHORIZATION_SHA256,
+        "phase11b_runtime_config_sha256": PHASE11B_RUNTIME_CONFIG_SHA256,
+        "phase11b_status": "accepted",
+    }
+
+
+def _expected_control_freeze_subject(
+    *, stage: str, bindings: Mapping[str, Any], window_start_utc: str, window_end_utc: str, budget_microcny: int
+) -> str:
+    return sha256_bytes(
+        canonical_json(
+            {
+                "phase_id": PHASE_ID,
+                "stage": stage,
+                "bindings": dict(bindings),
+                "authorization_window_start_utc": window_start_utc,
+                "authorization_window_end_utc": window_end_utc,
+                "budget_microcny": budget_microcny,
+            }
+        )
+    )
+
+
+def _expected_control_authorization_id(*, stage: str, freeze_subject_sha256: str) -> str:
+    return "p11c-gateb-" + sha256_bytes(
+        canonical_json(
+            {"phase_id": PHASE_ID, "stage": stage, "freeze_subject_sha256": freeze_subject_sha256}
+        )
+    )[:32]
+
+
+def _validate_live_control_chain(
+    authorization: Mapping[str, Any],
+    *,
+    stage: str,
+    execution_freeze_path: Path,
+    preflight_path: Path,
+) -> None:
+    """Require the live authorization to be descended from sealed controls.
+
+    The freeze utility intentionally remains host-side and is not copied into
+    the runtime image. This verifier mirrors its redacted document invariants,
+    so a syntactically valid authorization cannot be used without the matching
+    immutable freeze and preflight files.
+    """
+    freeze = strict_json_loads(
+        _read_fixed_control_file(execution_freeze_path, maximum_bytes=MAX_CONTROL_FILE_BYTES, exact_mode=0o600)
+    )
+    preflight = strict_json_loads(
+        _read_fixed_control_file(preflight_path, maximum_bytes=MAX_CONTROL_FILE_BYTES, exact_mode=0o600)
+    )
+    if not isinstance(freeze, dict) or not isinstance(preflight, dict):
+        _fail("control_document_invalid")
+    required_freeze = {
+        "schema_version", "phase_id", "stage", "execution_freeze_sha256", "freeze_subject_sha256",
+        "authorization_id", "runtime_config_sha256", "provider_tariff_manifest_sha256", "bindings",
+        "owners", "baseline", "credential_delivery_mode", "provider_policy_accepted", "owner_reconfirmed",
+        "kill_switch_bound", "authorization_window_start_utc", "authorization_window_end_utc",
+        "budget_microcny", "snapshot_immutability", "redaction_applied",
+    }
+    required_preflight = {
+        "schema_version", "phase_id", "stage", "preflight_verdict_sha256", "execution_freeze_sha256",
+        "freeze_subject_sha256", "authorization_id", "baseline", "policy_url", "retention_policy_url",
+        "policy_reviewed_at_utc", "authorization_window_start_utc", "authorization_window_end_utc", "checks",
+        "canary_allowed", "real_run_recommended_now", "blocking_reason_codes", "redaction_applied",
+        "snapshot_immutability",
+    }
+    if set(freeze) != required_freeze or set(preflight) != required_preflight:
+        _fail("control_document_keys_invalid")
+    if (
+        stage not in {"DIAGNOSTIC", "HEADLINE_COHORT"}
+        or freeze["schema_version"] != EXECUTION_FREEZE_SCHEMA_VERSION
+        or preflight["schema_version"] != PREFLIGHT_SCHEMA_VERSION
+        or freeze["phase_id"] != PHASE_ID
+        or preflight["phase_id"] != PHASE_ID
+        or freeze["stage"] != stage
+        or preflight["stage"] != stage
+        or not isinstance(freeze["authorization_id"], str)
+        or _AUTHORIZATION_ID.fullmatch(freeze["authorization_id"]) is None
+        or not isinstance(preflight["authorization_id"], str)
+        or _AUTHORIZATION_ID.fullmatch(preflight["authorization_id"]) is None
+    ):
+        _fail("control_document_identity_invalid")
+    _expect_sha256(freeze["execution_freeze_sha256"], "execution_freeze_hash_invalid", allow_zero=False)
+    _expect_sha256(preflight["preflight_verdict_sha256"], "preflight_hash_invalid", allow_zero=False)
+    _expect_sha256(freeze["freeze_subject_sha256"], "freeze_subject_hash_invalid", allow_zero=False)
+    _expect_sha256(preflight["freeze_subject_sha256"], "preflight_subject_hash_invalid", allow_zero=False)
+    bindings = freeze["bindings"]
+    if not isinstance(bindings, dict) or set(bindings) != CONTROL_FREEZE_BINDING_FIELDS:
+        _fail("control_bindings_invalid")
+    for field in CONTROL_FREEZE_BINDING_FIELDS - {"executable_commit_sha"}:
+        _expect_sha256(bindings[field], "control_bindings_invalid", allow_zero=False)
+    if not isinstance(bindings["executable_commit_sha"], str) or _GIT_COMMIT.fullmatch(bindings["executable_commit_sha"]) is None:
+        _fail("control_bindings_invalid")
+    expected_budget = DIAGNOSTIC_BUDGET_MICROCNY if stage == "DIAGNOSTIC" else HEADLINE_BUDGET_MICROCNY
+    if isinstance(freeze["budget_microcny"], bool) or freeze["budget_microcny"] != expected_budget:
+        _fail("control_budget_invalid")
+    if freeze["baseline"] != _control_baseline():
+        _fail("control_baseline_invalid")
+    if freeze["owners"] != {
+        "authorization": OWNER_ACCOUNT,
+        "revocation": OWNER_ACCOUNT,
+        "kill_switch": OWNER_ACCOUNT,
+        "incident": OWNER_ACCOUNT,
+        "cleanup": OWNER_ACCOUNT,
+    }:
+        _fail("control_owners_invalid")
+    if (
+        freeze["credential_delivery_mode"] != "fixed_linux_ecs_one_time_file"
+        or freeze["provider_policy_accepted"] is not True
+        or freeze["owner_reconfirmed"] is not True
+        or freeze["kill_switch_bound"] is not True
+        or freeze["snapshot_immutability"] is not False
+        or freeze["redaction_applied"] is not True
+        or freeze["runtime_config_sha256"] != bindings["runtime_config_sha256"]
+        or freeze["provider_tariff_manifest_sha256"] != bindings["provider_tariff_manifest_sha256"]
+    ):
+        _fail("control_safety_invariant_invalid")
+    start = _parse_utc(freeze["authorization_window_start_utc"], "control_window_invalid")
+    end = _parse_utc(freeze["authorization_window_end_utc"], "control_window_invalid")
+    if start >= end or (end - start).total_seconds() > 30 * 60:
+        _fail("control_window_invalid")
+    expected_subject = _expected_control_freeze_subject(
+        stage=stage,
+        bindings=bindings,
+        window_start_utc=freeze["authorization_window_start_utc"],
+        window_end_utc=freeze["authorization_window_end_utc"],
+        budget_microcny=expected_budget,
+    )
+    if (
+        freeze["freeze_subject_sha256"] != expected_subject
+        or freeze["authorization_id"] != _expected_control_authorization_id(
+            stage=stage, freeze_subject_sha256=expected_subject
+        )
+    ):
+        _fail("control_freeze_derivation_invalid")
+    if (
+        preflight["baseline"] != _control_baseline()
+        or preflight["policy_url"] != POLICY_URL
+        or preflight["retention_policy_url"] != RETENTION_POLICY_URL
+        or not isinstance(preflight["policy_reviewed_at_utc"], str)
+    ):
+        _fail("control_preflight_binding_invalid")
+    _parse_utc(preflight["policy_reviewed_at_utc"], "control_preflight_binding_invalid")
+    checks = preflight["checks"]
+    if not isinstance(checks, dict) or set(checks) != CONTROL_PREFLIGHT_CHECK_FIELDS or not all(
+        value is True for value in checks.values()
+    ):
+        _fail("control_preflight_checks_invalid")
+    _validate_seal(freeze, "execution_freeze_sha256", "execution_freeze_sha256_mismatch")
+    _validate_seal(preflight, "preflight_verdict_sha256", "preflight_sha256_mismatch")
+    if (
+        authorization["execution_freeze_sha256"] != freeze["execution_freeze_sha256"]
+        or authorization["preflight_verdict_sha256"] != preflight["preflight_verdict_sha256"]
+        or authorization["authorization_id"] != freeze["authorization_id"]
+        or authorization["authorization_id"] != preflight["authorization_id"]
+        or freeze["execution_freeze_sha256"] != preflight["execution_freeze_sha256"]
+        or freeze["freeze_subject_sha256"] != preflight["freeze_subject_sha256"]
+    ):
+        _fail("control_authorization_binding_mismatch")
+    if (
+        freeze["authorization_window_start_utc"] != authorization["authorization_window_start_utc"]
+        or freeze["authorization_window_end_utc"] != authorization["authorization_window_end_utc"]
+        or preflight["authorization_window_start_utc"] != authorization["authorization_window_start_utc"]
+        or preflight["authorization_window_end_utc"] != authorization["authorization_window_end_utc"]
+    ):
+        _fail("control_window_binding_mismatch")
+    for field in (
+        "runtime_config_sha256", "executable_source_sha256", "source_tree_sha256", "source_archive_sha256",
+        "dockerfile_sha256", "compose_sha256", "image_sha256", "deployment_sha256", "runtime_identity_sha256",
+        "cohort_manifest_sha256", "provider_policy_evidence_sha256", "provider_tariff_evidence_sha256",
+        "provider_tariff_manifest_sha256", "credential_fingerprint_sha256",
+    ):
+        expected = authorization.get(field)
+        if field == "cohort_manifest_sha256" and expected is None:
+            expected = cohort_manifest_sha256()
+        if bindings.get(field) != expected:
+            _fail("control_binding_mismatch")
+    if bindings.get("executable_commit_sha") != authorization.get("executable_commit_sha"):
+        _fail("control_binding_mismatch")
+    if (
+        freeze["runtime_config_sha256"] != authorization["runtime_config_sha256"]
+        or freeze["provider_tariff_manifest_sha256"] != authorization["provider_tariff_manifest_sha256"]
+        or freeze["credential_delivery_mode"] != authorization["credential_delivery_mode"]
+        or freeze["provider_policy_accepted"] is not True
+        or freeze["owner_reconfirmed"] is not True
+        or freeze["kill_switch_bound"] is not True
+        or preflight["canary_allowed"] is not True
+        or preflight["real_run_recommended_now"] is not True
+        or preflight["blocking_reason_codes"] != []
+        or preflight["redaction_applied"] is not True
+        or preflight["snapshot_immutability"] is not False
+        or not isinstance(preflight["checks"], dict)
+        or not preflight["checks"]
+        or not all(value is True for value in preflight["checks"].values())
+    ):
+        _fail("control_safety_invariant_invalid")
+
+
 def _read_ascii_approval(path: Path, code: str) -> str:
     try:
         return _read_fixed_control_file(path, maximum_bytes=256, exact_mode=0o400).decode("ascii")
@@ -3558,6 +3902,12 @@ def _read_ascii_approval(path: Path, code: str) -> str:
 
 def run_diagnostic_from_fixed_files() -> dict[str, Any]:
     authorization = read_fixed_diagnostic_authorization(require_active_window=True)
+    _validate_live_control_chain(
+        authorization,
+        stage="DIAGNOSTIC",
+        execution_freeze_path=DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+        preflight_path=DIAGNOSTIC_PREFLIGHT_PATH,
+    )
     approval = _read_ascii_approval(DIAGNOSTIC_APPROVAL_PATH, "diagnostic_approval_encoding_invalid")
     with FileDiagnosticStateStore() as store:
         return execute_diagnostic(
@@ -3586,9 +3936,21 @@ def recover_diagnostic_from_fixed_files() -> dict[str, Any]:
 
 def run_headline_from_fixed_files() -> dict[str, Any]:
     authorization = read_fixed_headline_authorization(require_active_window=True)
+    _validate_live_control_chain(
+        authorization,
+        stage="HEADLINE_COHORT",
+        execution_freeze_path=HEADLINE_EXECUTION_FREEZE_PATH,
+        preflight_path=HEADLINE_PREFLIGHT_PATH,
+    )
     approval = _read_ascii_approval(APPROVAL_PATH, "headline_approval_encoding_invalid")
     diagnostic_authorization = read_fixed_diagnostic_authorization(
         require_active_window=False, allow_expired_window=True
+    )
+    _validate_live_control_chain(
+        diagnostic_authorization,
+        stage="DIAGNOSTIC",
+        execution_freeze_path=DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+        preflight_path=DIAGNOSTIC_PREFLIGHT_PATH,
     )
     diagnostic = validate_completed_diagnostic_receipt(strict_json_loads(_read_fixed_state_file(DIAGNOSTIC_RECEIPT_PATH)))
     with FileCohortStateStore() as store:
@@ -3678,6 +4040,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "print-diagnostic-approval-binding":
             authorization = read_fixed_diagnostic_authorization(require_active_window=False)
+            _validate_live_control_chain(
+                authorization,
+                stage="DIAGNOSTIC",
+                execution_freeze_path=DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+                preflight_path=DIAGNOSTIC_PREFLIGHT_PATH,
+            )
             binding = diagnostic_approval_binding_sha256(authorization)
             print(expected_diagnostic_approval_text(binding))
             return 0
@@ -3696,8 +4064,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "print-headline-approval-binding":
             authorization = read_fixed_headline_authorization(require_active_window=False)
+            _validate_live_control_chain(
+                authorization,
+                stage="HEADLINE_COHORT",
+                execution_freeze_path=HEADLINE_EXECUTION_FREEZE_PATH,
+                preflight_path=HEADLINE_PREFLIGHT_PATH,
+            )
             diagnostic_authorization = read_fixed_diagnostic_authorization(
                 require_active_window=False, allow_expired_window=True
+            )
+            _validate_live_control_chain(
+                diagnostic_authorization,
+                stage="DIAGNOSTIC",
+                execution_freeze_path=DIAGNOSTIC_EXECUTION_FREEZE_PATH,
+                preflight_path=DIAGNOSTIC_PREFLIGHT_PATH,
             )
             diagnostic_receipt = validate_completed_diagnostic_receipt(
                 strict_json_loads(_read_fixed_state_file(DIAGNOSTIC_RECEIPT_PATH))
