@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-feedback.schema.json",
+  "title": "CRAG Phase 11D feedback receipt v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "feedback_id",
+    "pr_id",
+    "finding_id",
+    "row_kind",
+    "participant_id",
+    "decision",
+    "repair_requested",
+    "draft_pr_adopted",
+    "rationale_sha256",
+    "submitted_at_utc",
+    "human_attested"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.feedback/v1alpha1"},
+    "feedback_id": {"type": "string", "minLength": 1},
+    "pr_id": {"type": "string", "minLength": 1},
+    "finding_id": {"type": "string", "minLength": 1},
+    "row_kind": {"const": "synthetic"},
+    "participant_id": {"type": "string", "minLength": 1},
+    "decision": {"enum": ["accepted", "rejected", "uncertain", "fixed", "duplicate"]},
+    "repair_requested": {"type": "boolean"},
+    "draft_pr_adopted": {"type": "boolean"},
+    "rationale_sha256": {"$ref": "#/$defs/sha256"},
+    "submitted_at_utc": {"$ref": "#/$defs/utcSecond"},
+    "human_attested": {"const": true}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "utcSecond": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"}
+  }
+}

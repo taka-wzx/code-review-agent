@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://code-review-agent.invalid/schemas/phase11d-acceptance.schema.json",
+  "title": "CRAG Phase 11D acceptance report v1alpha1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_id",
+    "gate_a_offline_validation_ready",
+    "gate_b_execution_allowed",
+    "implementation_draft_pr_status",
+    "ci_status",
+    "frozen_hashes_ready",
+    "remaining_gate_b_blockers",
+    "final_project_complete",
+    "production_ready",
+    "model_quality_status",
+    "formal_quality_status"
+  ],
+  "properties": {
+    "schema_version": {"const": "crag.phase11d.acceptance/v1alpha1"},
+    "report_id": {"type": "string", "minLength": 1},
+    "gate_a_offline_validation_ready": {"const": true},
+    "gate_b_execution_allowed": {"const": false},
+    "implementation_draft_pr_status": {"type": "string", "minLength": 1},
+    "ci_status": {"type": "string", "minLength": 1},
+    "frozen_hashes_ready": {"const": false},
+    "remaining_gate_b_blockers": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "final_project_complete": {"const": false},
+    "production_ready": {"const": false},
+    "model_quality_status": {"const": "not_measured"},
+    "formal_quality_status": {"const": "incomplete"}
+  }
+}
