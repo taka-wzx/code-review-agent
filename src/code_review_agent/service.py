@@ -23,6 +23,7 @@ import uvicorn
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from code_review_agent.database import DatabaseError
+from code_review_agent.admin_ui import install_admin_ui
 from code_review_agent.mcp_server import create_mcp
 from code_review_agent.production_metrics import CONTENT_TYPE
 from code_review_agent.repair_service import (
@@ -418,6 +419,7 @@ def create_app(
     app.state.http_settings = http
     app.state.auth_backend = auth_backend
     app.state.repair_service = repair_service
+    install_admin_ui(app)
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
