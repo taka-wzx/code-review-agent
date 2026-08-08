@@ -1,0 +1,17 @@
+{
+  "schema_version": "crag.postgres-recovery-policy/v1",
+  "rpo_seconds": 900,
+  "rto_seconds": 1800,
+  "promotion_wait_seconds": 60,
+  "backup_format": "custom",
+  "require_clean_restore": true,
+  "require_source_fence_receipt": true,
+  "verification_tables": [
+    "alembic_version",
+    "organizations",
+    "repositories",
+    "review_jobs",
+    "findings",
+    "audit_events"
+  ]
+}
