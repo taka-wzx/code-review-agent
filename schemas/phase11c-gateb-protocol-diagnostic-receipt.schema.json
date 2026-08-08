@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crag.invalid/schemas/phase11c-gateb-protocol-diagnostic-receipt.schema.json",
+  "title": "Phase 11C same-image diagnostic safe receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0}
+  },
+  "required": [
+    "schema_version", "phase_id", "stage", "receipt_sha256", "authorization_sha256",
+    "approval_binding_sha256", "execution_status", "terminal_category", "logical_call_count",
+    "provider_call_count", "http_attempt_count", "reserved_input_tokens", "reserved_output_tokens",
+    "reserved_microcny", "credential_file_opened", "credential_validated", "usage_known",
+    "input_tokens_used", "output_tokens_used", "estimated_microcny", "http_status_class",
+    "provider_response_sha256", "assistant_content_sha256", "terminal_match", "raw_retained",
+    "redaction_applied", "retry_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-gateb-protocol-diagnostic-receipt/v1"},
+    "phase_id": {"const": "phase11c-gateb-headline-cohort-executor-v1"},
+    "stage": {"const": "DIAGNOSTIC"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "approval_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_status": {"enum": ["completed", "failed", "inconclusive", "quarantined"]},
+    "terminal_category": {
+      "enum": ["provider_terminal_match", "provider_terminal_mismatch", "credential_validation_failed", "provider_transport_failure", "provider_response_too_large", "redirect_refused", "http_status_failure", "provider_response_invalid_json", "provider_response_schema_invalid", "provider_usage_schema_invalid", "provider_usage_cap_exceeded", "usage_unknown", "internal_failure", "quarantined"]
+    },
+    "logical_call_count": {"maximum": 1, "$ref": "#/$defs/count"},
+    "provider_call_count": {"maximum": 1, "$ref": "#/$defs/count"},
+    "http_attempt_count": {"maximum": 1, "$ref": "#/$defs/count"},
+    "reserved_input_tokens": {"const": 2000},
+    "reserved_output_tokens": {"const": 128},
+    "reserved_microcny": {"const": 19584},
+    "credential_file_opened": {"type": "boolean"},
+    "credential_validated": {"type": "boolean"},
+    "usage_known": {"type": "boolean"},
+    "input_tokens_used": {"$ref": "#/$defs/count"},
+    "output_tokens_used": {"$ref": "#/$defs/count"},
+    "estimated_microcny": {"$ref": "#/$defs/count"},
+    "http_status_class": {"enum": ["none", "2xx", "3xx", "4xx", "5xx", "other"]},
+    "provider_response_sha256": {"$ref": "#/$defs/sha256"},
+    "assistant_content_sha256": {"$ref": "#/$defs/sha256"},
+    "terminal_match": {"type": "boolean"},
+    "raw_retained": {"const": false},
+    "redaction_applied": {"const": true},
+    "retry_count": {"const": 0}
+  }
+}

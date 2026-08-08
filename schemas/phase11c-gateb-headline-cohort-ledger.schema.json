@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crag.invalid/schemas/phase11c-gateb-headline-cohort-ledger.schema.json",
+  "title": "Phase 11C headline cohort sealed ledger v1",
+  "type": "object",
+  "additionalProperties": false,
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "count": {"type": "integer", "minimum": 0}
+  },
+  "required": [
+    "schema_version", "phase_id", "ledger_sha256", "run_id_sha256", "cohort_receipt_sha256",
+    "authorization_sha256", "approval_binding_sha256", "diagnostic_receipt_sha256", "target_receipt_sha256s",
+    "execution_status", "logical_call_count", "provider_call_count", "http_attempt_count", "reserved_microcny",
+    "estimated_microcny", "aggregate_remaining_microcny", "aggregate_remaining_after_reservation_microcny",
+    "raw_retained", "redaction_applied", "retry_count"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-gateb-headline-cohort-ledger/v1"},
+    "phase_id": {"const": "phase11c-gateb-headline-cohort-executor-v1"},
+    "ledger_sha256": {"$ref": "#/$defs/sha256"},
+    "run_id_sha256": {"$ref": "#/$defs/sha256"},
+    "cohort_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "authorization_sha256": {"$ref": "#/$defs/sha256"},
+    "approval_binding_sha256": {"$ref": "#/$defs/sha256"},
+    "diagnostic_receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "target_receipt_sha256s": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"$ref": "#/$defs/sha256"}},
+    "execution_status": {"enum": ["completed", "failed", "inconclusive", "not_run_gate_blocked", "quarantined"]},
+    "logical_call_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "provider_call_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "http_attempt_count": {"$ref": "#/$defs/count", "maximum": 6},
+    "reserved_microcny": {"const": 117504},
+    "estimated_microcny": {"$ref": "#/$defs/count"},
+    "aggregate_remaining_microcny": {"const": 14960832},
+    "aggregate_remaining_after_reservation_microcny": {"const": 14843328},
+    "raw_retained": {"const": false},
+    "redaction_applied": {"const": true},
+    "retry_count": {"const": 0}
+  }
+}

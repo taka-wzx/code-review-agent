@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Phase 11C deterministic synthetic cohort candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase_id",
+    "cohort_manifest_sha256",
+    "source_kind",
+    "target_limit",
+    "proposed_headline_denominator",
+    "exact_headline_denominator",
+    "diagnostic_in_headline_denominator",
+    "targets",
+    "auth004_nonoverlap_status",
+    "auth004_sanitized_metadata_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "phase11c-provider-canary-cohort/v1"},
+    "phase_id": {"const": "phase11c-provider-canary-v1"},
+    "cohort_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_kind": {"const": "deterministic_synthetic"},
+    "target_limit": {"const": 5},
+    "proposed_headline_denominator": {"const": 3},
+    "exact_headline_denominator": {"const": "PENDING_FREEZE"},
+    "diagnostic_in_headline_denominator": {"const": false},
+    "targets": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["stable_id", "payload_sha256"],
+        "properties": {
+          "stable_id": {"type": "string", "pattern": "^p11c-[0-9a-f]{32}$"},
+          "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "auth004_nonoverlap_status": {"const": "pending_sanitized_metadata_freeze"},
+    "auth004_sanitized_metadata_sha256": {"const": "PENDING_FREEZE"}
+  }
+}
