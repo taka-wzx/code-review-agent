@@ -23,6 +23,7 @@ import uvicorn
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from code_review_agent.database import DatabaseError
+from code_review_agent.github_webhook import GitHubWebhookProcessor
 from code_review_agent.mcp_server import create_mcp
 from code_review_agent.production_metrics import CONTENT_TYPE
 from code_review_agent.repair_service import (
@@ -64,7 +65,6 @@ from code_review_agent.service_core import (
 
 
 MAX_WEBHOOK_BYTES = 1024 * 1024
-_PULL_REQUEST_ACTIONS = frozenset({"opened", "reopened", "synchronize", "ready_for_review"})
 
 
 class DiffSubmission(BaseModel):
@@ -132,6 +132,27 @@ class RepositoryUpdate(BaseModel):
     mode: str = Field(default="shadow", pattern="^(shadow|guarded_publish)$")
     budget_microusd: int | None = Field(default=None, ge=0)
     policy_version: str = Field(min_length=1, max_length=128)
+
+
+class FeedbackRuleItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    rule_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    category: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    action: str = Field(pattern=r"^(prioritize|suppress|require_verification)$")
+    condition: str = Field(min_length=1, max_length=256)
+    rationale: str = Field(min_length=1, max_length=512)
+
+
+class FeedbackRuleVersionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    rules: list[FeedbackRuleItem] = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=512)
+
+
+class FeedbackRuleTransition(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reason: str = Field(min_length=1, max_length=512)
 
 
 class CredentialCreate(BaseModel):
@@ -335,24 +356,6 @@ def _webhook_signature(body: bytes, header: str, secret: bytes) -> None:
         raise ServiceError("webhook authentication failed")
 
 
-def _webhook_fields(payload: Any) -> tuple[str, str, str]:
-    if not isinstance(payload, dict) or payload.get("action") not in _PULL_REQUEST_ACTIONS:
-        raise InvalidRequest("pull_request action is not reviewable")
-    repository = payload.get("repository")
-    pull_request = payload.get("pull_request")
-    if not isinstance(repository, dict) or not isinstance(pull_request, dict):
-        raise InvalidRequest("webhook payload is missing repository or pull_request")
-    alias = repository.get("full_name")
-    number = pull_request.get("number")
-    head = pull_request.get("head")
-    head_sha = head.get("sha") if isinstance(head, dict) else None
-    if not isinstance(alias, str) or isinstance(number, bool) or not isinstance(number, int):
-        raise InvalidRequest("webhook repository or pull_request identity is invalid")
-    if not isinstance(head_sha, str) or re.fullmatch(r"[0-9a-fA-F]{40,64}", head_sha) is None:
-        raise InvalidRequest("webhook pull_request head SHA is invalid")
-    return alias, str(number), head_sha.casefold()
-
-
 async def _bounded_body(request: Request, limit: int) -> bytes:
     body = bytearray()
     async for chunk in request.stream():
@@ -390,6 +393,11 @@ def create_app(
             auth_backend = LocalTokenAuthBackend(http.service_token, local_principal)
         else:
             auth_backend = DatabaseAuthBackend(service.store.database)
+    github_webhooks = GitHubWebhookProcessor(
+        service.store.database,
+        submit_pull_request=service.submit_webhook_pr,
+        get_job=service.store.get,
+    )
     mcp = create_mcp(
         service,
         principal_provider=current_principal,
@@ -417,6 +425,7 @@ def create_app(
     app.state.review_service = service
     app.state.http_settings = http
     app.state.auth_backend = auth_backend
+    app.state.github_webhooks = github_webhooks
     app.state.repair_service = repair_service
 
     @app.exception_handler(ServiceError)
@@ -911,6 +920,117 @@ def create_app(
             principal=principal,
         )
 
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules"
+    )
+    def list_feedback_rules(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.version.list"
+        )
+        return {
+            "versions": service.list_feedback_rule_versions(
+                repository_id, principal=principal
+            )
+        }
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules",
+        status_code=201,
+    )
+    def create_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        body: FeedbackRuleVersionCreate,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.version.create"
+        )
+        return service.create_feedback_rule_version(
+            repository_id,
+            version=body.version,
+            rules=[rule.model_dump() for rule in body.rules],
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules/active"
+    )
+    def get_active_feedback_rule(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.active.read"
+        )
+        return {
+            "active": service.get_active_feedback_rule(
+                repository_id, principal=principal
+            )
+        }
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rules/{version}/activate"
+    )
+    def activate_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        version: str,
+        body: FeedbackRuleTransition,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.activate"
+        )
+        return service.transition_feedback_rule(
+            repository_id,
+            version,
+            action="activate",
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rules/{version}/rollback"
+    )
+    def rollback_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        version: str,
+        body: FeedbackRuleTransition,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.rollback"
+        )
+        return service.transition_feedback_rule(
+            repository_id,
+            version,
+            action="rollback",
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rule-receipts"
+    )
+    def list_feedback_rule_receipts(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.receipt.list"
+        )
+        return {
+            "receipts": service.list_feedback_rule_receipts(
+                repository_id, principal=principal
+            )
+        }
+
     @app.get("/v1/organizations/{organization_id}/policy")
     def get_organization_policy(request: Request, organization_id: str) -> dict[str, Any]:
         principal = require_organization(
@@ -1060,33 +1180,26 @@ def create_app(
             verified = True
             event = request.headers.get("x-github-event", "")
             delivery = request.headers.get("x-github-delivery", "")
-            if event == "ping":
-                return JSONResponse(
-                    status_code=200,
-                    content={"schema_version": SCHEMA_VERSION, "status": "pong"},
-                )
-            if event != "pull_request":
-                return JSONResponse(
-                    status_code=202,
-                    content={"schema_version": SCHEMA_VERSION, "status": "ignored"},
-                )
             if not delivery:
                 raise InvalidRequest("webhook delivery ID is required")
-            try:
-                payload = json.loads(body)
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
-            repository, pull_request, head_sha = _webhook_fields(payload)
-            job, duplicate = await anyio.to_thread.run_sync(
-                lambda: service.submit_webhook_pr(
-                    repository,
-                    pull_request,
+            payload: Any = None
+            if event in {"installation", "pull_request"}:
+                try:
+                    payload = json.loads(body)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise InvalidRequest("webhook body is not valid UTF-8 JSON") from exc
+            acknowledgement = await anyio.to_thread.run_sync(
+                lambda: github_webhooks.acknowledge(
+                    event=event,
                     delivery_id=delivery,
-                    correlation_id=delivery,
-                    head_sha=head_sha,
+                    body=body,
+                    payload=payload,
                 )
             )
-            return JSONResponse(status_code=202, content={**job, "duplicate": duplicate})
+            return JSONResponse(
+                status_code=acknowledgement.status_code,
+                content=acknowledgement.body,
+            )
         finally:
             if verified:
                 try:
