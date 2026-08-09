@@ -467,6 +467,87 @@ def _completed_review(candidate: gate_b_executor.PullRequestCandidate) -> gate_b
     )
 
 
+class _CohortReviewReader:
+    def __init__(
+        self,
+        candidates: list[gate_b_executor.PullRequestCandidate],
+        *,
+        drift_first: bool = False,
+    ) -> None:
+        self._candidates = {candidate.number: candidate for candidate in candidates}
+        self._drift_first = drift_first
+        self.read_calls: list[int] = []
+        self.diff_calls: list[int] = []
+
+    def pull_request_candidate(
+        self,
+        number: int,
+        *,
+        selection_seed_sha256: str,
+    ) -> gate_b_executor.PullRequestCandidate:
+        self.read_calls.append(number)
+        candidate = self._candidates[number]
+        if self._drift_first and len(self.read_calls) == 1:
+            return gate_b_executor.PullRequestCandidate(
+                number=candidate.number,
+                github_id=candidate.github_id,
+                base_branch=candidate.base_branch,
+                base_sha=candidate.base_sha,
+                head_sha="f" * 40,
+                updated_at_utc=candidate.updated_at_utc,
+                selection_rank_sha256=gate_b_executor.sha256_text(
+                    f"{selection_seed_sha256}\n{candidate.pr_id}"
+                ),
+            )
+        return candidate
+
+    def pull_request_diff(self, number: int) -> str:
+        self.diff_calls.append(number)
+        return "diff --git a/module.py b/module.py\n+covered = True\n"
+
+
+class _CohortReviewClient:
+    def __init__(self, *, failure_category: str | None = None) -> None:
+        self.failure_category = failure_category
+        self.calls: list[str] = []
+
+    def review(
+        self,
+        *,
+        candidate: gate_b_executor.PullRequestCandidate,
+        diff_text: str,
+    ) -> gate_b_executor.ReviewOutcome:
+        del diff_text
+        self.calls.append(candidate.pr_id)
+        if self.failure_category is not None and len(self.calls) == 1:
+            return gate_b_executor.ReviewOutcome(
+                pr_id=candidate.pr_id,
+                status="failed",
+                terminal_category=self.failure_category,
+                finding_ids=(),
+                feedback_eligible_finding_ids=(),
+                provider_call_count=1,
+                http_attempt_count=1,
+                input_tokens=10,
+                output_tokens=5,
+                cached_tokens=0,
+                response_sha256="d" * 64,
+            )
+        return gate_b_executor.ReviewOutcome(
+            pr_id=candidate.pr_id,
+            status="completed",
+            terminal_category="completed",
+            finding_ids=(),
+            feedback_eligible_finding_ids=(),
+            provider_call_count=1,
+            http_attempt_count=1,
+            input_tokens=10,
+            output_tokens=5,
+            cached_tokens=0,
+            response_sha256="c" * 64,
+        )
+
+
 def _sandbox_result(intent: gate_b_executor.RepairIntent) -> gate_b_executor.SandboxResult:
     patch = gate_b_executor.SandboxPatchFile("src/repair_target.py", b"patched = True\n")
     patch_sha = gate_b_executor.sha256_bytes(
@@ -855,6 +936,157 @@ class Phase11DHumanPilotTests(unittest.TestCase):
                 candidate=candidate,
                 diff_text="diff --git a/a.py b/a.py\n+line",
             )
+
+    def test_gate_b_review_reader_materializes_current_snapshot(self) -> None:
+        number = 7
+        seed = "e" * 64
+        pull_url = f"https://api.github.com/repos/acme/widget/pulls/{number}"
+        transport = _FakeJsonTransport(
+            {
+                ("GET", pull_url): _json_response(
+                    {
+                        "id": 5007,
+                        "number": number,
+                        "state": "open",
+                        "draft": False,
+                        "updated_at": "2026-08-06T00:00:00Z",
+                        "base": {"ref": "master", "sha": "a" * 40},
+                        "head": {"sha": "b" * 40},
+                    }
+                )
+            }
+        )
+        reader = gate_b_executor.GitHubRepositoryReader(
+            transport,
+            token=gate_b_executor.InstallationToken(
+                value="installation-token",
+                expires_at_utc="2026-08-06T01:00:00Z",
+                app_id=4421400,
+                installation_id=149747930,
+            ),
+            owner="acme",
+            repository="widget",
+            expected_repository_id=1301558766,
+        )
+        candidate = reader.pull_request_candidate(number, selection_seed_sha256=seed)
+        self.assertEqual(candidate.base_branch, "master")
+        self.assertEqual(candidate.head_sha, "b" * 40)
+        self.assertEqual(candidate.selection_rank_sha256, gate_b_executor.sha256_text(f"{seed}\npr-7"))
+
+    def test_gate_b_review_cohort_success_is_fixed_and_hash_bound(self) -> None:
+        approved, _participants, _repository, _descriptor, _runtime = _approved_gate_b_context()
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        reader = _CohortReviewReader(candidates)
+        client = _CohortReviewClient()
+        receipt = gate_b_executor.run_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            reader=reader,
+            client=client,
+            created_at_utc="2026-08-06T00:03:00Z",
+        )
+        self.assertEqual(receipt["selected_pr_count"], 20)
+        self.assertEqual(receipt["stop_category"], "none")
+        self.assertEqual(len(receipt["review_rows"]), 20)
+        self.assertEqual(len(client.calls), 20)
+        self.assertEqual(receipt["budget_usage"]["logical_calls"], 20)
+        gate_b_executor.validate_review_cohort_receipt(
+            receipt,
+            authorization=approved,
+            selection_receipt=selection_receipt,
+        )
+        tampered = copy.deepcopy(receipt)
+        tampered["budget_usage"]["logical_calls"] = 19
+        with self.assertRaisesRegex(
+            gate_b_executor.GateBExecutorError, "review_budget_usage_mismatch"
+        ):
+            gate_b_executor.validate_review_cohort_receipt(
+                tampered,
+                authorization=approved,
+                selection_receipt=selection_receipt,
+            )
+
+    def test_gate_b_review_cohort_stops_without_replacing_denominator(self) -> None:
+        approved, _participants, _repository, _descriptor, _runtime = _approved_gate_b_context()
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        client = _CohortReviewClient(failure_category="provider_text_only_response")
+        receipt = gate_b_executor.run_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            reader=_CohortReviewReader(candidates),
+            client=client,
+            created_at_utc="2026-08-06T00:03:00Z",
+        )
+        rows = receipt["review_rows"]
+        self.assertEqual(receipt["stop_category"], "provider_text_only_response")
+        self.assertEqual(len(rows), 20)
+        self.assertEqual(len(client.calls), 1)
+        self.assertEqual(rows[0]["terminal_category"], "provider_text_only_response")
+        self.assertTrue(all(row["terminal_category"] == "cohort_stopped" for row in rows[1:]))
+        self.assertTrue(all(row["provider_call_count"] == 0 for row in rows[1:]))
+
+    def test_gate_b_review_cohort_stops_before_provider_on_snapshot_drift(self) -> None:
+        approved, _participants, _repository, _descriptor, _runtime = _approved_gate_b_context()
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        client = _CohortReviewClient()
+        receipt = gate_b_executor.run_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            reader=_CohortReviewReader(candidates, drift_first=True),
+            client=client,
+            created_at_utc="2026-08-06T00:03:00Z",
+        )
+        self.assertEqual(receipt["stop_category"], "selection_candidate_drift")
+        self.assertEqual(client.calls, [])
+        self.assertEqual(receipt["budget_usage"]["logical_calls"], 0)
+
+    def test_gate_b_review_command_parser_requires_all_frozen_inputs(self) -> None:
+        args = gate_b_executor.build_parser().parse_args(
+            [
+                "review-selected-pull-requests",
+                "--authorization",
+                "authorization.json",
+                "--participants",
+                "participants.json",
+                "--repository-authorization",
+                "repository.json",
+                "--credential-descriptor",
+                "credentials.json",
+                "--runtime",
+                "runtime.json",
+                "--selection-receipt",
+                "selection.json",
+                "--source-root",
+                ".",
+                "--github-app-private-key-file",
+                "private-key.pem",
+                "--provider-key-environment",
+                "PROVIDER_KEY",
+                "--owner",
+                "acme",
+                "--repository",
+                "widget",
+                "--output",
+                "reviews.json",
+            ]
+        )
+        self.assertEqual(args.command, "review-selected-pull-requests")
+        self.assertEqual(args.selection_receipt, Path("selection.json"))
 
     @mock.patch.dict(os.environ, {"PHASE11D_PUBLISHER_TEST_KEY": "test-provider-key"})
     def test_gate_b_repair_requires_human_selection_two_approvals_and_exact_sandbox_commit(self) -> None:
