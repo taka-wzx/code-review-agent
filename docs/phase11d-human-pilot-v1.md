@@ -19,6 +19,7 @@ python phase11d_gate_b_executor.py freeze-authorization --help
 python phase11d_gate_b_executor.py approve-authorization --help
 python phase11d_gate_b_executor.py validate-authorization --help
 python phase11d_gate_b_executor.py select-pull-requests --help
+python phase11d_gate_b_executor.py review-selected-pull-requests --help
 ```
 
 The tool generates and validates synthetic receipts, reports, and a canonical manifest.
@@ -59,6 +60,14 @@ and refuses to proceed unless it can select exactly the authorized 20--30 PRs. T
 review client accepts only a structured `submit_review` tool call and records hashes,
 counts, and stable terminal categories, never raw diffs, prompts, responses, or
 credentials in a receipt.
+
+`review-selected-pull-requests` consumes that immutable selection receipt and reads
+back each selected PR before sending its bounded diff to the frozen GLM client. It
+emits exactly one hash-only row per selected PR. A snapshot mismatch, GitHub read
+failure, provider text-only response, tool/schema/usage ambiguity, redaction failure,
+or budget failure stops new provider calls; unattempted denominator rows remain as
+`cohort_stopped`. The command performs no GitHub write and cannot start Repair,
+approve WRITE/DRAFT_PR, or publish a Draft PR.
 
 The one-job `GateBRepairCoordinator` requires the exact sequence: a confirmed
 maintainer/org-admin selects a completed-review Finding; an exact in-memory Repair Plan
