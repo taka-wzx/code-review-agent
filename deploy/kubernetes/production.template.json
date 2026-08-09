@@ -1,0 +1,761 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/part-of": "code-review-agent",
+          "pod-security.kubernetes.io/enforce": "restricted",
+          "pod-security.kubernetes.io/audit": "restricted",
+          "pod-security.kubernetes.io/warn": "restricted"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "crag-service",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/part-of": "code-review-agent"
+        }
+      },
+      "automountServiceAccountToken": false
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "crag-service-defaults",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "configuration"
+        }
+      },
+      "data": {
+        "CRAG_SERVICE_HOST": "0.0.0.0",
+        "CRAG_SERVICE_PORT": "8000",
+        "CRAG_ALLOW_LOCAL_TOKEN": "false",
+        "CRAG_LOCAL_TOKEN_BEHIND_LOOPBACK_PUBLISH": "false",
+        "CRAG_WORKER_STALE_SECONDS": "30",
+        "CRAG_WORKER_CONCURRENCY": "2",
+        "CRAG_JOB_LEASE_SECONDS": "60",
+        "CRAG_JOB_HEARTBEAT_SECONDS": "10",
+        "CRAG_WORKER_POLL_SECONDS": "1",
+        "CRAG_SHUTDOWN_GRACE_SECONDS": "30"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "PersistentVolumeClaim",
+      "metadata": {
+        "name": "crag-artifacts",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "artifacts"
+        }
+      },
+      "spec": {
+        "accessModes": [
+          "ReadWriteMany"
+        ],
+        "storageClassName": "__ARTIFACT_STORAGE_CLASS__",
+        "resources": {
+          "requests": {
+            "storage": "20Gi"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crag-api",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api",
+          "app.kubernetes.io/part-of": "code-review-agent"
+        }
+      },
+      "spec": {
+        "replicas": 2,
+        "revisionHistoryLimit": 3,
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 0,
+            "maxSurge": 1
+          }
+        },
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/name": "code-review-agent",
+            "app.kubernetes.io/component": "api"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "code-review-agent",
+              "app.kubernetes.io/component": "api",
+              "app.kubernetes.io/part-of": "code-review-agent"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "crag-service",
+            "automountServiceAccountToken": false,
+            "terminationGracePeriodSeconds": 45,
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 1000,
+              "runAsGroup": 1000,
+              "fsGroup": 1000,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "containers": [
+              {
+                "name": "api",
+                "image": "__IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "args": [
+                  "crag-service"
+                ],
+                "ports": [
+                  {
+                    "name": "http",
+                    "containerPort": 8000,
+                    "protocol": "TCP"
+                  }
+                ],
+                "envFrom": [
+                  {
+                    "configMapRef": {
+                      "name": "crag-service-defaults"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "__RUNTIME_CONFIG__"
+                    }
+                  }
+                ],
+                "env": [
+                  {
+                    "name": "CRAG_DATABASE_PASSWORD_FILE",
+                    "value": "/run/secrets/crag/database_password"
+                  },
+                  {
+                    "name": "CRAG_WEBHOOK_SECRET_FILE",
+                    "value": "/run/secrets/crag/webhook_secret"
+                  },
+                  {
+                    "name": "CRAG_SERVICE_TOKEN_FILE",
+                    "value": "/run/secrets/crag/service_token"
+                  },
+                  {
+                    "name": "CRAG_STATE_DIR",
+                    "value": "/var/lib/crag/api-state"
+                  },
+                  {
+                    "name": "CRAG_JOB_DATA_DIR",
+                    "value": "/var/lib/crag/jobs"
+                  },
+                  {
+                    "name": "CRAG_TRACE_DIR",
+                    "value": "/var/lib/crag/traces"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "250m",
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "1Gi"
+                  }
+                },
+                "startupProbe": {
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": "http"
+                  },
+                  "failureThreshold": 30,
+                  "periodSeconds": 5
+                },
+                "livenessProbe": {
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": "http"
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3,
+                  "failureThreshold": 3
+                },
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": "http"
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 10,
+                  "timeoutSeconds": 3,
+                  "failureThreshold": 3
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "name": "runtime-secrets",
+                    "mountPath": "/run/secrets/crag",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "artifacts",
+                    "mountPath": "/var/lib/crag"
+                  },
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "runtime-secrets",
+                "secret": {
+                  "secretName": "__RUNTIME_SECRET__",
+                  "defaultMode": 288,
+                  "items": [
+                    {
+                      "key": "database_password",
+                      "path": "database_password"
+                    },
+                    {
+                      "key": "webhook_secret",
+                      "path": "webhook_secret"
+                    },
+                    {
+                      "key": "service_token",
+                      "path": "service_token"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "artifacts",
+                "persistentVolumeClaim": {
+                  "claimName": "crag-artifacts"
+                }
+              },
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "64Mi"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "name": "crag-api",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api"
+        }
+      },
+      "spec": {
+        "type": "ClusterIP",
+        "selector": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api"
+        },
+        "ports": [
+          {
+            "name": "http",
+            "port": 80,
+            "targetPort": "http",
+            "protocol": "TCP"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "name": "crag-worker",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "worker",
+          "app.kubernetes.io/part-of": "code-review-agent"
+        }
+      },
+      "spec": {
+        "replicas": 2,
+        "revisionHistoryLimit": 3,
+        "strategy": {
+          "type": "RollingUpdate",
+          "rollingUpdate": {
+            "maxUnavailable": 1,
+            "maxSurge": 1
+          }
+        },
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/name": "code-review-agent",
+            "app.kubernetes.io/component": "worker"
+          }
+        },
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "code-review-agent",
+              "app.kubernetes.io/component": "worker",
+              "app.kubernetes.io/part-of": "code-review-agent"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "crag-service",
+            "automountServiceAccountToken": false,
+            "terminationGracePeriodSeconds": 45,
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 1000,
+              "runAsGroup": 1000,
+              "fsGroup": 1000,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "containers": [
+              {
+                "name": "worker",
+                "image": "__IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "args": [
+                  "crag-worker"
+                ],
+                "envFrom": [
+                  {
+                    "configMapRef": {
+                      "name": "crag-service-defaults"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "__RUNTIME_CONFIG__"
+                    }
+                  }
+                ],
+                "env": [
+                  {
+                    "name": "CRAG_DATABASE_PASSWORD_FILE",
+                    "value": "/run/secrets/crag/database_password"
+                  },
+                  {
+                    "name": "CRAG_STATE_DIR",
+                    "value": "/var/lib/crag/worker-state"
+                  },
+                  {
+                    "name": "CRAG_JOB_DATA_DIR",
+                    "value": "/var/lib/crag/jobs"
+                  },
+                  {
+                    "name": "CRAG_TRACE_DIR",
+                    "value": "/var/lib/crag/traces"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "500m",
+                    "memory": "1Gi"
+                  },
+                  "limits": {
+                    "cpu": "2",
+                    "memory": "2Gi"
+                  }
+                },
+                "startupProbe": {
+                  "exec": {
+                    "command": [
+                      "crag-entrypoint",
+                      "crag-worker",
+                      "--check"
+                    ]
+                  },
+                  "failureThreshold": 30,
+                  "periodSeconds": 5
+                },
+                "livenessProbe": {
+                  "exec": {
+                    "command": [
+                      "crag-entrypoint",
+                      "crag-worker",
+                      "--check"
+                    ]
+                  },
+                  "initialDelaySeconds": 30,
+                  "periodSeconds": 20,
+                  "timeoutSeconds": 10,
+                  "failureThreshold": 3
+                },
+                "readinessProbe": {
+                  "exec": {
+                    "command": [
+                      "crag-entrypoint",
+                      "crag-worker",
+                      "--check"
+                    ]
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 15,
+                  "timeoutSeconds": 10,
+                  "failureThreshold": 3
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "name": "runtime-secrets",
+                    "mountPath": "/run/secrets/crag",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "artifacts",
+                    "mountPath": "/var/lib/crag"
+                  },
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "runtime-secrets",
+                "secret": {
+                  "secretName": "__RUNTIME_SECRET__",
+                  "defaultMode": 288,
+                  "items": [
+                    {
+                      "key": "database_password",
+                      "path": "database_password"
+                    },
+                    {
+                      "key": "webhook_secret",
+                      "path": "webhook_secret"
+                    },
+                    {
+                      "key": "service_token",
+                      "path": "service_token"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "artifacts",
+                "persistentVolumeClaim": {
+                  "claimName": "crag-artifacts"
+                }
+              },
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "64Mi"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "batch/v1",
+      "kind": "Job",
+      "metadata": {
+        "name": "crag-migrate",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "migration"
+        }
+      },
+      "spec": {
+        "backoffLimit": 1,
+        "ttlSecondsAfterFinished": 86400,
+        "template": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "code-review-agent",
+              "app.kubernetes.io/component": "migration"
+            }
+          },
+          "spec": {
+            "serviceAccountName": "crag-service",
+            "automountServiceAccountToken": false,
+            "restartPolicy": "Never",
+            "securityContext": {
+              "runAsNonRoot": true,
+              "runAsUser": 1000,
+              "runAsGroup": 1000,
+              "fsGroup": 1000,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            },
+            "containers": [
+              {
+                "name": "migrate",
+                "image": "__IMAGE__",
+                "imagePullPolicy": "IfNotPresent",
+                "args": [
+                  "crag-db",
+                  "upgrade"
+                ],
+                "envFrom": [
+                  {
+                    "configMapRef": {
+                      "name": "crag-service-defaults"
+                    }
+                  },
+                  {
+                    "configMapRef": {
+                      "name": "__RUNTIME_CONFIG__"
+                    }
+                  }
+                ],
+                "env": [
+                  {
+                    "name": "CRAG_DATABASE_PASSWORD_FILE",
+                    "value": "/run/secrets/crag/database_password"
+                  },
+                  {
+                    "name": "CRAG_STATE_DIR",
+                    "value": "/var/lib/crag/migration-state"
+                  }
+                ],
+                "resources": {
+                  "requests": {
+                    "cpu": "250m",
+                    "memory": "512Mi"
+                  },
+                  "limits": {
+                    "cpu": "1",
+                    "memory": "1Gi"
+                  }
+                },
+                "securityContext": {
+                  "allowPrivilegeEscalation": false,
+                  "readOnlyRootFilesystem": true,
+                  "capabilities": {
+                    "drop": [
+                      "ALL"
+                    ]
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "name": "runtime-secrets",
+                    "mountPath": "/run/secrets/crag",
+                    "readOnly": true
+                  },
+                  {
+                    "name": "artifacts",
+                    "mountPath": "/var/lib/crag"
+                  },
+                  {
+                    "name": "tmp",
+                    "mountPath": "/tmp"
+                  }
+                ]
+              }
+            ],
+            "volumes": [
+              {
+                "name": "runtime-secrets",
+                "secret": {
+                  "secretName": "__RUNTIME_SECRET__",
+                  "defaultMode": 288,
+                  "items": [
+                    {
+                      "key": "database_password",
+                      "path": "database_password"
+                    },
+                    {
+                      "key": "webhook_secret",
+                      "path": "webhook_secret"
+                    },
+                    {
+                      "key": "service_token",
+                      "path": "service_token"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "artifacts",
+                "persistentVolumeClaim": {
+                  "claimName": "crag-artifacts"
+                }
+              },
+              {
+                "name": "tmp",
+                "emptyDir": {
+                  "sizeLimit": "64Mi"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "crag-api-ingress",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api"
+        }
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "app.kubernetes.io/name": "code-review-agent",
+            "app.kubernetes.io/component": "api"
+          }
+        },
+        "policyTypes": [
+          "Ingress"
+        ],
+        "ingress": [
+          {
+            "from": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "ingress-nginx"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 8000
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "policy/v1",
+      "kind": "PodDisruptionBudget",
+      "metadata": {
+        "name": "crag-api",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api"
+        }
+      },
+      "spec": {
+        "minAvailable": 1,
+        "selector": {
+          "matchLabels": {
+            "app.kubernetes.io/name": "code-review-agent",
+            "app.kubernetes.io/component": "api"
+          }
+        }
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "Ingress",
+      "metadata": {
+        "name": "crag-api",
+        "namespace": "__NAMESPACE__",
+        "labels": {
+          "app.kubernetes.io/name": "code-review-agent",
+          "app.kubernetes.io/component": "api"
+        },
+        "annotations": {
+          "nginx.ingress.kubernetes.io/force-ssl-redirect": "true",
+          "nginx.ingress.kubernetes.io/ssl-redirect": "true"
+        }
+      },
+      "spec": {
+        "ingressClassName": "nginx",
+        "tls": [
+          {
+            "hosts": [
+              "__INGRESS_HOST__"
+            ],
+            "secretName": "__TLS_SECRET__"
+          }
+        ],
+        "rules": [
+          {
+            "host": "__INGRESS_HOST__",
+            "http": {
+              "paths": [
+                {
+                  "path": "/",
+                  "pathType": "Prefix",
+                  "backend": {
+                    "service": {
+                      "name": "crag-api",
+                      "port": {
+                        "name": "http"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
