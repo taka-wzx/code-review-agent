@@ -1,0 +1,7 @@
+{
+  "schema_version": "crag.supply-chain-policy/v1",
+  "image_repository": "ghcr.io/taka-wzx/code-review-agent",
+  "certificate_oidc_issuer": "https://token.actions.githubusercontent.com",
+  "certificate_identity_regexp": "^https://github\\.com/taka-wzx/code-review-agent/\\.github/workflows/supply-chain\\.yml@refs/tags/v[^/]+$",
+  "provenance_predicate_type": "https://slsa.dev/provenance/v1"
+}
