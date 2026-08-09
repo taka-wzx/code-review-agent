@@ -134,6 +134,27 @@ class RepositoryUpdate(BaseModel):
     policy_version: str = Field(min_length=1, max_length=128)
 
 
+class FeedbackRuleItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    rule_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    category: str = Field(pattern=r"^[a-z][a-z0-9_.-]{0,63}$")
+    action: str = Field(pattern=r"^(prioritize|suppress|require_verification)$")
+    condition: str = Field(min_length=1, max_length=256)
+    rationale: str = Field(min_length=1, max_length=512)
+
+
+class FeedbackRuleVersionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    rules: list[FeedbackRuleItem] = Field(min_length=1, max_length=64)
+    reason: str = Field(min_length=1, max_length=512)
+
+
+class FeedbackRuleTransition(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reason: str = Field(min_length=1, max_length=512)
+
+
 class CredentialCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expires_in_seconds: int = Field(default=3600, ge=60, le=86400)
@@ -898,6 +919,117 @@ def create_app(
             policy_version=body.policy_version,
             principal=principal,
         )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules"
+    )
+    def list_feedback_rules(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.version.list"
+        )
+        return {
+            "versions": service.list_feedback_rule_versions(
+                repository_id, principal=principal
+            )
+        }
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules",
+        status_code=201,
+    )
+    def create_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        body: FeedbackRuleVersionCreate,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.version.create"
+        )
+        return service.create_feedback_rule_version(
+            repository_id,
+            version=body.version,
+            rules=[rule.model_dump() for rule in body.rules],
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/feedback-rules/active"
+    )
+    def get_active_feedback_rule(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.active.read"
+        )
+        return {
+            "active": service.get_active_feedback_rule(
+                repository_id, principal=principal
+            )
+        }
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rules/{version}/activate"
+    )
+    def activate_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        version: str,
+        body: FeedbackRuleTransition,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.activate"
+        )
+        return service.transition_feedback_rule(
+            repository_id,
+            version,
+            action="activate",
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.post(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rules/{version}/rollback"
+    )
+    def rollback_feedback_rule(
+        request: Request,
+        organization_id: str,
+        repository_id: str,
+        version: str,
+        body: FeedbackRuleTransition,
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.rollback"
+        )
+        return service.transition_feedback_rule(
+            repository_id,
+            version,
+            action="rollback",
+            reason=body.reason,
+            principal=principal,
+        )
+
+    @app.get(
+        "/v1/organizations/{organization_id}/repositories/{repository_id}/"
+        "feedback-rule-receipts"
+    )
+    def list_feedback_rule_receipts(
+        request: Request, organization_id: str, repository_id: str
+    ) -> dict[str, Any]:
+        principal = require_organization(
+            request, organization_id, action="feedback_rule.receipt.list"
+        )
+        return {
+            "receipts": service.list_feedback_rule_receipts(
+                repository_id, principal=principal
+            )
+        }
 
     @app.get("/v1/organizations/{organization_id}/policy")
     def get_organization_policy(request: Request, organization_id: str) -> dict[str, Any]:
