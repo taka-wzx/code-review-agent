@@ -78,6 +78,23 @@ def load_dotenv() -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+def _client_from_api_key(
+    api_key: str,
+    *,
+    provider: str,
+    model: str | None = None,
+) -> tuple[OpenAI, str]:
+    """Build a client from credential material and frozen provider settings."""
+    cfg = PROVIDERS[provider]
+    client = OpenAI(
+        api_key=api_key,
+        base_url=cfg["base_url"],
+        timeout=REQUEST_TIMEOUT,
+        max_retries=2,
+    )
+    return client, model or cfg["model"]
+
+
 def make_client(*, load_env_file: bool = True) -> tuple[OpenAI, str]:
     """Build a provider-agnostic client + model id from LLM_PROVIDER env.
 
@@ -102,6 +119,8 @@ def make_client(*, load_env_file: bool = True) -> tuple[OpenAI, str]:
             f"No credentials for provider {provider!r}: set {envs} or the corresponding "
             "_FILE variable"
         )
-    client = OpenAI(api_key=api_key, base_url=cfg["base_url"],
-                    timeout=REQUEST_TIMEOUT, max_retries=2)
-    return client, os.environ.get("LLM_MODEL") or cfg["model"]
+    return _client_from_api_key(
+        api_key,
+        provider=provider,
+        model=os.environ.get("LLM_MODEL"),
+    )

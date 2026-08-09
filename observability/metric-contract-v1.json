@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "contract_id": "crag-production-metrics-v1",
+  "exporter": {
+    "endpoint": "/metrics",
+    "source": "src/code_review_agent/production_metrics.py",
+    "content_type": "text/plain; version=0.0.4; charset=utf-8"
+  },
+  "dashboard": {
+    "path": "observability/grafana/production-overview-v1.json",
+    "uid": "crag-production-overview-v1",
+    "required_service_paths": [
+      "review",
+      "queue",
+      "provider",
+      "approval",
+      "publication"
+    ]
+  },
+  "label_policy": {
+    "allowed": [
+      "decision",
+      "le",
+      "operation",
+      "provider",
+      "reason",
+      "status",
+      "tool",
+      "type"
+    ],
+    "prohibited": [
+      "error",
+      "message",
+      "repository",
+      "review_id",
+      "trace_id",
+      "user_id"
+    ],
+    "max_value_length": 64
+  },
+  "metrics": [
+    {
+      "name": "review_jobs_total",
+      "prometheus_type": "counter",
+      "service_path": "review",
+      "summary": "Durable review jobs reaching each outcome.",
+      "label_values": {
+        "status": [
+          "awaiting_approval",
+          "dead_letter",
+          "declined",
+          "failed",
+          "published"
+        ]
+      },
+      "max_series": 5
+    },
+    {
+      "name": "review_submissions_total",
+      "prometheus_type": "counter",
+      "service_path": "review",
+      "summary": "Unique durable review submissions.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "review_duration_seconds",
+      "prometheus_type": "histogram",
+      "service_path": "review",
+      "summary": "Review wall time from durable creation to completion.",
+      "label_values": {
+        "le": ["5", "15", "30", "60", "120", "300", "600", "1200", "+Inf"]
+      },
+      "max_series": 9
+    },
+    {
+      "name": "webhook_ack_seconds",
+      "prometheus_type": "histogram",
+      "service_path": "ingress",
+      "summary": "GitHub webhook acknowledgement latency.",
+      "label_values": {
+        "le": ["0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2", "5", "+Inf"]
+      },
+      "max_series": 10
+    },
+    {
+      "name": "queue_depth",
+      "prometheus_type": "gauge",
+      "service_path": "queue",
+      "summary": "Jobs currently waiting in received or queued state.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "queue_wait_seconds",
+      "prometheus_type": "histogram",
+      "service_path": "queue",
+      "summary": "Time from queued state to first worker start.",
+      "label_values": {
+        "le": ["0.1", "0.5", "1", "5", "15", "30", "60", "120", "300", "600", "+Inf"]
+      },
+      "max_series": 11
+    },
+    {
+      "name": "llm_requests_total",
+      "prometheus_type": "counter",
+      "service_path": "provider",
+      "summary": "Canonical LLM request spans by provider and status.",
+      "label_values": {
+        "provider": ["deepseek", "openai", "other", "unknown", "zhipuai"],
+        "status": ["429", "5xx", "error", "ok"]
+      },
+      "max_series": 20
+    },
+    {
+      "name": "llm_request_duration_seconds",
+      "prometheus_type": "histogram",
+      "service_path": "provider",
+      "summary": "Canonical LLM request span duration.",
+      "label_values": {
+        "le": ["0.1", "0.25", "0.5", "1", "2", "5", "10", "30", "60", "120", "+Inf"]
+      },
+      "max_series": 11
+    },
+    {
+      "name": "llm_tokens_total",
+      "prometheus_type": "counter",
+      "service_path": "provider",
+      "summary": "Canonical LLM token usage by bounded token type.",
+      "label_values": {
+        "type": ["cache_creation", "cache_read", "input", "output", "reasoning"]
+      },
+      "max_series": 5
+    },
+    {
+      "name": "llm_cost_cny_total",
+      "prometheus_type": "counter",
+      "service_path": "provider",
+      "summary": "Settled model cost converted with the configured fixed rate.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "tool_calls_total",
+      "prometheus_type": "counter",
+      "service_path": "review",
+      "summary": "Canonical tool execution spans by bounded tool and status.",
+      "label_values": {
+        "status": ["error", "ok"],
+        "tool": ["other", "read_file", "run_linter", "search_repo", "submit_review"]
+      },
+      "max_series": 10
+    },
+    {
+      "name": "fail_open_total",
+      "prometheus_type": "counter",
+      "service_path": "review",
+      "summary": "Canonical fail-open policy decisions.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "degraded_total",
+      "prometheus_type": "counter",
+      "service_path": "safety",
+      "summary": "Canonical degraded decisions and telemetry runs.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "approval_wait_seconds",
+      "prometheus_type": "histogram",
+      "service_path": "approval",
+      "summary": "Time from review completion to human decision.",
+      "label_values": {
+        "le": ["60", "300", "900", "3600", "14400", "86400", "604800", "+Inf"]
+      },
+      "max_series": 8
+    },
+    {
+      "name": "approval_decisions_total",
+      "prometheus_type": "counter",
+      "service_path": "approval",
+      "summary": "Durable publication approval decisions.",
+      "label_values": {
+        "decision": ["approved", "rejected"]
+      },
+      "max_series": 2
+    },
+    {
+      "name": "finding_feedback_total",
+      "prometheus_type": "counter",
+      "service_path": "approval",
+      "summary": "Durable finding feedback decisions.",
+      "label_values": {
+        "decision": ["accepted", "duplicate", "fixed", "rejected", "uncertain"]
+      },
+      "max_series": 5
+    },
+    {
+      "name": "idempotency_hits_total",
+      "prometheus_type": "counter",
+      "service_path": "review",
+      "summary": "Duplicate submissions resolved to existing work.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "publisher_calls_total",
+      "prometheus_type": "counter",
+      "service_path": "publication",
+      "summary": "Durable publisher attempt outcomes.",
+      "label_values": {
+        "status": ["failed", "succeeded"]
+      },
+      "max_series": 2
+    },
+    {
+      "name": "trace_completeness_total",
+      "prometheus_type": "counter",
+      "service_path": "safety",
+      "summary": "Terminal jobs partitioned by canonical trace completeness.",
+      "label_values": {
+        "status": ["complete", "incomplete"]
+      },
+      "max_series": 2
+    },
+    {
+      "name": "duplicate_executions_total",
+      "prometheus_type": "counter",
+      "service_path": "queue",
+      "summary": "Additional worker attempts beyond the first attempt.",
+      "label_values": {},
+      "max_series": 1
+    },
+    {
+      "name": "unauthorized_operations_total",
+      "prometheus_type": "counter",
+      "service_path": "publication",
+      "summary": "Denied operations grouped into bounded classes.",
+      "label_values": {
+        "operation": ["approval", "feedback", "other", "publish"]
+      },
+      "max_series": 4
+    },
+    {
+      "name": "approval_validation_failures_total",
+      "prometheus_type": "counter",
+      "service_path": "approval",
+      "summary": "Approval replay and binding failures.",
+      "label_values": {
+        "reason": ["consumed", "expired", "mismatch", "other", "replay"]
+      },
+      "max_series": 5
+    }
+  ]
+}
