@@ -62,6 +62,10 @@ class FeedbackBindingError(DatabaseError):
         super().__init__(code)
 
 
+class WebhookDeliveryConflict(DatabaseError):
+    """A delivery ID was reused for different signed webhook content."""
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -210,6 +214,30 @@ def create_database_engine(database_url: str) -> Engine:
 
 def _mapping(row: Any) -> dict[str, Any]:
     return dict(row._mapping)
+
+
+def _github_webhook_delivery(
+    connection: Connection, delivery_id: str
+) -> dict[str, Any] | None:
+    row = connection.execute(
+        text(
+            "SELECT delivery_id, event, payload_sha256, status, reason, review_job_id, "
+            "installation_id, http_status, created_at FROM github_webhook_deliveries "
+            "WHERE delivery_id=:delivery_id"
+        ),
+        {"delivery_id": delivery_id},
+    ).first()
+    return None if row is None else _mapping(row)
+
+
+def _require_matching_webhook_delivery(
+    record: Mapping[str, Any], *, event: str, payload_sha256: str
+) -> None:
+    if (
+        str(record["event"]) != event
+        or not secrets.compare_digest(str(record["payload_sha256"]), payload_sha256)
+    ):
+        raise WebhookDeliveryConflict("webhook delivery identity conflicts")
 
 
 def _repository_id(prefix: str, organization_id: str, alias: str) -> str:
@@ -769,6 +797,212 @@ class Database:
                     "FROM repositories WHERE lower(alias)=:alias AND active=:active"
                 ),
                 {"alias": alias.casefold(), "active": True},
+            ).first()
+        return None if row is None else _mapping(row)
+
+    def github_webhook_delivery(
+        self, delivery_id: str, *, event: str, payload_sha256: str
+    ) -> dict[str, Any] | None:
+        """Return one matching delivery receipt without exposing webhook content."""
+        with self.engine.connect() as connection:
+            record = _github_webhook_delivery(connection, delivery_id)
+        if record is not None:
+            _require_matching_webhook_delivery(
+                record, event=event, payload_sha256=payload_sha256
+            )
+        return record
+
+    def record_github_webhook_delivery(
+        self,
+        *,
+        delivery_id: str,
+        event: str,
+        payload_sha256: str,
+        status: str,
+        reason: str | None = None,
+        review_job_id: str | None = None,
+        installation_id: str | None = None,
+        http_status: int = 202,
+    ) -> tuple[dict[str, Any], bool]:
+        """Persist a non-installation acknowledgement with delivery-level idempotency."""
+        record = {
+            "delivery_id": delivery_id,
+            "event": event,
+            "payload_sha256": payload_sha256,
+            "status": status,
+            "reason": reason,
+            "review_job_id": review_job_id,
+            "installation_id": installation_id,
+            "http_status": http_status,
+            "created_at": utc_now(),
+        }
+        with self._write_transaction() as connection:
+            existing = _github_webhook_delivery(connection, delivery_id)
+            if existing is not None:
+                _require_matching_webhook_delivery(
+                    existing, event=event, payload_sha256=payload_sha256
+                )
+                return existing, True
+            inserted = connection.execute(
+                text(
+                    "INSERT INTO github_webhook_deliveries "
+                    "(delivery_id, event, payload_sha256, status, reason, review_job_id, "
+                    "installation_id, http_status, created_at) VALUES "
+                    "(:delivery_id, :event, :payload_sha256, :status, :reason, "
+                    ":review_job_id, :installation_id, :http_status, :created_at) "
+                    "ON CONFLICT(delivery_id) DO NOTHING"
+                ),
+                record,
+            )
+            if inserted.rowcount == 1:
+                return record, False
+            existing = _github_webhook_delivery(connection, delivery_id)
+            if existing is None:
+                raise DatabaseError("webhook delivery could not be recorded")
+            _require_matching_webhook_delivery(
+                existing, event=event, payload_sha256=payload_sha256
+            )
+            return existing, True
+
+    def apply_github_installation_webhook(
+        self,
+        *,
+        delivery_id: str,
+        payload_sha256: str,
+        action: str,
+        installation_id: int,
+        app_id: int,
+        account_id: int,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically apply one validated installation event and its acknowledgement."""
+        installation_key = str(installation_id)
+        record = {
+            "delivery_id": delivery_id,
+            "event": "installation",
+            "payload_sha256": payload_sha256,
+            "status": "processing",
+            "reason": None,
+            "review_job_id": None,
+            "installation_id": installation_key,
+            "http_status": 202,
+            "created_at": utc_now(),
+        }
+        with self._write_transaction() as connection:
+            inserted = connection.execute(
+                text(
+                    "INSERT INTO github_webhook_deliveries "
+                    "(delivery_id, event, payload_sha256, status, reason, review_job_id, "
+                    "installation_id, http_status, created_at) VALUES "
+                    "(:delivery_id, :event, :payload_sha256, :status, :reason, "
+                    ":review_job_id, :installation_id, :http_status, :created_at) "
+                    "ON CONFLICT(delivery_id) DO NOTHING"
+                ),
+                record,
+            )
+            if inserted.rowcount != 1:
+                existing = _github_webhook_delivery(connection, delivery_id)
+                if existing is None:
+                    raise DatabaseError("webhook delivery could not be recorded")
+                _require_matching_webhook_delivery(
+                    existing, event="installation", payload_sha256=payload_sha256
+                )
+                return existing, True
+
+            installation_row = connection.execute(
+                text(
+                    "SELECT installation_id, app_id, account_id, state FROM "
+                    "github_app_installations WHERE installation_id=:installation_id"
+                ),
+                {"installation_id": installation_key},
+            ).first()
+            state: str | None = None
+            if installation_row is None:
+                if action == "created":
+                    state = "active"
+                    connection.execute(
+                        text(
+                            "INSERT INTO github_app_installations "
+                            "(installation_id, app_id, account_id, state, last_delivery_id, "
+                            "last_payload_sha256, created_at, updated_at) VALUES "
+                            "(:installation_id, :app_id, :account_id, :state, :delivery_id, "
+                            ":payload_sha256, :created_at, :updated_at)"
+                        ),
+                        {
+                            "installation_id": installation_key,
+                            "app_id": app_id,
+                            "account_id": account_id,
+                            "state": state,
+                            "delivery_id": delivery_id,
+                            "payload_sha256": payload_sha256,
+                            "created_at": record["created_at"],
+                            "updated_at": record["created_at"],
+                        },
+                    )
+                else:
+                    record["status"] = "ignored"
+                    record["reason"] = "installation_unknown"
+            else:
+                current = _mapping(installation_row)
+                if int(current["app_id"]) != app_id or int(current["account_id"]) != account_id:
+                    record["status"] = "ignored"
+                    record["reason"] = "installation_identity_mismatch"
+                else:
+                    transitions = {
+                        "active": {
+                            "created": "active",
+                            "new_permissions_accepted": "active",
+                            "suspend": "suspended",
+                            "unsuspend": "active",
+                            "deleted": "deleted",
+                        },
+                        "suspended": {
+                            "suspend": "suspended",
+                            "unsuspend": "active",
+                            "deleted": "deleted",
+                        },
+                        "deleted": {"deleted": "deleted"},
+                    }
+                    state = transitions.get(str(current["state"]), {}).get(action)
+                    if state is None:
+                        record["status"] = "ignored"
+                        record["reason"] = "installation_transition_denied"
+                    else:
+                        connection.execute(
+                            text(
+                                "UPDATE github_app_installations SET state=:state, "
+                                "last_delivery_id=:delivery_id, "
+                                "last_payload_sha256=:payload_sha256, updated_at=:updated_at "
+                                "WHERE installation_id=:installation_id"
+                            ),
+                            {
+                                "state": state,
+                                "delivery_id": delivery_id,
+                                "payload_sha256": payload_sha256,
+                                "updated_at": record["created_at"],
+                                "installation_id": installation_key,
+                            },
+                        )
+
+            if state is not None:
+                record["status"] = f"installation_{state}"
+            connection.execute(
+                text(
+                    "UPDATE github_webhook_deliveries SET status=:status, reason=:reason "
+                    "WHERE delivery_id=:delivery_id"
+                ),
+                record,
+            )
+        return record, False
+
+    def github_app_installation(self, installation_id: int) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                text(
+                    "SELECT installation_id, app_id, account_id, state, last_delivery_id, "
+                    "last_payload_sha256, created_at, updated_at FROM github_app_installations "
+                    "WHERE installation_id=:installation_id"
+                ),
+                {"installation_id": str(installation_id)},
             ).first()
         return None if row is None else _mapping(row)
 

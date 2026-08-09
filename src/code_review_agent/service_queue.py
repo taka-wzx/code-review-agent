@@ -35,6 +35,11 @@ from code_review_agent.database import (
     sqlite_database_url,
     upgrade_database,
 )
+from code_review_agent.feedback_rules import (
+    FeedbackRuleStore,
+    public_binding,
+    snapshot_identity,
+)
 from code_review_agent.identity import Principal
 
 
@@ -155,6 +160,7 @@ class JobLease:
     max_attempts: int
     model_call_limit: int
     payload_key: str | None
+    feedback_rule: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -808,6 +814,17 @@ class JobStore:
 
         with self._transaction(immediate=True) as connection:
             current = _database_clock(connection, now)
+            active_rule = FeedbackRuleStore.snapshot_for_repository(
+                connection, organization_id, repository_id
+            )
+            active_rule_identity = snapshot_identity(active_rule)
+            if active_rule_identity is not None:
+                submission = hashlib.sha256(
+                    f"{submission}\0feedback-rule\0{active_rule_identity}".encode("utf-8")
+                ).hexdigest()
+                fingerprint = hashlib.sha256(
+                    f"{source_fingerprint}\0{submission}".encode("utf-8")
+                ).hexdigest()
             duplicate = self._find_duplicate(
                 connection, organization_id, submission, idempotency_key_hash
             )
@@ -926,6 +943,15 @@ class JobStore:
                             "updated": current,
                         },
                     )
+                    if active_rule is not None:
+                        FeedbackRuleStore.bind_snapshot(
+                            connection,
+                            organization_id=organization_id,
+                            repository_id=repository_id,
+                            review_job_id=job_id,
+                            snapshot=active_rule,
+                            bound_at=current,
+                        )
                     self._bind_idempotency_key(
                         connection,
                         organization_id=organization_id,
@@ -1533,6 +1559,9 @@ class JobStore:
                     )
                     if result.rowcount != 1:
                         raise RuntimeError("locked review could not be claimed")
+                    feedback_rule = FeedbackRuleStore.binding_for_job(
+                        connection, organization_id, job_id
+                    )
                     claimed_lease = JobLease(
                             job_id=job_id,
                             organization_id=organization_id,
@@ -1555,6 +1584,7 @@ class JobStore:
                             payload_key=(
                                 str(row["payload_key"]) if row.get("payload_key") else None
                             ),
+                            feedback_rule=feedback_rule,
                         )
             if terminalized:
                 self._delete_payload(terminal_payload_key)
@@ -1821,6 +1851,9 @@ class JobStore:
 
     def get(self, job_id: str, principal: Principal | None = None) -> dict[str, Any]:
         row = self._row(job_id, principal)
+        feedback_rule = FeedbackRuleStore(self.database).binding(
+            str(row["organization_id"]), str(row["id"])
+        )
         result: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "review_id": row["id"],
@@ -1840,6 +1873,7 @@ class JobStore:
             "started_at": _public_datetime(row["started_at"]),
             "completed_at": _public_datetime(row["completed_at"]),
             "attempt_count": row.get("attempt_count", 0),
+            "feedback_rule": public_binding(feedback_rule),
         }
         if row["review_json"] is not None:
             result["review"] = json.loads(row["review_json"])

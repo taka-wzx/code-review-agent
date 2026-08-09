@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from functools import partial
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -22,8 +25,14 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from code_review_agent.database import Database, database_url_from_env, sqlite_database_url
 from code_review_agent.context_memory import OrganizationPolicyStore, RepositoryMemoryStore
-from code_review_agent.llm import make_client
+from code_review_agent.llm import PROVIDERS, _client_from_api_key, make_client
 from code_review_agent.observability import aggregate_trace, load_span_records
+from code_review_agent.secret_manager import (
+    AtomicFileSecretManager,
+    RotatingSecretClientFactory,
+    SecretManagerError,
+    SecretRotationEvent,
+)
 from code_review_agent.service_core import (
     AuthorizationDenied,
     DefaultReviewRunner,
@@ -38,6 +47,17 @@ from code_review_agent.service_queue import JobLease, JobStore, LeaseLost, SCHEM
 from code_review_agent.repair_service import (
     SyntheticRepairWorker,
     create_synthetic_staging_repair_service,
+)
+
+
+_LOGGER = logging.getLogger(__name__)
+_PROVIDER_CREDENTIAL_ENV_NAMES = (
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_API_KEY_FILE",
+    "GLM_API_KEY",
+    "GLM_API_KEY_FILE",
+    "ZHIPUAI_API_KEY",
+    "ZHIPUAI_API_KEY_FILE",
 )
 
 
@@ -200,6 +220,8 @@ def classify_failure(
     name = type(exc).__name__.casefold()
     status = _status_code(exc)
     backoff = _backoff(job_id, attempt_count)
+    if isinstance(exc, SecretManagerError):
+        return RetryDecision(exc.code, True, backoff)
     if "ratelimit" in name or status == 429:
         provider_delay, not_before = _rate_limit_timing(exc)
         return RetryDecision(
@@ -396,6 +418,7 @@ class ReviewWorker:
                     head_sha=lease.head_sha,
                     attempt_count=lease.attempt_count,
                     model_call_limit=lease.model_call_limit,
+                    feedback_rule=lease.feedback_rule,
                 )
                 review = self.runner(request, trace_path)
             except BaseException as exc:
@@ -589,6 +612,49 @@ def _validate_provider_credentials() -> None:
     raise InvalidRequest("provider credential file is required")
 
 
+def _provider_runtime_settings() -> tuple[str, str]:
+    provider = os.environ.get("LLM_PROVIDER", "deepseek").casefold()
+    if provider not in PROVIDERS:
+        raise InvalidRequest("LLM_PROVIDER is unsupported")
+    return provider, os.environ.get("LLM_MODEL") or PROVIDERS[provider]["model"]
+
+
+def _record_secret_rotation_event(event: SecretRotationEvent) -> None:
+    _LOGGER.info(
+        "provider secret rotation %s",
+        json.dumps(event.as_dict(), sort_keys=True, separators=(",", ":")),
+    )
+
+
+def _rotating_provider_client_factory() -> RotatingSecretClientFactory:
+    secret_file = os.environ.get("CRAG_PROVIDER_SECRET_FILE")
+    if not secret_file:
+        raise InvalidRequest("CRAG_PROVIDER_SECRET_FILE is required")
+    if any(name in os.environ for name in _PROVIDER_CREDENTIAL_ENV_NAMES):
+        raise InvalidRequest("provider secret-manager mode cannot be mixed with legacy credentials")
+    secret_path = Path(secret_file)
+    if not secret_path.is_absolute():
+        raise InvalidRequest("CRAG_PROVIDER_SECRET_FILE must be an absolute path")
+    provider, model = _provider_runtime_settings()
+    source = AtomicFileSecretManager(
+        secret_path,
+        secret_id=f"crag.provider.{provider}.api-key",
+    )
+    builder = partial(_client_from_api_key, provider=provider, model=model)
+    factory = RotatingSecretClientFactory(
+        source,
+        builder,
+        event_sink=_record_secret_rotation_event,
+    )
+    factory.preflight()
+    return factory
+
+
+def _clear_provider_secret_environment() -> None:
+    for name in (*_PROVIDER_CREDENTIAL_ENV_NAMES, "CRAG_PROVIDER_SECRET_FILE"):
+        os.environ.pop(name, None)
+
+
 def create_worker_from_env() -> ReviewWorker:
     settings = WorkerSettings.from_env()
     configured_state = os.environ.get("CRAG_STATE_DIR")
@@ -625,23 +691,20 @@ def create_worker_from_env() -> ReviewWorker:
                 raise InvalidRequest("CRAG_FAKE_RUN_SECONDS must be numeric") from exc
             runner: ReviewRunner = FakeReviewRunner(delay_seconds=delay)
         elif runner_name == "real":
-            _validate_provider_credentials()
-            client_model = make_client(load_env_file=False)
-            for name in (
-                "DEEPSEEK_API_KEY",
-                "DEEPSEEK_API_KEY_FILE",
-                "GLM_API_KEY",
-                "GLM_API_KEY_FILE",
-                "ZHIPUAI_API_KEY",
-                "ZHIPUAI_API_KEY_FILE",
-            ):
-                os.environ.pop(name, None)
+            client_factory: Callable[[], tuple[Any, str]]
+            if "CRAG_PROVIDER_SECRET_FILE" in os.environ:
+                client_factory = _rotating_provider_client_factory()
+            else:
+                _validate_provider_credentials()
+                client_model = make_client(load_env_file=False)
 
-            def cached_client_factory() -> tuple[Any, str]:
-                return client_model
+                def client_factory() -> tuple[Any, str]:
+                    return client_model
+
+            _clear_provider_secret_environment()
 
             runner = DefaultReviewRunner(
-                client_factory=cached_client_factory,
+                client_factory=client_factory,
                 memory_store=RepositoryMemoryStore(store.database),
                 policy_store=OrganizationPolicyStore(store.database),
             )
