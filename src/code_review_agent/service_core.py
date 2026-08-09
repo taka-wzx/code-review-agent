@@ -37,6 +37,13 @@ from code_review_agent.context_memory import (
     OrganizationPolicyStore,
     RepositoryMemoryStore,
 )
+from code_review_agent.feedback_rules import (
+    FeedbackRuleConflict,
+    FeedbackRuleNotFound,
+    FeedbackRuleStore,
+    FeedbackRuleValidationError,
+    public_binding,
+)
 from code_review_agent.identity import (
     Permission,
     PermissionDenied,
@@ -91,6 +98,10 @@ class ModelCallBudgetExceeded(RuntimeError):
 
 class ApprovalConflict(IdempotencyConflict):
     code = "approval_conflict"
+
+
+class FeedbackRuleStateConflict(IdempotencyConflict):
+    code = "feedback_rule_conflict"
 
 
 class FeedbackConflict(IdempotencyConflict):
@@ -282,6 +293,7 @@ class ReviewRequest:
     head_sha: str | None = None
     attempt_count: int = 0
     model_call_limit: int = 64
+    feedback_rule: Mapping[str, Any] | None = None
 
 
 class ReviewRunner(Protocol):
@@ -406,17 +418,26 @@ class DefaultReviewRunner:
         return diff
 
     def __call__(self, request: ReviewRequest, trace_path: Path) -> dict[str, Any]:
+        root_attributes: dict[str, Any] = {
+            "crag.service.schema": SCHEMA_VERSION,
+            "crag.service.source": request.source_kind,
+            "crag.service.repository": request.repository,
+            "crag.service.organization_id": request.organization_id,
+            "crag.service.repository_id": request.repository_id,
+            "crag.service.principal_id": request.principal_id,
+        }
+        if request.feedback_rule is not None:
+            root_attributes.update(
+                {
+                    "crag.feedback_rule.version": request.feedback_rule["version"],
+                    "crag.feedback_rule.generation": request.feedback_rule["generation"],
+                    "crag.feedback_rule.sha256": request.feedback_rule["rules_sha256"],
+                }
+            )
         trace = Trace(
             trace_path,
             run_id=request.job_id,
-            root_attributes={
-                "crag.service.schema": SCHEMA_VERSION,
-                "crag.service.source": request.source_kind,
-                "crag.service.repository": request.repository,
-                "crag.service.organization_id": request.organization_id,
-                "crag.service.repository_id": request.repository_id,
-                "crag.service.principal_id": request.principal_id,
-            },
+            root_attributes=root_attributes,
         )
         error: tuple[str, str] | None = None
         try:
@@ -436,6 +457,7 @@ class DefaultReviewRunner:
                 policy_store=self._policy_store,
                 organization_id=request.organization_id,
                 repository_id=request.repository_id,
+                feedback_rule=request.feedback_rule,
                 source_revision=request.head_sha,
             )
         except BaseException as exc:
@@ -1092,6 +1114,149 @@ class ReviewService:
             repository_id=repository_id,
         )
         return record
+
+    @staticmethod
+    def _raise_feedback_rule_error(error: BaseException) -> None:
+        if isinstance(error, FeedbackRuleNotFound):
+            raise JobNotFound("feedback-rule resource was not found") from error
+        if isinstance(error, FeedbackRuleConflict):
+            raise FeedbackRuleStateConflict("feedback-rule state conflicts") from error
+        if isinstance(error, FeedbackRuleValidationError):
+            raise InvalidRequest("feedback-rule input is invalid") from error
+        raise error
+
+    def list_feedback_rule_versions(
+        self, repository_id: str, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "feedback_rule.version.list")
+        self._repository_by_id(actor, repository_id, "feedback_rule.version.list")
+        try:
+            records = FeedbackRuleStore(self.store.database).list_versions(
+                actor.organization_id, repository_id
+            )
+        except (FeedbackRuleNotFound, FeedbackRuleConflict, FeedbackRuleValidationError) as error:
+            self._raise_feedback_rule_error(error)
+        self._audit(
+            actor,
+            "feedback_rule.version.list",
+            "repository",
+            repository_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return records
+
+    def create_feedback_rule_version(
+        self,
+        repository_id: str,
+        *,
+        version: str,
+        rules: Iterable[Mapping[str, Any]],
+        reason: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.MANAGE_POLICY, "feedback_rule.version.create")
+        self._repository_by_id(actor, repository_id, "feedback_rule.version.create")
+        try:
+            record = FeedbackRuleStore(self.store.database).create_version(
+                organization_id=actor.organization_id,
+                repository_id=repository_id,
+                version=version,
+                rules=rules,
+                principal_id=actor.principal_id,
+                reason=reason,
+            )
+        except (FeedbackRuleNotFound, FeedbackRuleConflict, FeedbackRuleValidationError) as error:
+            self._raise_feedback_rule_error(error)
+        self._audit(
+            actor,
+            "feedback_rule.version.create",
+            "repository_feedback_rule",
+            str(record["id"]),
+            "allow",
+            repository_id=repository_id,
+        )
+        return record
+
+    def get_active_feedback_rule(
+        self, repository_id: str, *, principal: Principal | None = None
+    ) -> dict[str, Any] | None:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "feedback_rule.active.read")
+        self._repository_by_id(actor, repository_id, "feedback_rule.active.read")
+        try:
+            active = FeedbackRuleStore(self.store.database).active(
+                actor.organization_id, repository_id
+            )
+        except (FeedbackRuleNotFound, FeedbackRuleConflict, FeedbackRuleValidationError) as error:
+            self._raise_feedback_rule_error(error)
+        self._audit(
+            actor,
+            "feedback_rule.active.read",
+            "repository",
+            repository_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return public_binding(active)
+
+    def transition_feedback_rule(
+        self,
+        repository_id: str,
+        version: str,
+        *,
+        action: str,
+        reason: str,
+        principal: Principal | None = None,
+    ) -> dict[str, Any]:
+        actor = self._principal(principal)
+        audit_action = f"feedback_rule.{action}"
+        self._require(actor, Permission.MANAGE_POLICY, audit_action)
+        self._repository_by_id(actor, repository_id, audit_action)
+        try:
+            record = FeedbackRuleStore(self.store.database).transition(
+                organization_id=actor.organization_id,
+                repository_id=repository_id,
+                version=version,
+                action=action,
+                principal_id=actor.principal_id,
+                reason=reason,
+            )
+        except (FeedbackRuleNotFound, FeedbackRuleConflict, FeedbackRuleValidationError) as error:
+            self._raise_feedback_rule_error(error)
+        self._audit(
+            actor,
+            audit_action,
+            "repository_feedback_rule",
+            str(record["receipt"]["receipt_id"]),
+            "allow",
+            repository_id=repository_id,
+        )
+        return record
+
+    def list_feedback_rule_receipts(
+        self, repository_id: str, *, principal: Principal | None = None
+    ) -> list[dict[str, Any]]:
+        actor = self._principal(principal)
+        self._require(actor, Permission.READ, "feedback_rule.receipt.list")
+        self._repository_by_id(actor, repository_id, "feedback_rule.receipt.list")
+        try:
+            records = FeedbackRuleStore(self.store.database).list_receipts(
+                actor.organization_id, repository_id
+            )
+        except (FeedbackRuleNotFound, FeedbackRuleConflict, FeedbackRuleValidationError) as error:
+            self._raise_feedback_rule_error(error)
+        self._audit(
+            actor,
+            "feedback_rule.receipt.list",
+            "repository",
+            repository_id,
+            "allow",
+            repository_id=repository_id,
+        )
+        return records
 
     def get_service_quota(
         self,

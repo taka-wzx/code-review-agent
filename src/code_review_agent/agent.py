@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, Mapping
 
 from openai import OpenAI
 import openai
@@ -30,6 +31,7 @@ from code_review_agent.context_memory import (
     repository_source_sha,
 )
 from code_review_agent.findings import dedup_union, split_by_scope
+from code_review_agent.feedback_rules import render_feedback_rule_binding
 from code_review_agent.llm import make_client
 from code_review_agent.orchestration import (
     DEFAULT_REVIEW_TIMEOUT_SECONDS,
@@ -198,6 +200,7 @@ def build_review_input(diff_text: str, repo_root: Path,
                        policy_store: OrganizationPolicyStore | None = None,
                        organization_id: str = "",
                        repository_id: str = "",
+                       feedback_rule: Mapping[str, Any] | None = None,
                        base_sha: str | None = None,
                        context_token_cap: int = CONTEXT_TOKEN_CAP) -> str:
     """The exact user message the finder receives (and the verifier, which
@@ -230,6 +233,9 @@ def build_review_input(diff_text: str, repo_root: Path,
                 user += ("\n\nRepository context retrieved automatically (trusted memory, "
                          "policy, conventions, changed files, imports, and callers as enabled). "
                          "You can still use read_file for anything not covered:\n\n" + pack)
+    feedback_rule_text = render_feedback_rule_binding(feedback_rule)
+    if feedback_rule_text:
+        user += "\n\n## Bound repository feedback rules\n\n" + feedback_rule_text
     return user
 
 
@@ -242,6 +248,7 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
                policy_store: OrganizationPolicyStore | None = None,
                organization_id: str = "",
                repository_id: str = "",
+               feedback_rule: Mapping[str, Any] | None = None,
                source_revision: str | None = None,
                context_token_cap: int = CONTEXT_TOKEN_CAP,
                run_token_budget: int = 200_000) -> dict:
@@ -278,6 +285,7 @@ def run_review(client: OpenAI, diff_text: str, repo_root: Path, model: str,
             policy_store=policy_store,
             organization_id=organization_id,
             repository_id=repository_id,
+            feedback_rule=feedback_rule,
             base_sha=revision,
             context_token_cap=context_token_cap,
         )
