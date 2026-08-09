@@ -418,6 +418,7 @@ class ReviewWorker:
                     head_sha=lease.head_sha,
                     attempt_count=lease.attempt_count,
                     model_call_limit=lease.model_call_limit,
+                    feedback_rule=lease.feedback_rule,
                 )
                 review = self.runner(request, trace_path)
             except BaseException as exc:
