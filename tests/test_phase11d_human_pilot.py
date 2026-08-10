@@ -473,9 +473,11 @@ class _CohortReviewReader:
         candidates: list[gate_b_executor.PullRequestCandidate],
         *,
         drift_first: bool = False,
+        failure_read_call: int | None = None,
     ) -> None:
         self._candidates = {candidate.number: candidate for candidate in candidates}
         self._drift_first = drift_first
+        self._failure_read_call = failure_read_call
         self.read_calls: list[int] = []
         self.diff_calls: list[int] = []
 
@@ -486,6 +488,8 @@ class _CohortReviewReader:
         selection_seed_sha256: str,
     ) -> gate_b_executor.PullRequestCandidate:
         self.read_calls.append(number)
+        if self._failure_read_call == len(self.read_calls):
+            raise gate_b_executor.GateBExecutorError("http_transport_failure")
         candidate = self._candidates[number]
         if self._drift_first and len(self.read_calls) == 1:
             return gate_b_executor.PullRequestCandidate(
@@ -632,6 +636,71 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         )
         self.assertTrue(active.gate_b_allowed, active.blockers)
         self.assertEqual(active.execution_capability, "authorization_gated_real_executor")
+
+    def test_review_only_authorization_cannot_enter_repair(self) -> None:
+        source_root = Path(__file__).resolve().parents[1]
+        runtime = gate_b_executor.freeze_executor_runtime(
+            source_root=source_root,
+            authorization_id="phase11d-gate-b-human-pilot-v1-20260805-001",
+            executor_id="phase11d-gate-b-executor-20260806-001",
+            created_at_utc="2026-08-06T00:00:00Z",
+        )
+        draft, participants, repository, descriptor = _gate_b_real_inputs()
+        draft["permission_switches"]["allow_real_github_repair_branch_push"] = False
+        draft["permission_switches"]["allow_real_draft_repair_pr"] = False
+        frozen = gate_b_executor.freeze_authorization(
+            draft=draft,
+            participants=participants,
+            repository=repository,
+            credential_descriptor=descriptor,
+            runtime=runtime,
+        )
+        self.assertIn(
+            "allow_real_github_repair_branch_push=false",
+            frozen["exact_approval_text"],
+        )
+        self.assertIn("allow_real_draft_repair_pr=false", frozen["exact_approval_text"])
+        approved = gate_b_executor.approve_authorization(
+            frozen=frozen,
+            participants=participants,
+            actor_id="p-03",
+            approved_at_utc="2026-08-06T00:01:00Z",
+            exact_approval_text=frozen["exact_approval_text"],
+        )
+        status = gate_b_executor.validate_execution_authorization(
+            authorization=approved,
+            participants=participants,
+            repository=repository,
+            credential_descriptor=descriptor,
+            runtime=runtime,
+            now_utc="2026-08-06T00:02:00Z",
+        )
+        self.assertTrue(status.gate_b_allowed, status.blockers)
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={
+                "draft": 0,
+                "malformed": 0,
+                "outside_window": 0,
+                "wrong_base": 0,
+            },
+        )
+        with self.assertRaisesRegex(
+            gate_b_executor.GateBExecutorError,
+            "authorization_repair_permission_denied",
+        ):
+            gate_b_executor.GateBRepairCoordinator(
+                authorization=approved,
+                participants=participants,
+                repository=repository,
+                credential_descriptor=descriptor,
+                runtime=runtime,
+                source_root=source_root,
+                selection_receipt=selection_receipt,
+                now_utc="2026-08-06T00:02:00Z",
+            )
 
     def test_real_executor_rejects_tampering_and_wrong_exact_approval(self) -> None:
         source_root = Path(__file__).resolve().parents[1]
@@ -1055,6 +1124,88 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         self.assertEqual(client.calls, [])
         self.assertEqual(receipt["budget_usage"]["logical_calls"], 0)
 
+    def test_gate_b_review_resume_carries_completed_rows_without_replay(self) -> None:
+        approved, _participants, _repository, _descriptor, _runtime = _approved_gate_b_context()
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        previous_client = _CohortReviewClient()
+        previous_receipt = gate_b_executor.run_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            reader=_CohortReviewReader(candidates, failure_read_call=2),
+            client=previous_client,
+            created_at_utc="2026-08-06T00:03:00Z",
+        )
+        self.assertEqual(previous_receipt["stop_category"], "http_transport_failure")
+        self.assertEqual(len(previous_client.calls), 1)
+
+        resume_reader = _CohortReviewReader(candidates)
+        resume_client = _CohortReviewClient()
+        receipt = gate_b_executor.resume_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            previous_authorization=approved,
+            previous_selection_receipt=selection_receipt,
+            previous_review_receipt=previous_receipt,
+            reader=resume_reader,
+            client=resume_client,
+            created_at_utc="2026-08-06T00:04:00Z",
+        )
+        rows = receipt["review_rows"]
+        self.assertEqual(receipt["schema_version"], gate_b_executor.RESUMED_REVIEW_COHORT_RECEIPT_SCHEMA_VERSION)
+        self.assertEqual(
+            receipt["previous_review_cohort_receipt_sha256"],
+            previous_receipt["review_cohort_receipt_sha256"],
+        )
+        self.assertEqual(receipt["stop_category"], "none")
+        self.assertEqual(receipt["budget_usage"]["logical_calls"], 20)
+        self.assertEqual(len(resume_client.calls), 19)
+        self.assertNotIn(previous_client.calls[0], resume_client.calls)
+        self.assertEqual(resume_reader.read_calls[0], candidates[1].number)
+        self.assertEqual(rows[0], previous_receipt["review_rows"][0])
+        self.assertTrue(all(row["status"] == "completed" for row in rows))
+        gate_b_executor.validate_review_cohort_receipt(
+            receipt,
+            authorization=approved,
+            selection_receipt=selection_receipt,
+        )
+
+    def test_gate_b_review_resume_rejects_provider_failure(self) -> None:
+        approved, _participants, _repository, _descriptor, _runtime = _approved_gate_b_context()
+        _candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        previous_receipt = gate_b_executor.run_review_cohort(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            reader=_CohortReviewReader(candidates),
+            client=_CohortReviewClient(failure_category="provider_text_only_response"),
+            created_at_utc="2026-08-06T00:03:00Z",
+        )
+        client = _CohortReviewClient()
+        with self.assertRaisesRegex(
+            gate_b_executor.GateBExecutorError,
+            "review_resume_category_denied",
+        ):
+            gate_b_executor.resume_review_cohort(
+                authorization=approved,
+                selection_receipt=selection_receipt,
+                previous_authorization=approved,
+                previous_selection_receipt=selection_receipt,
+                previous_review_receipt=previous_receipt,
+                reader=_CohortReviewReader(candidates),
+                client=client,
+                created_at_utc="2026-08-06T00:04:00Z",
+            )
+        self.assertEqual(client.calls, [])
+
     def test_gate_b_review_command_parser_requires_all_frozen_inputs(self) -> None:
         args = gate_b_executor.build_parser().parse_args(
             [
@@ -1087,6 +1238,44 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         )
         self.assertEqual(args.command, "review-selected-pull-requests")
         self.assertEqual(args.selection_receipt, Path("selection.json"))
+
+        resume_args = gate_b_executor.build_parser().parse_args(
+            [
+                "resume-selected-pull-requests",
+                "--authorization",
+                "authorization.json",
+                "--participants",
+                "participants.json",
+                "--repository-authorization",
+                "repository.json",
+                "--credential-descriptor",
+                "credentials.json",
+                "--runtime",
+                "runtime.json",
+                "--selection-receipt",
+                "selection.json",
+                "--previous-authorization",
+                "previous-authorization.json",
+                "--previous-selection-receipt",
+                "previous-selection.json",
+                "--previous-review-receipt",
+                "previous-review.json",
+                "--source-root",
+                ".",
+                "--github-app-private-key-file",
+                "private-key.pem",
+                "--provider-key-environment",
+                "PROVIDER_KEY",
+                "--owner",
+                "acme",
+                "--repository",
+                "widget",
+                "--output",
+                "reviews.json",
+            ]
+        )
+        self.assertEqual(resume_args.command, "resume-selected-pull-requests")
+        self.assertEqual(resume_args.previous_review_receipt, Path("previous-review.json"))
 
     @mock.patch.dict(os.environ, {"PHASE11D_PUBLISHER_TEST_KEY": "test-provider-key"})
     def test_gate_b_repair_requires_human_selection_two_approvals_and_exact_sandbox_commit(self) -> None:
