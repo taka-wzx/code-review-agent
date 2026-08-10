@@ -301,6 +301,41 @@ class ReviewBudget:
         self.cached_tokens = next_cached_tokens
         self.micro_cny = next_micro_cny
 
+    def restore(self, usage: Mapping[str, Any]) -> None:
+        """Restore validated cumulative usage before a receipt-bound resume."""
+        values = {
+            "logical_calls": _require_int(
+                "review_resume_logical_calls", usage.get("logical_calls")
+            ),
+            "http_attempts": _require_int(
+                "review_resume_http_attempts", usage.get("http_attempts")
+            ),
+            "input_tokens": _require_int(
+                "review_resume_input_tokens", usage.get("input_tokens")
+            ),
+            "output_tokens": _require_int(
+                "review_resume_output_tokens", usage.get("output_tokens")
+            ),
+            "cached_tokens": _require_int(
+                "review_resume_cached_tokens", usage.get("cached_tokens")
+            ),
+            "micro_cny": _require_int(
+                "review_resume_micro_cny", usage.get("micro_cny")
+            ),
+        }
+        limits = {
+            "logical_calls": self.max_logical_calls,
+            "http_attempts": self.max_http_attempts,
+            "input_tokens": self.max_input_tokens,
+            "output_tokens": self.max_output_tokens,
+            "cached_tokens": self.max_cached_tokens,
+            "micro_cny": self.max_micro_cny,
+        }
+        if any(values[name] > limit for name, limit in limits.items()):
+            raise GateBExecutorError("review_resume_budget_exhausted")
+        for name, value in values.items():
+            setattr(self, name, value)
+
     def to_dict(self) -> dict[str, int]:
         return {
             "logical_calls": self.logical_calls,
@@ -1681,13 +1716,14 @@ def _required_sha(required: Mapping[str, Any], name: str) -> str:
 
 
 def _require_active_permissions(permissions: Mapping[str, Any]) -> None:
-    for name in (
-        "allow_real_provider_calls",
-        "allow_real_github_repair_branch_push",
-        "allow_real_draft_repair_pr",
-    ):
-        if permissions[name] is not True:
-            raise GateBExecutorError("authorization_permission_denied")
+    if permissions["allow_real_provider_calls"] is not True:
+        raise GateBExecutorError("authorization_permission_denied")
+    repair_permissions = (
+        permissions["allow_real_github_repair_branch_push"],
+        permissions["allow_real_draft_repair_pr"],
+    )
+    if repair_permissions not in {(False, False), (True, True)}:
+        raise GateBExecutorError("authorization_repair_permissions_inconsistent")
     for name in (
         "allow_comments_checks_labels_reviews",
         "allow_pilot_pr_ready",
@@ -1698,6 +1734,15 @@ def _require_active_permissions(permissions: Mapping[str, Any]) -> None:
     ):
         if permissions[name] is not False:
             raise GateBExecutorError("authorization_prohibited_permission_enabled")
+
+
+def _require_repair_permissions(permissions: Mapping[str, Any]) -> None:
+    _require_active_permissions(permissions)
+    if (
+        permissions["allow_real_github_repair_branch_push"] is not True
+        or permissions["allow_real_draft_repair_pr"] is not True
+    ):
+        raise GateBExecutorError("authorization_repair_permission_denied")
 
 
 def _validate_required_values(required: Mapping[str, Any]) -> None:
@@ -2019,6 +2064,7 @@ def build_exact_approval_text(draft: Mapping[str, Any]) -> str:
     """Create the exact owner text after all non-approval inputs are frozen."""
     projection = _authorization_projection(draft)
     required = projection["required_fields"]
+    permissions = projection["permission_switches"]
     canonical_sha = canonical_authorization_sha256(draft)
     lines = (
         EXACT_APPROVAL_PREFIX,
@@ -2035,9 +2081,11 @@ def build_exact_approval_text(draft: Mapping[str, Any]) -> str:
         f"max_http_attempts={required['max_http_attempts']}",
         f"max_micro_cny={required['max_micro_cny']}",
         f"max_wall_clock_seconds={required['max_wall_clock_seconds']}",
-        "allow_real_provider_calls=true",
-        "allow_real_github_repair_branch_push=true",
-        "allow_real_draft_repair_pr=true",
+        f"allow_real_provider_calls={str(permissions['allow_real_provider_calls']).lower()}",
+        "allow_real_github_repair_branch_push="
+        f"{str(permissions['allow_real_github_repair_branch_push']).lower()}",
+        "allow_real_draft_repair_pr="
+        f"{str(permissions['allow_real_draft_repair_pr']).lower()}",
         "allow_comments_checks_labels_reviews=false",
         "allow_pilot_pr_ready=false",
         "allow_pilot_pr_merge=false",
@@ -3230,6 +3278,10 @@ class GitHubDraftPublisher:
         required = self._authorization.get("required_fields")
         if not isinstance(required, Mapping):
             raise GateBExecutorError("authorization_required_fields_invalid")
+        permissions = self._authorization.get("permission_switches")
+        if not isinstance(permissions, Mapping):
+            raise GateBExecutorError("permission_switches_invalid")
+        _require_repair_permissions(permissions)
         if (
             status.authorization_id != required.get("authorization_id")
             or status.canonical_authorization_sha256
@@ -3609,6 +3661,9 @@ def validate_authorized_selected_candidate(
 
 
 REVIEW_COHORT_RECEIPT_SCHEMA_VERSION = "crag.phase11d.gate-b-review-cohort/v1alpha1"
+RESUMED_REVIEW_COHORT_RECEIPT_SCHEMA_VERSION = (
+    "crag.phase11d.gate-b-review-cohort/v1alpha2"
+)
 _REVIEW_COHORT_RECEIPT_FIELDS = frozenset(
     {
         "authorization_id",
@@ -3624,6 +3679,10 @@ _REVIEW_COHORT_RECEIPT_FIELDS = frozenset(
         "stop_category",
     }
 )
+_RESUMED_REVIEW_COHORT_RECEIPT_FIELDS = _REVIEW_COHORT_RECEIPT_FIELDS | {
+    "previous_review_cohort_receipt_sha256"
+}
+_RESUMABLE_REVIEW_STOP_CATEGORIES = frozenset({"http_transport_failure"})
 _REVIEW_ROW_FIELDS = frozenset(
     {
         "cached_tokens",
@@ -3707,6 +3766,7 @@ def build_review_cohort_receipt(
     budget: ReviewBudget,
     stop_category: str,
     created_at_utc: str,
+    previous_review_cohort_receipt_sha256: str | None = None,
 ) -> dict[str, Any]:
     validate_selection_receipt(selection_receipt)
     required = authorization.get("required_fields")
@@ -3721,8 +3781,15 @@ def build_review_cohort_receipt(
     if len(outcomes) != selection_receipt["selected_pr_count"]:
         raise GateBExecutorError("review_cohort_count_mismatch")
     _require_utc("review_cohort_created_at", created_at_utc)
+    schema_version = REVIEW_COHORT_RECEIPT_SCHEMA_VERSION
+    if previous_review_cohort_receipt_sha256 is not None:
+        _require_sha256(
+            "previous_review_cohort_receipt_sha256",
+            previous_review_cohort_receipt_sha256,
+        )
+        schema_version = RESUMED_REVIEW_COHORT_RECEIPT_SCHEMA_VERSION
     receipt: dict[str, Any] = {
-        "schema_version": REVIEW_COHORT_RECEIPT_SCHEMA_VERSION,
+        "schema_version": schema_version,
         "authorization_id": required["authorization_id"],
         "canonical_authorization_sha256": required["canonical_authorization_sha256"],
         "repository_id": repository_ids[0],
@@ -3734,6 +3801,10 @@ def build_review_cohort_receipt(
         "stop_category": stop_category,
         "review_cohort_receipt_sha256": "",
     }
+    if previous_review_cohort_receipt_sha256 is not None:
+        receipt["previous_review_cohort_receipt_sha256"] = (
+            previous_review_cohort_receipt_sha256
+        )
     receipt["review_cohort_receipt_sha256"] = _self_hash(
         receipt, "review_cohort_receipt_sha256"
     )
@@ -3751,9 +3822,18 @@ def validate_review_cohort_receipt(
     authorization: Mapping[str, Any],
     selection_receipt: Mapping[str, Any],
 ) -> None:
-    _require_exact_fields("review_cohort_receipt", receipt, _REVIEW_COHORT_RECEIPT_FIELDS)
-    if receipt["schema_version"] != REVIEW_COHORT_RECEIPT_SCHEMA_VERSION:
+    schema_version = receipt.get("schema_version")
+    if schema_version == REVIEW_COHORT_RECEIPT_SCHEMA_VERSION:
+        expected_fields = _REVIEW_COHORT_RECEIPT_FIELDS
+    elif schema_version == RESUMED_REVIEW_COHORT_RECEIPT_SCHEMA_VERSION:
+        expected_fields = _RESUMED_REVIEW_COHORT_RECEIPT_FIELDS
+        _require_sha256(
+            "previous_review_cohort_receipt_sha256",
+            receipt.get("previous_review_cohort_receipt_sha256"),
+        )
+    else:
         raise GateBExecutorError("review_cohort_schema_invalid")
+    _require_exact_fields("review_cohort_receipt", receipt, expected_fields)
     validate_selection_receipt(selection_receipt)
     required = authorization.get("required_fields")
     if not isinstance(required, Mapping):
@@ -3849,6 +3929,61 @@ def validate_review_cohort_receipt(
         raise GateBExecutorError("review_cohort_receipt_hash_mismatch")
 
 
+def _review_outcome_from_receipt_row(row: Mapping[str, Any]) -> ReviewOutcome:
+    return ReviewOutcome(
+        pr_id=str(row["pr_id"]),
+        status=str(row["status"]),
+        terminal_category=str(row["terminal_category"]),
+        finding_ids=tuple(str(value) for value in row["finding_ids"]),
+        feedback_eligible_finding_ids=tuple(
+            str(value) for value in row["feedback_eligible_finding_ids"]
+        ),
+        provider_call_count=int(row["provider_call_count"]),
+        http_attempt_count=int(row["http_attempt_count"]),
+        input_tokens=int(row["input_tokens"]),
+        output_tokens=int(row["output_tokens"]),
+        cached_tokens=int(row["cached_tokens"]),
+        response_sha256=str(row["response_sha256"]),
+    )
+
+
+def _review_selected_candidate(
+    *,
+    authorization: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    selected: Mapping[str, Any],
+    expected: PullRequestCandidate,
+    seed: str,
+    reader: GitHubRepositoryReader,
+    client: ZhipuReviewClient,
+    budget: ReviewBudget,
+) -> ReviewOutcome:
+    try:
+        current = reader.pull_request_candidate(
+            expected.number,
+            selection_seed_sha256=seed,
+        )
+        validate_authorized_selected_candidate(
+            authorization=authorization,
+            receipt=selection_receipt,
+            candidate=current,
+        )
+        if current.receipt_row() != dict(selected):
+            raise GateBExecutorError("selection_candidate_drift")
+        diff_text = reader.pull_request_diff(expected.number)
+    except GateBExecutorError as exc:
+        category = str(exc)
+        if STABLE_ID_RE.fullmatch(category) is None:
+            category = "github_review_input_failure"
+        return _review_failure(expected.pr_id, category)
+    return review_with_budget(
+        client=client,
+        budget=budget,
+        candidate=current,
+        diff_text=diff_text,
+    )
+
+
 def run_review_cohort(
     *,
     authorization: Mapping[str, Any],
@@ -3888,31 +4023,16 @@ def run_review_cohort(
         if stop_category != "none":
             outcomes.append(_review_failure(expected.pr_id, "cohort_stopped"))
             continue
-        try:
-            current = reader.pull_request_candidate(
-                expected.number,
-                selection_seed_sha256=seed,
-            )
-            validate_authorized_selected_candidate(
-                authorization=authorization,
-                receipt=selection_receipt,
-                candidate=current,
-            )
-            if current.receipt_row() != dict(selected):
-                raise GateBExecutorError("selection_candidate_drift")
-            diff_text = reader.pull_request_diff(expected.number)
-        except GateBExecutorError as exc:
-            category = str(exc)
-            if STABLE_ID_RE.fullmatch(category) is None:
-                category = "github_review_input_failure"
-            outcome = _review_failure(expected.pr_id, category)
-        else:
-            outcome = review_with_budget(
-                client=client,
-                budget=budget,
-                candidate=current,
-                diff_text=diff_text,
-            )
+        outcome = _review_selected_candidate(
+            authorization=authorization,
+            selection_receipt=selection_receipt,
+            selected=selected,
+            expected=expected,
+            seed=seed,
+            reader=reader,
+            client=client,
+            budget=budget,
+        )
         outcomes.append(outcome)
         if outcome.status != "completed":
             stop_category = outcome.terminal_category
@@ -3923,6 +4043,112 @@ def run_review_cohort(
         budget=budget,
         stop_category=stop_category,
         created_at_utc=created_at_utc,
+    )
+
+
+def resume_review_cohort(
+    *,
+    authorization: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    previous_authorization: Mapping[str, Any],
+    previous_selection_receipt: Mapping[str, Any],
+    previous_review_receipt: Mapping[str, Any],
+    reader: GitHubRepositoryReader,
+    client: ZhipuReviewClient,
+    created_at_utc: str,
+) -> dict[str, Any]:
+    """Resume only a zero-provider-call GitHub transport failure without replay."""
+    validate_selection_receipt(selection_receipt)
+    validate_review_cohort_receipt(
+        previous_review_receipt,
+        authorization=previous_authorization,
+        selection_receipt=previous_selection_receipt,
+    )
+    if (
+        selection_receipt["selected_pr_count"]
+        != previous_selection_receipt["selected_pr_count"]
+        or selection_receipt["selected_prs"] != previous_selection_receipt["selected_prs"]
+        or selection_receipt["repository_id"] != previous_selection_receipt["repository_id"]
+    ):
+        raise GateBExecutorError("review_resume_selection_mismatch")
+    previous_rows = previous_review_receipt["review_rows"]
+    assert isinstance(previous_rows, list)
+    failure_index = next(
+        (index for index, row in enumerate(previous_rows) if row["status"] == "failed"),
+        None,
+    )
+    if failure_index is None:
+        raise GateBExecutorError("review_resume_not_required")
+    failed_row = previous_rows[failure_index]
+    if (
+        previous_review_receipt["stop_category"]
+        not in _RESUMABLE_REVIEW_STOP_CATEGORIES
+        or failed_row["terminal_category"] != previous_review_receipt["stop_category"]
+    ):
+        raise GateBExecutorError("review_resume_category_denied")
+    for row in previous_rows[failure_index:]:
+        if any(
+            row[name] != 0
+            for name in (
+                "provider_call_count",
+                "http_attempt_count",
+                "input_tokens",
+                "output_tokens",
+                "cached_tokens",
+            )
+        ):
+            raise GateBExecutorError("review_resume_prior_usage_ambiguous")
+
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    base_rule = required.get("allowed_base_branch_rule")
+    if not isinstance(base_rule, Mapping) or not isinstance(base_rule.get("base_branch"), str):
+        raise GateBExecutorError("base_branch_rule_invalid")
+    base_branch = _repository_part("base_branch", base_rule["base_branch"])
+    seed = _require_sha256(
+        "selection_seed_sha256", required.get("deterministic_selection_seed_sha256")
+    )
+    budget = _review_budget_from_authorization(required)
+    previous_usage = previous_review_receipt.get("budget_usage")
+    if not isinstance(previous_usage, Mapping):
+        raise GateBExecutorError("review_budget_usage_invalid")
+    budget.restore(previous_usage)
+    outcomes = [
+        _review_outcome_from_receipt_row(row) for row in previous_rows[:failure_index]
+    ]
+    stop_category = "none"
+    selected_rows = selection_receipt["selected_prs"]
+    for selected in selected_rows[failure_index:]:
+        if not isinstance(selected, Mapping):
+            raise GateBExecutorError("selection_row_invalid")
+        expected = _candidate_from_selection_row(selected, base_branch=base_branch)
+        if stop_category != "none":
+            outcomes.append(_review_failure(expected.pr_id, "cohort_stopped"))
+            continue
+        outcome = _review_selected_candidate(
+            authorization=authorization,
+            selection_receipt=selection_receipt,
+            selected=selected,
+            expected=expected,
+            seed=seed,
+            reader=reader,
+            client=client,
+            budget=budget,
+        )
+        outcomes.append(outcome)
+        if outcome.status != "completed":
+            stop_category = outcome.terminal_category
+    return build_review_cohort_receipt(
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        outcomes=outcomes,
+        budget=budget,
+        stop_category=stop_category,
+        created_at_utc=created_at_utc,
+        previous_review_cohort_receipt_sha256=previous_review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
     )
 
 
@@ -3942,6 +4168,9 @@ def execute_authorized_reviews(
     now_utc: str,
     github_transport: JsonTransport | None = None,
     provider_transport: JsonTransport | None = None,
+    previous_authorization: Mapping[str, Any] | None = None,
+    previous_selection_receipt: Mapping[str, Any] | None = None,
+    previous_review_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Open the two read/provider transports only after every frozen gate passes."""
     require_active_execution_authorization(
@@ -4013,6 +4242,27 @@ def execute_authorized_reviews(
         model=credential_descriptor["provider_model_snapshot"],
     )
     try:
+        previous_inputs = (
+            previous_authorization,
+            previous_selection_receipt,
+            previous_review_receipt,
+        )
+        if any(value is not None for value in previous_inputs):
+            if not all(value is not None for value in previous_inputs):
+                raise GateBExecutorError("review_resume_inputs_incomplete")
+            assert previous_authorization is not None
+            assert previous_selection_receipt is not None
+            assert previous_review_receipt is not None
+            return resume_review_cohort(
+                authorization=authorization,
+                selection_receipt=selection_receipt,
+                previous_authorization=previous_authorization,
+                previous_selection_receipt=previous_selection_receipt,
+                previous_review_receipt=previous_review_receipt,
+                reader=reader,
+                client=client,
+                created_at_utc=now_utc,
+            )
         return run_review_cohort(
             authorization=authorization,
             selection_receipt=selection_receipt,
@@ -4080,6 +4330,10 @@ class GateBRepairCoordinator:
             source_root=self._source_root,
             now_utc=now_utc,
         )
+        permissions = self._authorization.get("permission_switches")
+        if not isinstance(permissions, Mapping):
+            raise GateBExecutorError("permission_switches_invalid")
+        _require_repair_permissions(permissions)
 
     def select_finding(
         self,
@@ -4369,6 +4623,24 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--repository", required=True)
     review.add_argument("--now-utc")
     review.add_argument("--output", type=Path, required=True)
+
+    resume = commands.add_parser("resume-selected-pull-requests")
+    resume.add_argument("--authorization", type=Path, required=True)
+    resume.add_argument("--participants", type=Path, required=True)
+    resume.add_argument("--repository-authorization", type=Path, required=True)
+    resume.add_argument("--credential-descriptor", type=Path, required=True)
+    resume.add_argument("--runtime", type=Path, required=True)
+    resume.add_argument("--selection-receipt", type=Path, required=True)
+    resume.add_argument("--previous-authorization", type=Path, required=True)
+    resume.add_argument("--previous-selection-receipt", type=Path, required=True)
+    resume.add_argument("--previous-review-receipt", type=Path, required=True)
+    resume.add_argument("--source-root", type=Path, required=True)
+    resume.add_argument("--github-app-private-key-file", type=Path, required=True)
+    resume.add_argument("--provider-key-environment", required=True)
+    resume.add_argument("--owner", required=True)
+    resume.add_argument("--repository", required=True)
+    resume.add_argument("--now-utc")
+    resume.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -4490,10 +4762,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
-        if args.command == "review-selected-pull-requests":
+        if args.command in {
+            "review-selected-pull-requests",
+            "resume-selected-pull-requests",
+        }:
             now_utc = getattr(args, "now_utc", None) or datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"
             )
+            previous_authorization = None
+            previous_selection_receipt = None
+            previous_review_receipt = None
+            if args.command == "resume-selected-pull-requests":
+                previous_authorization = load_json(args.previous_authorization)
+                previous_selection_receipt = load_json(args.previous_selection_receipt)
+                previous_review_receipt = load_json(args.previous_review_receipt)
             review_receipt = execute_authorized_reviews(
                 authorization=authorization,
                 participants=participants,
@@ -4507,6 +4789,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 owner=args.owner,
                 repository=args.repository,
                 now_utc=now_utc,
+                previous_authorization=previous_authorization,
+                previous_selection_receipt=previous_selection_receipt,
+                previous_review_receipt=previous_review_receipt,
             )
             _write_json(args.output, review_receipt)
             print(

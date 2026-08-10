@@ -69,6 +69,17 @@ or budget failure stops new provider calls; unattempted denominator rows remain 
 `cohort_stopped`. The command performs no GitHub write and cannot start Repair,
 approve WRITE/DRAFT_PR, or publish a Draft PR.
 
+`resume-selected-pull-requests` is the only supported recovery path after a Review
+cohort stops on `http_transport_failure` before the affected PR reaches the Provider.
+It requires the prior authorization, selection receipt, and hash-only Review receipt,
+plus a newly frozen active runtime and selection receipt for the identical PR rows.
+The resulting v1alpha2 receipt binds the immediate prior receipt SHA-256, carries all
+completed rows and cumulative budget usage forward, and starts at the first zero-call
+failure. It rejects Provider failures, changed PR snapshots or selection order,
+nonzero failed-row usage, and completed cohorts. Review-only authorization may keep
+both Repair write switches false; the Repair coordinator and Publisher still reject
+that permission state.
+
 The one-job `GateBRepairCoordinator` requires the exact sequence: a confirmed
 maintainer/org-admin selects a completed-review Finding; an exact in-memory Repair Plan
 is hash-bound; a single-use WRITE approval is consumed; an isolated offline/non-root
