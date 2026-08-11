@@ -1073,7 +1073,10 @@ class GitHubRepositoryReader:
 
 _REDACTION_PATTERNS = (
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"\b(?:ghp|github_pat|sk)-[A-Za-z0-9_\-]{16,}\b"),
+    re.compile(
+        r"\b(?:ghp_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|"
+        r"sk-[A-Za-z0-9_\-]{16,})\b"
+    ),
     re.compile(r"\bAIza[0-9A-Za-z_\-]{20,}\b"),
 )
 _FINDING_SEVERITIES = frozenset({"critical", "high", "medium", "low"})
