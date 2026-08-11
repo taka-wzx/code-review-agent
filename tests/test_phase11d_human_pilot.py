@@ -407,6 +407,8 @@ class _PublisherTransport:
             )
         prefix = f"{self.base_path}/git/ref/heads/"
         if method == "GET" and path.startswith(prefix):
+            if "%2F" in path.upper():
+                return _json_response({"message": "Not Found"}, status=404)
             branch = urllib_parse.unquote(path[len(prefix) :])
             sha = self.refs.get(branch)
             if sha is None:

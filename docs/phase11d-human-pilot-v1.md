@@ -165,6 +165,11 @@ quarantined before branch creation. Publication journals carrying the source-hea
 binding use v1alpha2; v1alpha1 journals remain hash-valid but require a newly approved
 publication session rather than silent upgrade.
 
+GitHub ref read-back preserves slash separators in dedicated Repair branch names. The
+GitHub API accepts `git/ref/heads/crag/phase11d/...`; encoding those separators as
+`%2F` can make a successfully created branch appear absent. Unsafe branch characters
+remain URL-encoded, and the endpoint allowlist and exact commit check still apply.
+
 After the Draft PR is reviewed by a participant, `prepare-pilot-closeout` hashes the
 human rationale and writes feedback, time/cost, business, and claim-decision reports,
 plus an exact final sign-off text. `approve-pilot-closeout` accepts only a human

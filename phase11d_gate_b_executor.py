@@ -3454,7 +3454,7 @@ class GitHubDraftPublisher:
 
     def _get_ref(self, branch: str) -> str | None:
         _require_branch("publisher_branch", branch)
-        encoded = urllib_parse.quote(branch, safe="")
+        encoded = urllib_parse.quote(branch, safe="/")
         response = self._request(method="GET", path=f"{self._base_path}/git/ref/heads/{encoded}")
         if response.status == 404:
             return None
