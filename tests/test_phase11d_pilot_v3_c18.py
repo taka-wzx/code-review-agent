@@ -8,6 +8,10 @@ class Phase11DPilotV3C18Tests(unittest.TestCase):
         with self.assertRaisesRegex(gate_b.GateBExecutorError, "operator_patch_files_invalid"):
             gate_b._operator_patch_files([])
 
+    def test_operator_patch_set_requires_json_array(self) -> None:
+        with self.assertRaisesRegex(gate_b.GateBExecutorError, "operator_patch_files_invalid"):
+            gate_b._operator_patch_files(())
+
 
 if __name__ == "__main__":
     unittest.main()
