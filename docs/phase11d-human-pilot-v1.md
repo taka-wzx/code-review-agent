@@ -154,6 +154,17 @@ reconciles an ambiguous post-write restart by read-back; unresolved ambiguity is
 quarantined. The implementation tests use fakes only and have made no real Provider
 call, GitHub write, Pilot branch, or Pilot Draft PR.
 
+The exact Repair commit is parented by the frozen selected PR head, not by the PR's
+historical base SHA. Before any Git object write, the publisher reads that source-head
+commit and requires its tree to equal the sandbox `base_tree_sha`. The target base
+branch may remain unchanged or advance while implementation and authorization work is
+merged. An advanced base is accepted only when GitHub Compare reports `ahead`, zero
+behind commits, and both the base commit and merge base equal the frozen base SHA.
+Diverged, behind, missing, malformed, or ambiguous base/source-head evidence is
+quarantined before branch creation. Publication journals carrying the source-head
+binding use v1alpha2; v1alpha1 journals remain hash-valid but require a newly approved
+publication session rather than silent upgrade.
+
 After the Draft PR is reviewed by a participant, `prepare-pilot-closeout` hashes the
 human rationale and writes feedback, time/cost, business, and claim-decision reports,
 plus an exact final sign-off text. `approve-pilot-closeout` accepts only a human
