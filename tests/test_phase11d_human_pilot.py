@@ -7,8 +7,11 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
+from urllib import error as urllib_error
 from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from unittest import mock
 
 import phase11d_human_pilot as pilot
@@ -931,10 +934,12 @@ class Phase11DHumanPilotTests(unittest.TestCase):
                 ("POST", gate_b_executor.ZhipuReviewClient.endpoint): _json_response(response),
             }
         )
+        ephemeral: list[tuple[gate_b_executor.EphemeralReviewFinding, ...]] = []
         client = gate_b_executor.ZhipuReviewClient(
             transport,
             api_key="test-provider-key",
             model="glm-5.2",
+            finding_sink=ephemeral.append,
         )
         outcome = client.review(candidate=candidate, diff_text="diff --git a/a.py b/a.py\n+line")
         self.assertEqual(outcome.status, "completed")
@@ -942,6 +947,9 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         self.assertEqual(len(outcome.finding_ids), 1)
         self.assertEqual(outcome.input_tokens, 100)
         self.assertEqual(outcome.receipt_row()["finding_ids"], list(outcome.finding_ids))
+        self.assertEqual(ephemeral[0][0].title, "Missing input check")
+        self.assertEqual(ephemeral[0][0].finding_id, outcome.finding_ids[0])
+        self.assertNotIn("Missing input check", json.dumps(outcome.receipt_row()))
 
         text_only = _FakeJsonTransport(
             {
@@ -1411,6 +1419,255 @@ class Phase11DHumanPilotTests(unittest.TestCase):
             )
             rendered = json.dumps(coordinator.repair_receipt(), sort_keys=True)
             self.assertNotIn("patched = True", rendered)
+
+    @mock.patch.dict(os.environ, {"PHASE11D_PUBLISHER_TEST_KEY": "test-provider-key"})
+    def test_loopback_operator_session_keeps_raw_material_ephemeral(self) -> None:
+        approved, participants, repository, descriptor, runtime = _approved_gate_b_context()
+        candidate, candidates = _repair_candidates()
+        selection_receipt = gate_b_executor.build_selection_receipt(
+            authorization=approved,
+            candidates=candidates,
+            excluded_counts={"draft": 0, "malformed": 0, "outside_window": 0, "wrong_base": 0},
+        )
+        outcomes: list[gate_b_executor.ReviewOutcome] = []
+        budget = gate_b_executor._review_budget_from_authorization(approved["required_fields"])
+        for item in candidates:
+            outcome = _completed_review(item) if item == candidate else gate_b_executor.ReviewOutcome(
+                pr_id=item.pr_id,
+                status="completed",
+                terminal_category="completed",
+                finding_ids=(),
+                feedback_eligible_finding_ids=(),
+                provider_call_count=1,
+                http_attempt_count=1,
+                input_tokens=10,
+                output_tokens=5,
+                cached_tokens=0,
+                response_sha256="e" * 64,
+            )
+            budget.reserve_call()
+            budget.reserve_http()
+            budget.settle(outcome)
+            outcomes.append(outcome)
+        review_receipt = gate_b_executor.build_review_cohort_receipt(
+            authorization=approved,
+            selection_receipt=selection_receipt,
+            outcomes=outcomes,
+            budget=budget,
+            stop_category="none",
+            created_at_utc="2026-08-06T00:02:00Z",
+        )
+        coordinator = gate_b_executor.GateBRepairCoordinator(
+            authorization=approved,
+            participants=participants,
+            repository=repository,
+            credential_descriptor=descriptor,
+            runtime=runtime,
+            source_root=Path(__file__).resolve().parents[1],
+            selection_receipt=selection_receipt,
+            now_utc="2026-08-06T00:02:00Z",
+        )
+        finding = gate_b_executor.EphemeralReviewFinding(
+            pr_id=candidate.pr_id,
+            finding_id="f" * 64,
+            index=1,
+            title="Ephemeral validation finding",
+            severity="high",
+            path="src/repair_target.py",
+            line=1,
+            description="The validation branch accepts an invalid value.",
+            response_sha256="e" * 64,
+        )
+
+        class Publisher:
+            def publish(
+                self,
+                publication: gate_b_executor.DraftPublication,
+                *,
+                now_utc: str | None = None,
+            ) -> gate_b_executor.DraftPublicationReceipt:
+                del now_utc
+                return gate_b_executor.DraftPublicationReceipt(
+                    authorization_id=publication.authorization_id,
+                    authorization_sha256=publication.authorization_sha256,
+                    repository_id=publication.repository_id,
+                    repair_job_id=publication.repair_job_id,
+                    pr_id=publication.pr_id,
+                    draft_pr_id="draft-pr-101",
+                    head_branch=publication.head_branch,
+                    base_branch=publication.base_branch,
+                    commit_sha=publication.exact_commit_sha,
+                    payload_sha256=publication.payload_sha256,
+                    publisher_status="draft_published",
+                    state="receipt_reconciled",
+                )
+
+        with tempfile.TemporaryDirectory() as temp:
+            session = gate_b_executor.ReviewRepairOperatorSession(
+                coordinator=coordinator,
+                authorization=approved,
+                selection_receipt=selection_receipt,
+                review_receipt=review_receipt,
+                findings=(finding,),
+                receipt_directory=Path(temp),
+                source_root=Path(__file__).resolve().parents[1],
+                publisher_factory=Publisher,
+                started_at_utc="2026-08-06T00:02:00Z",
+                timeout_seconds=3600,
+            )
+            status = session.status()
+            self.assertEqual(status["findings"][0]["title"], finding.title)
+            selected = session.select_and_plan(
+                {
+                    "finding_id": finding.finding_id,
+                    "selection_id": "selection-live-001",
+                    "selector_id": "p-01",
+                    "selected_at_utc": "2026-08-06T00:03:00Z",
+                    "plan_text": "Change only the selected validation branch.",
+                    "repair_job_id": "repair-live-001",
+                    "requested_by": "p-01",
+                    "requested_at_utc": "2026-08-06T00:04:00Z",
+                    "write_approval_id": "write-live-001",
+                    "write_requested_at_utc": "2026-08-06T00:04:01Z",
+                }
+            )
+            self.assertEqual(selected["state"], "awaiting_write_approval")
+            session.decide_write(
+                {
+                    "approval_id": "write-live-001",
+                    "actor_id": "p-02",
+                    "decision": "approved",
+                    "approved_at_utc": "2026-08-06T00:04:02Z",
+                }
+            )
+            assert session._intent is not None
+            sandbox = _sandbox_result(session._intent)
+            patch = sandbox.patch_files[0]
+            sandbox_result = session.submit_sandbox(
+                {
+                    "repair_job_id": sandbox.repair_job_id,
+                    "worktree_receipt_sha256": sandbox.worktree_receipt_sha256,
+                    "task_branch_sha256": sandbox.task_branch_sha256,
+                    "patch_sha256": sandbox.patch_sha256,
+                    "checkpoint_sha256": sandbox.checkpoint_sha256,
+                    "test_sha256": sandbox.test_sha256,
+                    "budget_sha256": sandbox.budget_sha256,
+                    "tests_passed": True,
+                    "reflection_passed": True,
+                    "exact_commit_sha": sandbox.exact_commit_sha,
+                    "expected_tree_sha": sandbox.expected_tree_sha,
+                    "patch_files": [
+                        {
+                            "path": patch.path,
+                            "mode": patch.mode,
+                            "content_base64": base64.b64encode(patch.content).decode("ascii"),
+                        }
+                    ],
+                    "base_tree_sha": "b" * 40,
+                    "commit_message": "Phase 11D repair repair-live-001",
+                    "commit_timestamp_utc": "2026-08-06T00:05:00Z",
+                    "observed_at_utc": "2026-08-06T00:05:00Z",
+                    "draft_approval_id": "draft-live-001",
+                    "draft_requested_at_utc": "2026-08-06T00:05:01Z",
+                }
+            )
+            self.assertEqual(sandbox_result["state"], "awaiting_draft_pr_approval")
+            session.decide_draft_pr(
+                {
+                    "approval_id": "draft-live-001",
+                    "actor_id": "p-03",
+                    "decision": "approved",
+                    "approved_at_utc": "2026-08-06T00:05:02Z",
+                }
+            )
+            published = session.publish({"published_at_utc": "2026-08-06T00:06:00Z"})
+            self.assertEqual(published["state"], "published")
+            self.assertTrue(session.terminal)
+            disk_text = "\n".join(
+                path.read_text(encoding="utf-8") for path in Path(temp).glob("*.json")
+            )
+            self.assertNotIn(finding.title, disk_text)
+            self.assertNotIn(finding.description, disk_text)
+            self.assertNotIn("Change only the selected validation branch.", disk_text)
+            self.assertNotIn("patched = True", disk_text)
+            self.assertTrue((Path(temp) / "repair-receipt.json").is_file())
+            self.assertTrue((Path(temp) / "draft-pr-receipt.json").is_file())
+            self.assertTrue((Path(temp) / "operator-session-receipt.json").is_file())
+            gate_b_executor._write_json(
+                Path(temp) / "review-cohort-receipt.json", review_receipt
+            )
+
+            closeout = gate_b_executor.prepare_pilot_closeout(
+                authorization=approved,
+                participants=participants,
+                selection_receipt=selection_receipt,
+                review_receipt=review_receipt,
+                repair_receipt=gate_b_executor.load_json(Path(temp) / "repair-receipt.json"),
+                draft_pr_receipt=gate_b_executor.load_json(
+                    Path(temp) / "draft-pr-receipt.json"
+                ),
+                feedback={
+                    "actor_id": "p-01",
+                    "finding_id": finding.finding_id,
+                    "decision": "accepted",
+                    "repair_requested": True,
+                    "draft_pr_adopted": True,
+                    "active_review_seconds": 180,
+                    "paused_review_seconds": 30,
+                    "rationale_text": "The exact draft fixes the selected validation defect.",
+                    "submitted_at_utc": "2026-08-06T00:07:00Z",
+                },
+                output_directory=Path(temp),
+            )
+            final = gate_b_executor.approve_pilot_closeout(
+                participants=participants,
+                output_directory=Path(temp),
+                actor_id="p-03",
+                approved_at_utc="2026-08-06T00:08:00Z",
+                exact_approval_text=closeout["exact_approval_text"],
+            )
+            self.assertTrue(final["phase11d_pilot_complete"])
+            acceptance = gate_b_executor.load_json(
+                Path(temp) / "final-acceptance-report.json"
+            )
+            self.assertTrue(acceptance["phase11d_pilot_complete"])
+            self.assertFalse(acceptance["production_ready"])
+            self.assertFalse(acceptance["final_project_complete"])
+            self.assertEqual(acceptance["model_quality_status"], "not_measured")
+            self.assertEqual(acceptance["formal_quality_status"], "incomplete")
+            manifest = gate_b_executor.load_json(Path(temp) / "canonical-manifest.json")
+            self.assertEqual(
+                manifest["manifest_sha256"],
+                gate_b_executor._self_hash(manifest, "manifest_sha256"),
+            )
+            disk_text = "\n".join(
+                path.read_text(encoding="utf-8") for path in Path(temp).glob("*.json")
+            )
+            self.assertNotIn(
+                "The exact draft fixes the selected validation defect.", disk_text
+            )
+
+            server = gate_b_executor.LoopbackReviewRepairServer(
+                session,
+                bearer_token="t" * 32,
+            )
+            self.assertEqual(server.address[0], "127.0.0.1")
+            serving = threading.Thread(target=server.serve_until_terminal, daemon=True)
+            serving.start()
+            url = f"http://127.0.0.1:{server.address[1]}/v1/status"
+            with self.assertRaises(urllib_error.HTTPError) as unauthorized:
+                urllib_request.urlopen(url, timeout=2)
+            self.assertEqual(unauthorized.exception.code, 401)
+            request = urllib_request.Request(
+                url,
+                headers={"Authorization": f"Bearer {'t' * 32}"},
+            )
+            with urllib_request.urlopen(request, timeout=2) as response:
+                operator_status = json.loads(response.read())
+            self.assertEqual(operator_status["state"], "published")
+            serving.join(timeout=2)
+            self.assertFalse(serving.is_alive())
+            server.close()
 
     @mock.patch.dict(os.environ, {"PHASE11D_PUBLISHER_TEST_KEY": "test-provider-key"})
     def test_gate_b_publisher_reconciles_after_remote_success_and_quarantines_drift(self) -> None:

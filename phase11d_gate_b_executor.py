@@ -18,10 +18,13 @@ import copy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import ssl
 import stat
@@ -29,7 +32,7 @@ import sys
 import threading
 import time
 from decimal import Decimal, ROUND_CEILING
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Callable, Mapping, Protocol, Sequence
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -217,6 +220,54 @@ class ReviewOutcome:
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cached_tokens": self.cached_tokens,
+            "response_sha256": self.response_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class EphemeralReviewFinding:
+    """Human-readable Review evidence that must never be serialized to disk."""
+
+    pr_id: str
+    finding_id: str
+    index: int
+    title: str
+    severity: str
+    path: str
+    line: int
+    description: str
+    response_sha256: str
+
+    def __post_init__(self) -> None:
+        _require_stable_id("ephemeral_finding_pr_id", self.pr_id)
+        _require_sha256("ephemeral_finding_id", self.finding_id)
+        _require_int("ephemeral_finding_index", self.index, minimum=1)
+        if self.severity not in _FINDING_SEVERITIES:
+            raise GateBExecutorError("ephemeral_finding_severity_invalid")
+        _require_repository_path("ephemeral_finding_path", self.path)
+        _require_int("ephemeral_finding_line", self.line, minimum=1)
+        _require_sha256("ephemeral_finding_response", self.response_sha256)
+        for name, value, maximum in (
+            ("title", self.title, 240),
+            ("description", self.description, 4000),
+        ):
+            if not isinstance(value, str) or not value or len(value) > maximum:
+                raise GateBExecutorError(f"ephemeral_finding_{name}_invalid")
+        if _contains_secret_like_content(
+            "\n".join((self.title, self.path, self.description))
+        ):
+            raise GateBExecutorError("redaction_failure")
+
+    def operator_view(self) -> dict[str, Any]:
+        return {
+            "pr_id": self.pr_id,
+            "finding_id": self.finding_id,
+            "index": self.index,
+            "title": self.title,
+            "severity": self.severity,
+            "path": self.path,
+            "line": self.line,
+            "description": self.description,
             "response_sha256": self.response_sha256,
         }
 
@@ -1060,6 +1111,7 @@ class ZhipuReviewClient:
         api_key: str,
         model: str,
         timeout_seconds: int = 120,
+        finding_sink: Callable[[tuple[EphemeralReviewFinding, ...]], None] | None = None,
     ) -> None:
         if not isinstance(api_key, str) or not 1 <= len(api_key) <= 4096:
             raise GateBExecutorError("provider_key_invalid")
@@ -1069,6 +1121,7 @@ class ZhipuReviewClient:
         self._api_key = api_key
         self._model = model
         self._timeout_seconds = _require_int("provider_timeout_seconds", timeout_seconds, minimum=1)
+        self._finding_sink = finding_sink
 
     @staticmethod
     def _tool_schema() -> dict[str, Any]:
@@ -1214,6 +1267,7 @@ class ZhipuReviewClient:
             if not isinstance(findings, list) or len(findings) > 20:
                 raise GateBExecutorError("provider_schema_mismatch")
             finding_ids: list[str] = []
+            ephemeral_findings: list[EphemeralReviewFinding] = []
             for index, finding in enumerate(findings, 1):
                 if not isinstance(finding, Mapping) or set(finding) != {
                     "title",
@@ -1234,15 +1288,27 @@ class ZhipuReviewClient:
                     raise GateBExecutorError("provider_schema_mismatch")
                 if any(len(str(finding[name])) > maximum for name, maximum in (("title", 240), ("path", 512), ("description", 4000))):
                     raise GateBExecutorError("provider_schema_mismatch")
-                finding_ids.append(
-                    sha256_bytes(
-                        canonical_json(
-                            {
-                                "pr_id": candidate.pr_id,
-                                "index": index,
-                                "finding": dict(finding),
-                            }
-                        )
+                finding_id = sha256_bytes(
+                    canonical_json(
+                        {
+                            "pr_id": candidate.pr_id,
+                            "index": index,
+                            "finding": dict(finding),
+                        }
+                    )
+                )
+                finding_ids.append(finding_id)
+                ephemeral_findings.append(
+                    EphemeralReviewFinding(
+                        pr_id=candidate.pr_id,
+                        finding_id=finding_id,
+                        index=index,
+                        title=finding["title"],
+                        severity=finding["severity"],
+                        path=finding["path"],
+                        line=finding["line"],
+                        description=finding["description"],
+                        response_sha256=response_sha,
                     )
                 )
         except GateBExecutorError as exc:
@@ -1281,7 +1347,7 @@ class ZhipuReviewClient:
                 cached_tokens=cached_tokens,
                 response_sha256=response_sha,
             )
-        return ReviewOutcome(
+        outcome = ReviewOutcome(
             pr_id=candidate.pr_id,
             status="completed",
             terminal_category="completed",
@@ -1294,6 +1360,9 @@ class ZhipuReviewClient:
             cached_tokens=cached_tokens,
             response_sha256=response_sha,
         )
+        if self._finding_sink is not None:
+            self._finding_sink(tuple(ephemeral_findings))
+        return outcome
 
 
 def review_with_budget(
@@ -4168,6 +4237,7 @@ def execute_authorized_reviews(
     now_utc: str,
     github_transport: JsonTransport | None = None,
     provider_transport: JsonTransport | None = None,
+    finding_sink: Callable[[tuple[EphemeralReviewFinding, ...]], None] | None = None,
     previous_authorization: Mapping[str, Any] | None = None,
     previous_selection_receipt: Mapping[str, Any] | None = None,
     previous_review_receipt: Mapping[str, Any] | None = None,
@@ -4240,6 +4310,7 @@ def execute_authorized_reviews(
         active_provider_transport,
         api_key=provider_key,
         model=credential_descriptor["provider_model_snapshot"],
+        finding_sink=finding_sink,
     )
     try:
         previous_inputs = (
@@ -4539,6 +4610,1032 @@ class GateBRepairCoordinator:
         return row
 
 
+OPERATOR_SESSION_SCHEMA_VERSION = "crag.phase11d.operator-session/v1alpha1"
+_OPERATOR_MAX_REQUEST_BYTES = 3_000_000
+
+
+def _operator_patch_files(value: Any) -> tuple[SandboxPatchFile, ...]:
+    if not isinstance(value, list) or not value or len(value) > 64:
+        raise GateBExecutorError("operator_patch_files_invalid")
+    files: list[SandboxPatchFile] = []
+    for row in value:
+        if not isinstance(row, Mapping):
+            raise GateBExecutorError("operator_patch_file_invalid")
+        _require_exact_fields(
+            "operator_patch_file",
+            row,
+            frozenset({"path", "mode", "content_base64"}),
+        )
+        encoded = row["content_base64"]
+        if not isinstance(encoded, str) or len(encoded) > 1_400_000:
+            raise GateBExecutorError("operator_patch_content_invalid")
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise GateBExecutorError("operator_patch_content_invalid") from exc
+        files.append(
+            SandboxPatchFile(
+                path=row["path"],
+                mode=row["mode"],
+                content=content,
+            )
+        )
+    return tuple(files)
+
+
+class ReviewRepairOperatorSession:
+    """One in-memory, human-driven Review-to-Repair session for one repair job."""
+
+    def __init__(
+        self,
+        *,
+        coordinator: GateBRepairCoordinator,
+        authorization: Mapping[str, Any],
+        selection_receipt: Mapping[str, Any],
+        review_receipt: Mapping[str, Any],
+        findings: Sequence[EphemeralReviewFinding],
+        receipt_directory: Path,
+        source_root: Path,
+        publisher_factory: Callable[[], GitHubDraftPublisher],
+        started_at_utc: str,
+        timeout_seconds: int,
+    ) -> None:
+        validate_review_cohort_receipt(
+            review_receipt,
+            authorization=authorization,
+            selection_receipt=selection_receipt,
+        )
+        _require_utc("operator_started_at", started_at_utc)
+        self._coordinator = coordinator
+        self._authorization = authorization
+        self._selection_receipt = dict(selection_receipt)
+        self._review_receipt = dict(review_receipt)
+        self._receipt_directory = receipt_directory.resolve()
+        resolved_source = source_root.resolve()
+        if self._receipt_directory == resolved_source or resolved_source in self._receipt_directory.parents:
+            raise GateBExecutorError("operator_receipt_directory_inside_source_tree")
+        self._publisher_factory = publisher_factory
+        self._started_at_utc = started_at_utc
+        self._timeout_seconds = _require_int(
+            "operator_timeout_seconds", timeout_seconds, minimum=1
+        )
+        self._started_monotonic = time.monotonic()
+        self._state = "awaiting_selection"
+        self._lock = threading.RLock()
+        self._selected_finding_id = ""
+        self._intent: RepairIntent | None = None
+        self._draft_binding_sha256 = ""
+        self._receipt: DraftPublicationReceipt | None = None
+        review_rows = review_receipt.get("review_rows")
+        if not isinstance(review_rows, list):
+            raise GateBExecutorError("review_rows_invalid")
+        self._reviews = {
+            str(row["pr_id"]): _review_outcome_from_receipt_row(row)
+            for row in review_rows
+            if isinstance(row, Mapping) and row.get("status") == "completed"
+        }
+        selected_rows = selection_receipt.get("selected_prs")
+        if not isinstance(selected_rows, list):
+            raise GateBExecutorError("selection_rows_invalid")
+        required = authorization.get("required_fields")
+        base_rule = required.get("allowed_base_branch_rule") if isinstance(required, Mapping) else None
+        if not isinstance(base_rule, Mapping) or not isinstance(base_rule.get("base_branch"), str):
+            raise GateBExecutorError("base_branch_rule_invalid")
+        self._candidates = {
+            str(row["pr_id"]): _candidate_from_selection_row(
+                row,
+                base_branch=base_rule["base_branch"],
+            )
+            for row in selected_rows
+            if isinstance(row, Mapping)
+        }
+        finding_map: dict[str, EphemeralReviewFinding] = {}
+        for finding in findings:
+            review = self._reviews.get(finding.pr_id)
+            if (
+                review is None
+                or finding.finding_id not in review.feedback_eligible_finding_ids
+                or finding.response_sha256 != review.response_sha256
+                or finding.finding_id in finding_map
+            ):
+                raise GateBExecutorError("operator_finding_binding_mismatch")
+            finding_map[finding.finding_id] = finding
+        expected_ids = {
+            finding_id
+            for review in self._reviews.values()
+            for finding_id in review.feedback_eligible_finding_ids
+        }
+        if set(finding_map) != expected_ids:
+            raise GateBExecutorError("operator_finding_set_incomplete")
+        self._findings = finding_map
+
+    @property
+    def terminal(self) -> bool:
+        with self._lock:
+            return self._state in {"published", "declined", "stopped", "expired"}
+
+    def _check_live(self) -> None:
+        if time.monotonic() - self._started_monotonic > self._timeout_seconds:
+            self._state = "expired"
+            self._clear_ephemeral()
+            self._write_session_receipt("timeout")
+            raise GateBExecutorError("operator_session_expired")
+        if self.terminal:
+            raise GateBExecutorError("operator_session_terminal")
+
+    def _clear_ephemeral(self) -> None:
+        self._findings.clear()
+
+    def _write_receipt(self, name: str, value: Mapping[str, Any]) -> None:
+        self._receipt_directory.mkdir(parents=True, exist_ok=True)
+        _write_json(self._receipt_directory / name, value)
+
+    def _write_session_receipt(self, terminal_category: str) -> None:
+        required = self._authorization.get("required_fields")
+        if not isinstance(required, Mapping):
+            raise GateBExecutorError("authorization_required_fields_invalid")
+        row: dict[str, Any] = {
+            "schema_version": OPERATOR_SESSION_SCHEMA_VERSION,
+            "authorization_id": required["authorization_id"],
+            "canonical_authorization_sha256": required["canonical_authorization_sha256"],
+            "review_cohort_receipt_sha256": self._review_receipt[
+                "review_cohort_receipt_sha256"
+            ],
+            "selected_finding_id": self._selected_finding_id,
+            "state": self._state,
+            "terminal_category": terminal_category,
+            "started_at_utc": self._started_at_utc,
+            "session_receipt_sha256": "",
+        }
+        row["session_receipt_sha256"] = _self_hash(row, "session_receipt_sha256")
+        self._write_receipt("operator-session-receipt.json", row)
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            if not self.terminal:
+                self._check_live()
+            result: dict[str, Any] = {
+                "state": self._state,
+                "terminal": self.terminal,
+                "selected_finding_id": self._selected_finding_id,
+                "write_binding_sha256": (
+                    self._intent.write_binding_sha256 if self._intent is not None else ""
+                ),
+                "draft_pr_binding_sha256": self._draft_binding_sha256,
+                "draft_pr_id": self._receipt.draft_pr_id if self._receipt else "",
+            }
+            if self._state == "awaiting_selection":
+                result["findings"] = [
+                    item.operator_view()
+                    for item in sorted(
+                        self._findings.values(),
+                        key=lambda item: (item.pr_id, item.index),
+                    )
+                ]
+            return result
+
+    def select_and_plan(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        fields = frozenset(
+            {
+                "finding_id",
+                "selection_id",
+                "selector_id",
+                "selected_at_utc",
+                "plan_text",
+                "repair_job_id",
+                "requested_by",
+                "requested_at_utc",
+                "write_approval_id",
+                "write_requested_at_utc",
+            }
+        )
+        _require_exact_fields("operator_select_and_plan", payload, fields)
+        with self._lock:
+            self._check_live()
+            if self._state != "awaiting_selection":
+                raise GateBExecutorError("operator_state_invalid")
+            finding_id = _require_sha256("operator_finding_id", payload["finding_id"])
+            finding = self._findings.get(finding_id)
+            if finding is None:
+                raise GateBExecutorError("operator_finding_unknown")
+            candidate = self._candidates[finding.pr_id]
+            review = self._reviews[finding.pr_id]
+            self._coordinator.select_finding(
+                candidate=candidate,
+                review=review,
+                finding_id=finding_id,
+                selection_id=payload["selection_id"],
+                selector_id=payload["selector_id"],
+                selected_at_utc=payload["selected_at_utc"],
+            )
+            self._intent = self._coordinator.prepare_repair(
+                candidate=candidate,
+                plan_text=payload["plan_text"],
+                repair_job_id=payload["repair_job_id"],
+                requested_by=payload["requested_by"],
+                requested_at_utc=payload["requested_at_utc"],
+            )
+            binding = self._coordinator.request_write_approval(
+                approval_id=payload["write_approval_id"],
+                requested_at_utc=payload["write_requested_at_utc"],
+            )
+            self._selected_finding_id = finding_id
+            self._findings = {finding_id: finding}
+            self._state = "awaiting_write_approval"
+            return {
+                "state": self._state,
+                "selection_sha256": self._intent.selection_sha256,
+                "plan_sha256": self._intent.plan_sha256,
+                "write_binding_sha256": binding,
+            }
+
+    def decide_write(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        fields = frozenset({"approval_id", "actor_id", "decision", "approved_at_utc"})
+        _require_exact_fields("operator_write_approval", payload, fields)
+        with self._lock:
+            self._check_live()
+            if self._state != "awaiting_write_approval":
+                raise GateBExecutorError("operator_state_invalid")
+            approval = self._coordinator.decide_write_approval(
+                approval_id=payload["approval_id"],
+                actor_id=payload["actor_id"],
+                decision=payload["decision"],
+                approved_at_utc=payload["approved_at_utc"],
+            )
+            self._state = "awaiting_sandbox" if approval.decision == "approved" else "declined"
+            if self._state == "declined":
+                self._clear_ephemeral()
+                self._write_session_receipt("write_declined")
+            return {"state": self._state, "approval": approval.to_dict()}
+
+    def submit_sandbox(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        fields = frozenset(
+            {
+                "repair_job_id",
+                "worktree_receipt_sha256",
+                "task_branch_sha256",
+                "patch_sha256",
+                "checkpoint_sha256",
+                "test_sha256",
+                "budget_sha256",
+                "tests_passed",
+                "reflection_passed",
+                "exact_commit_sha",
+                "expected_tree_sha",
+                "patch_files",
+                "base_tree_sha",
+                "commit_message",
+                "commit_timestamp_utc",
+                "observed_at_utc",
+                "draft_approval_id",
+                "draft_requested_at_utc",
+            }
+        )
+        _require_exact_fields("operator_sandbox", payload, fields)
+        with self._lock:
+            self._check_live()
+            if self._state != "awaiting_sandbox" or self._intent is None:
+                raise GateBExecutorError("operator_state_invalid")
+            patch_files = _operator_patch_files(payload["patch_files"])
+            result = SandboxResult(
+                repair_job_id=payload["repair_job_id"],
+                worktree_receipt_sha256=payload["worktree_receipt_sha256"],
+                task_branch_sha256=payload["task_branch_sha256"],
+                patch_sha256=payload["patch_sha256"],
+                checkpoint_sha256=payload["checkpoint_sha256"],
+                test_sha256=payload["test_sha256"],
+                budget_sha256=payload["budget_sha256"],
+                tests_passed=payload["tests_passed"],
+                reflection_passed=payload["reflection_passed"],
+                exact_commit_sha=payload["exact_commit_sha"],
+                expected_tree_sha=payload["expected_tree_sha"],
+                patch_files=patch_files,
+            )
+            self._coordinator.submit_sandbox_result(
+                result=result,
+                observed_at_utc=payload["observed_at_utc"],
+            )
+            material = build_draft_publication_material(
+                intent=self._intent,
+                sandbox=result,
+                base_tree_sha=payload["base_tree_sha"],
+                commit_message=payload["commit_message"],
+                commit_timestamp_utc=payload["commit_timestamp_utc"],
+            )
+            self._draft_binding_sha256 = self._coordinator.request_draft_pr_approval(
+                approval_id=payload["draft_approval_id"],
+                material=material,
+                requested_at_utc=payload["draft_requested_at_utc"],
+            )
+            self._state = "awaiting_draft_pr_approval"
+            return {
+                "state": self._state,
+                "exact_commit_sha": result.exact_commit_sha,
+                "patch_sha256": result.patch_sha256,
+                "test_sha256": result.test_sha256,
+                "draft_pr_binding_sha256": self._draft_binding_sha256,
+            }
+
+    def decide_draft_pr(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        fields = frozenset({"approval_id", "actor_id", "decision", "approved_at_utc"})
+        _require_exact_fields("operator_draft_pr_approval", payload, fields)
+        with self._lock:
+            self._check_live()
+            if self._state != "awaiting_draft_pr_approval":
+                raise GateBExecutorError("operator_state_invalid")
+            approval = self._coordinator.decide_draft_pr_approval(
+                approval_id=payload["approval_id"],
+                actor_id=payload["actor_id"],
+                decision=payload["decision"],
+                approved_at_utc=payload["approved_at_utc"],
+            )
+            self._state = "ready_to_publish" if approval.decision == "approved" else "declined"
+            if self._state == "declined":
+                self._clear_ephemeral()
+                self._write_session_receipt("draft_pr_declined")
+            return {"state": self._state, "approval": approval.to_dict()}
+
+    def publish(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        _require_exact_fields("operator_publish", payload, frozenset({"published_at_utc"}))
+        with self._lock:
+            self._check_live()
+            if self._state != "ready_to_publish":
+                raise GateBExecutorError("operator_state_invalid")
+            self._receipt = self._coordinator.publish_draft_pr(
+                publisher=self._publisher_factory(),
+                published_at_utc=payload["published_at_utc"],
+            )
+            repair_receipt = self._coordinator.repair_receipt()
+            repair_receipt["repair_receipt_sha256"] = _self_hash(
+                {**repair_receipt, "repair_receipt_sha256": ""},
+                "repair_receipt_sha256",
+            )
+            self._write_receipt("repair-receipt.json", repair_receipt)
+            self._write_receipt("draft-pr-receipt.json", self._receipt.to_dict())
+            self._state = "published"
+            self._clear_ephemeral()
+            self._write_session_receipt("draft_pr_published")
+            return {"state": self._state, "draft_pr_receipt": self._receipt.to_dict()}
+
+    def stop(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        fields = frozenset({"actor_id", "stopped_at_utc", "reason"})
+        _require_exact_fields("operator_stop", payload, fields)
+        with self._lock:
+            self._check_live()
+            _resolve_human_actor(self._coordinator._participants, payload["actor_id"])
+            _require_utc("operator_stopped_at", payload["stopped_at_utc"])
+            reason_sha256 = _hash_ephemeral_text(
+                "operator_stop_reason", payload["reason"], maximum_bytes=4000
+            )
+            self._state = "stopped"
+            self._clear_ephemeral()
+            self._write_session_receipt("human_stop")
+            return {"state": self._state, "reason_sha256": reason_sha256}
+
+    def dispatch(
+        self,
+        *,
+        method: str,
+        path: str,
+        payload: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if method == "GET" and path == "/v1/status" and payload is None:
+            return self.status()
+        if method != "POST" or payload is None:
+            raise GateBExecutorError("operator_endpoint_denied")
+        routes: dict[str, Callable[[Mapping[str, Any]], dict[str, Any]]] = {
+            "/v1/select-and-plan": self.select_and_plan,
+            "/v1/write-approval": self.decide_write,
+            "/v1/sandbox": self.submit_sandbox,
+            "/v1/draft-pr-approval": self.decide_draft_pr,
+            "/v1/publish": self.publish,
+            "/v1/shutdown": self.stop,
+        }
+        action = routes.get(path)
+        if action is None:
+            raise GateBExecutorError("operator_endpoint_denied")
+        return action(payload)
+
+
+class LoopbackReviewRepairServer:
+    """Authenticated HTTP wrapper that can bind only to the IPv4 loopback address."""
+
+    def __init__(
+        self,
+        session: ReviewRepairOperatorSession,
+        *,
+        port: int = 0,
+        bearer_token: str | None = None,
+    ) -> None:
+        self.session = session
+        self.bearer_token = bearer_token or secrets.token_urlsafe(32)
+        if not isinstance(self.bearer_token, str) or len(self.bearer_token) < 32:
+            raise GateBExecutorError("operator_bearer_token_invalid")
+        _require_int("operator_port", port)
+        if port > 65535:
+            raise GateBExecutorError("operator_port_invalid")
+        wrapper = self
+
+        class Handler(BaseHTTPRequestHandler):
+            server_version = "Phase11DLoopback/1"
+            sys_version = ""
+
+            def log_message(self, format: str, *args: Any) -> None:
+                del format, args
+
+            def _respond(self, status: HTTPStatus, value: Mapping[str, Any]) -> None:
+                body = canonical_json(value)
+                self.send_response(status.value)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _authorized(self) -> bool:
+                if self.client_address[0] != "127.0.0.1":
+                    return False
+                supplied = self.headers.get("Authorization", "")
+                expected = f"Bearer {wrapper.bearer_token}"
+                return secrets.compare_digest(supplied, expected)
+
+            def _handle(self, method: str) -> None:
+                if not self._authorized():
+                    self._respond(HTTPStatus.UNAUTHORIZED, {"error": "operator_unauthorized"})
+                    return
+                payload: Mapping[str, Any] | None = None
+                if method == "POST":
+                    try:
+                        length = int(self.headers.get("Content-Length", ""))
+                    except ValueError:
+                        length = -1
+                    if length < 0 or length > _OPERATOR_MAX_REQUEST_BYTES:
+                        self._respond(
+                            HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                            {"error": "operator_request_size_invalid"},
+                        )
+                        return
+                    raw = self.rfile.read(length)
+                    try:
+                        loaded = json.loads(raw, object_pairs_hook=_reject_duplicate_keys)
+                    except (json.JSONDecodeError, GateBExecutorError):
+                        self._respond(HTTPStatus.BAD_REQUEST, {"error": "operator_json_invalid"})
+                        return
+                    if not isinstance(loaded, Mapping):
+                        self._respond(HTTPStatus.BAD_REQUEST, {"error": "operator_json_invalid"})
+                        return
+                    payload = loaded
+                try:
+                    result = wrapper.session.dispatch(
+                        method=method,
+                        path=urllib_parse.urlsplit(self.path).path,
+                        payload=payload,
+                    )
+                except GateBExecutorError as exc:
+                    self._respond(HTTPStatus.CONFLICT, {"error": str(exc)})
+                    return
+                self._respond(HTTPStatus.OK, result)
+                if wrapper.session.terminal:
+                    threading.Thread(target=wrapper._server.shutdown, daemon=True).start()
+
+            def do_GET(self) -> None:
+                self._handle("GET")
+
+            def do_POST(self) -> None:
+                self._handle("POST")
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+    @property
+    def address(self) -> tuple[str, int]:
+        host, port = self._server.server_address[:2]
+        return str(host), int(port)
+
+    def serve_until_terminal(self) -> None:
+        def expire_session() -> None:
+            remaining = max(
+                0.0,
+                self.session._timeout_seconds
+                - (time.monotonic() - self.session._started_monotonic),
+            )
+            threading.Event().wait(remaining)
+            if not self.session.terminal:
+                try:
+                    self.session.status()
+                except GateBExecutorError:
+                    pass
+                self._server.shutdown()
+
+        threading.Thread(target=expire_session, daemon=True).start()
+        self._server.serve_forever(poll_interval=0.2)
+
+    def shutdown(self) -> None:
+        self._server.shutdown()
+
+    def close(self) -> None:
+        self._server.server_close()
+
+
+def run_review_repair_operator(
+    *,
+    authorization: Mapping[str, Any],
+    participants: Mapping[str, Any],
+    repository_authorization: Mapping[str, Any],
+    credential_descriptor: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    source_root: Path,
+    github_app_private_key_file: Path,
+    provider_key_environment: str,
+    owner: str,
+    repository: str,
+    receipt_directory: Path,
+    now_utc: str,
+    port: int = 0,
+) -> None:
+    """Run a fresh Review cohort and retain its readable findings for one repair."""
+    findings: list[EphemeralReviewFinding] = []
+
+    def retain(rows: tuple[EphemeralReviewFinding, ...]) -> None:
+        findings.extend(rows)
+
+    review_receipt = execute_authorized_reviews(
+        authorization=authorization,
+        participants=participants,
+        repository_authorization=repository_authorization,
+        credential_descriptor=credential_descriptor,
+        runtime=runtime,
+        selection_receipt=selection_receipt,
+        source_root=source_root,
+        github_app_private_key_file=github_app_private_key_file,
+        provider_key_environment=provider_key_environment,
+        owner=owner,
+        repository=repository,
+        now_utc=now_utc,
+        finding_sink=retain,
+    )
+    receipt_directory = receipt_directory.resolve()
+    resolved_source = source_root.resolve()
+    if receipt_directory == resolved_source or resolved_source in receipt_directory.parents:
+        raise GateBExecutorError("operator_receipt_directory_inside_source_tree")
+    receipt_directory.mkdir(parents=True, exist_ok=True)
+    _write_json(receipt_directory / "review-cohort-receipt.json", review_receipt)
+    if review_receipt["stop_category"] != "none":
+        raise GateBExecutorError("operator_review_cohort_incomplete")
+    if not findings:
+        raise GateBExecutorError("operator_no_findings")
+    coordinator = GateBRepairCoordinator(
+        authorization=authorization,
+        participants=participants,
+        repository=repository_authorization,
+        credential_descriptor=credential_descriptor,
+        runtime=runtime,
+        source_root=source_root,
+        selection_receipt=selection_receipt,
+        now_utc=now_utc,
+    )
+
+    def publisher_factory() -> GitHubDraftPublisher:
+        require_active_execution_authorization(
+            authorization=authorization,
+            participants=participants,
+            repository=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+        )
+        verify_credential_fingerprints(
+            authorization=authorization,
+            participants=participants,
+            repository=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+            github_app_private_key_file=github_app_private_key_file,
+            provider_key_environment=provider_key_environment,
+        )
+        private_key = _read_private_key_file(
+            github_app_private_key_file,
+            expected_sha256=credential_descriptor[
+                "github_app_private_key_fingerprint_sha256"
+            ],
+        )
+        transport = StrictHttpsJsonTransport(allowed_hosts=frozenset({_GITHUB_HOST}))
+        token = GitHubAppAuthenticator(transport).mint_installation_token(
+            app_id=credential_descriptor["github_app_id"],
+            installation_id=credential_descriptor["github_app_installation_id"],
+            private_key=private_key,
+        )
+        del private_key
+        required = authorization.get("required_fields")
+        if not isinstance(required, Mapping):
+            raise GateBExecutorError("authorization_required_fields_invalid")
+        repository_allowlist = required.get("repository_allowlist")
+        if not isinstance(repository_allowlist, Mapping):
+            raise GateBExecutorError("repository_allowlist_invalid")
+        repository_ids = repository_allowlist.get("repository_ids")
+        if not isinstance(repository_ids, list) or len(repository_ids) != 1:
+            raise GateBExecutorError("repository_allowlist_invalid")
+        return GitHubDraftPublisher(
+            transport,
+            authorization=authorization,
+            participants=participants,
+            repository_authorization=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+            github_app_private_key_file=github_app_private_key_file,
+            provider_key_environment=provider_key_environment,
+            token=token,
+            owner=owner,
+            repository=repository,
+            expected_repository_id=_github_numeric_repository_id(repository_ids[0]),
+            expected_app_id=credential_descriptor["github_app_id"],
+            expected_installation_id=credential_descriptor["github_app_installation_id"],
+            journal=PublicationJournal(receipt_directory / "publication-journal.json"),
+        )
+
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    session = ReviewRepairOperatorSession(
+        coordinator=coordinator,
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        review_receipt=review_receipt,
+        findings=findings,
+        receipt_directory=receipt_directory,
+        source_root=source_root,
+        publisher_factory=publisher_factory,
+        started_at_utc=now_utc,
+        timeout_seconds=_require_int(
+            "max_wall_clock_seconds", required.get("max_wall_clock_seconds"), minimum=1
+        ),
+    )
+    server = LoopbackReviewRepairServer(session, port=port)
+    try:
+        host, actual_port = server.address
+        print(
+            json.dumps(
+                {
+                    "operator_url": f"http://{host}:{actual_port}",
+                    "bearer_token": server.bearer_token,
+                    "finding_count": len(findings),
+                    "review_cohort_receipt_sha256": review_receipt[
+                        "review_cohort_receipt_sha256"
+                    ],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        server.serve_until_terminal()
+    finally:
+        findings.clear()
+        server.close()
+
+
+PILOT_FEEDBACK_SCHEMA_VERSION = "crag.phase11d.pilot-feedback/v1alpha1"
+PILOT_TIME_COST_SCHEMA_VERSION = "crag.phase11d.pilot-time-cost/v1alpha1"
+PILOT_BUSINESS_REPORT_SCHEMA_VERSION = "crag.phase11d.pilot-business-report/v1alpha1"
+PILOT_CLAIM_DECISION_SCHEMA_VERSION = "crag.phase11d.pilot-claim-decision/v1alpha1"
+PILOT_ACCEPTANCE_SCHEMA_VERSION = "crag.phase11d.pilot-final-acceptance/v1alpha1"
+PILOT_MANIFEST_SCHEMA_VERSION = "crag.phase11d.pilot-canonical-manifest/v1alpha1"
+PILOT_FINAL_APPROVAL_PREFIX = "PHASE11D_PILOT_FINAL_SIGNOFF_V1"
+_PILOT_FEEDBACK_DECISIONS = frozenset({"accepted", "rejected", "deferred"})
+
+
+def _validate_repair_receipt(value: Mapping[str, Any]) -> None:
+    receipt_sha = _require_sha256(
+        "repair_receipt_sha256", value.get("repair_receipt_sha256")
+    )
+    if _self_hash(value, "repair_receipt_sha256") != receipt_sha:
+        raise GateBExecutorError("repair_receipt_hash_mismatch")
+    _require_stable_id("repair_receipt_job_id", value.get("repair_job_id"))
+    _require_stable_id("repair_receipt_pr_id", value.get("pr_id"))
+    _require_sha256("repair_receipt_finding_id", value.get("finding_id"))
+    draft_sha = _require_sha256(
+        "repair_draft_pr_receipt_sha256", value.get("draft_pr_receipt_sha256")
+    )
+    if draft_sha == "0" * 64:
+        raise GateBExecutorError("repair_draft_pr_receipt_missing")
+
+
+def _validate_draft_pr_receipt(value: Mapping[str, Any]) -> None:
+    receipt_sha = _require_sha256("draft_pr_receipt_sha256", value.get("receipt_sha256"))
+    if _self_hash(value, "receipt_sha256") != receipt_sha:
+        raise GateBExecutorError("draft_pr_receipt_hash_mismatch")
+    if (
+        value.get("draft") is not True
+        or value.get("ready") is not False
+        or value.get("merged") is not False
+        or value.get("publisher_status") != "draft_published"
+    ):
+        raise GateBExecutorError("draft_pr_boundary_violation")
+
+
+def prepare_pilot_closeout(
+    *,
+    authorization: Mapping[str, Any],
+    participants: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    review_receipt: Mapping[str, Any],
+    repair_receipt: Mapping[str, Any],
+    draft_pr_receipt: Mapping[str, Any],
+    feedback: Mapping[str, Any],
+    output_directory: Path,
+) -> dict[str, Any]:
+    """Prepare post-publication evidence and the exact owner sign-off text."""
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    _validate_participants(required, participants)
+    validate_review_cohort_receipt(
+        review_receipt,
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+    )
+    _validate_repair_receipt(repair_receipt)
+    _validate_draft_pr_receipt(draft_pr_receipt)
+    if review_receipt.get("stop_category") != "none":
+        raise GateBExecutorError("closeout_review_incomplete")
+    if draft_pr_receipt.get("repair_job_id") != repair_receipt.get("repair_job_id"):
+        raise GateBExecutorError("closeout_repair_job_mismatch")
+    if draft_pr_receipt.get("pr_id") != repair_receipt.get("pr_id"):
+        raise GateBExecutorError("closeout_pr_mismatch")
+    if draft_pr_receipt.get("receipt_sha256") != repair_receipt.get(
+        "draft_pr_receipt_sha256"
+    ):
+        raise GateBExecutorError("closeout_draft_receipt_mismatch")
+    feedback_fields = frozenset(
+        {
+            "actor_id",
+            "finding_id",
+            "decision",
+            "repair_requested",
+            "draft_pr_adopted",
+            "active_review_seconds",
+            "paused_review_seconds",
+            "rationale_text",
+            "submitted_at_utc",
+        }
+    )
+    _require_exact_fields("pilot_feedback_input", feedback, feedback_fields)
+    actor_id, actor_role = _resolve_human_actor(participants, feedback["actor_id"])
+    finding_id = _require_sha256("pilot_feedback_finding_id", feedback["finding_id"])
+    if finding_id != repair_receipt.get("finding_id"):
+        raise GateBExecutorError("pilot_feedback_finding_mismatch")
+    decision = feedback["decision"]
+    if decision not in _PILOT_FEEDBACK_DECISIONS:
+        raise GateBExecutorError("pilot_feedback_decision_invalid")
+    repair_requested = _require_bool(
+        "pilot_feedback_repair_requested", feedback["repair_requested"]
+    )
+    draft_pr_adopted = _require_bool(
+        "pilot_feedback_draft_pr_adopted", feedback["draft_pr_adopted"]
+    )
+    active_seconds = _require_int(
+        "pilot_feedback_active_review_seconds", feedback["active_review_seconds"]
+    )
+    paused_seconds = _require_int(
+        "pilot_feedback_paused_review_seconds", feedback["paused_review_seconds"]
+    )
+    submitted_at = feedback["submitted_at_utc"]
+    _require_utc("pilot_feedback_submitted_at", submitted_at)
+    rationale_sha = _hash_ephemeral_text(
+        "pilot_feedback_rationale", feedback["rationale_text"], maximum_bytes=16_000
+    )
+    feedback_row: dict[str, Any] = {
+        "schema_version": PILOT_FEEDBACK_SCHEMA_VERSION,
+        "repair_job_id": repair_receipt["repair_job_id"],
+        "pr_id": repair_receipt["pr_id"],
+        "finding_id": finding_id,
+        "actor_id": actor_id,
+        "actor_role": actor_role,
+        "actor_method": "human",
+        "decision": decision,
+        "repair_requested": repair_requested,
+        "draft_pr_adopted": draft_pr_adopted,
+        "rationale_sha256": rationale_sha,
+        "submitted_at_utc": submitted_at,
+        "human_attested": True,
+        "feedback_receipt_sha256": "",
+    }
+    feedback_row["feedback_receipt_sha256"] = _self_hash(
+        feedback_row, "feedback_receipt_sha256"
+    )
+    budget_usage = review_receipt.get("budget_usage")
+    if not isinstance(budget_usage, Mapping):
+        raise GateBExecutorError("review_budget_usage_invalid")
+    time_cost: dict[str, Any] = {
+        "schema_version": PILOT_TIME_COST_SCHEMA_VERSION,
+        "repair_job_id": repair_receipt["repair_job_id"],
+        "pr_id": repair_receipt["pr_id"],
+        "active_review_seconds": active_seconds,
+        "paused_review_seconds": paused_seconds,
+        "review_cost_micro_cny": _require_int(
+            "review_cost_micro_cny", budget_usage.get("micro_cny")
+        ),
+        "provider_call_count": _require_int(
+            "review_provider_call_count", budget_usage.get("logical_calls")
+        ),
+        "recorded_at_utc": submitted_at,
+        "human_attested": True,
+        "time_cost_receipt_sha256": "",
+    }
+    time_cost["time_cost_receipt_sha256"] = _self_hash(
+        time_cost, "time_cost_receipt_sha256"
+    )
+    review_rows = review_receipt.get("review_rows")
+    assert isinstance(review_rows, list)
+    completed = sum(row.get("status") == "completed" for row in review_rows if isinstance(row, Mapping))
+    finding_count = sum(
+        len(row.get("finding_ids", [])) for row in review_rows if isinstance(row, Mapping)
+    )
+    business: dict[str, Any] = {
+        "schema_version": PILOT_BUSINESS_REPORT_SCHEMA_VERSION,
+        "authorization_id": review_receipt["authorization_id"],
+        "selected_pr_count": review_receipt["selected_pr_count"],
+        "completed_review_count": completed,
+        "finding_count": finding_count,
+        "repair_count": 1,
+        "draft_pr_count": 1,
+        "feedback_count": 1,
+        "draft_pr_adopted_count": int(draft_pr_adopted),
+        "active_review_seconds": active_seconds,
+        "review_cost_micro_cny": time_cost["review_cost_micro_cny"],
+        "business_claim_allowed": False,
+        "report_sha256": "",
+    }
+    business["report_sha256"] = _self_hash(business, "report_sha256")
+    claim: dict[str, Any] = {
+        "schema_version": PILOT_CLAIM_DECISION_SCHEMA_VERSION,
+        "business_claim_allowed": False,
+        "quality_claim_allowed": False,
+        "model_quality_status": "not_measured",
+        "formal_quality_status": "incomplete",
+        "production_ready": False,
+        "decision_reason": "pilot_evidence_is_not_formal_quality_or_production_evidence",
+        "claim_decision_sha256": "",
+    }
+    claim["claim_decision_sha256"] = _self_hash(claim, "claim_decision_sha256")
+    binding = sha256_bytes(
+        canonical_json(
+            {
+                "authorization_sha256": review_receipt[
+                    "canonical_authorization_sha256"
+                ],
+                "review_receipt_sha256": review_receipt[
+                    "review_cohort_receipt_sha256"
+                ],
+                "repair_receipt_sha256": repair_receipt["repair_receipt_sha256"],
+                "draft_pr_receipt_sha256": draft_pr_receipt["receipt_sha256"],
+                "feedback_receipt_sha256": feedback_row["feedback_receipt_sha256"],
+                "time_cost_receipt_sha256": time_cost["time_cost_receipt_sha256"],
+                "business_report_sha256": business["report_sha256"],
+                "claim_decision_sha256": claim["claim_decision_sha256"],
+            }
+        )
+    )
+    exact_text = "\n".join(
+        (
+            PILOT_FINAL_APPROVAL_PREFIX,
+            f"authorization_id={review_receipt['authorization_id']}",
+            f"closeout_binding_sha256={binding}",
+            f"draft_pr_id={draft_pr_receipt['draft_pr_id']}",
+            "phase11d_pilot_complete=true",
+            "business_claim_allowed=false",
+            "quality_claim_allowed=false",
+            "production_ready=false",
+            "model_quality_status=not_measured",
+            "formal_quality_status=incomplete",
+            "",
+        )
+    )
+    acceptance_draft: dict[str, Any] = {
+        "schema_version": PILOT_ACCEPTANCE_SCHEMA_VERSION,
+        "closeout_binding_sha256": binding,
+        "exact_approval_text_sha256": sha256_text(exact_text),
+        "participant_manifest_sha256": participants["manifest_sha256"],
+        "owner_signoff": None,
+        "phase11d_pilot_complete": False,
+        "business_claim_allowed": False,
+        "quality_claim_allowed": False,
+        "production_ready": False,
+        "model_quality_status": "not_measured",
+        "formal_quality_status": "incomplete",
+        "final_project_complete": False,
+        "acceptance_sha256": "",
+    }
+    acceptance_draft["acceptance_sha256"] = _self_hash(
+        acceptance_draft, "acceptance_sha256"
+    )
+    output_directory.mkdir(parents=True, exist_ok=True)
+    outputs = {
+        "feedback-receipt.json": feedback_row,
+        "time-cost-receipt.json": time_cost,
+        "business-report.json": business,
+        "claim-decision-report.json": claim,
+        "final-acceptance-draft.json": acceptance_draft,
+    }
+    for name, value in outputs.items():
+        _write_json(output_directory / name, value)
+    try:
+        (output_directory / "final-acceptance-exact-approval.txt").write_text(
+            exact_text, encoding="utf-8", newline="\n"
+        )
+    except OSError as exc:
+        raise GateBExecutorError("closeout_exact_approval_unavailable") from exc
+    return {
+        "closeout_binding_sha256": binding,
+        "exact_approval_text_sha256": sha256_text(exact_text),
+        "exact_approval_text": exact_text,
+    }
+
+
+def approve_pilot_closeout(
+    *,
+    participants: Mapping[str, Any],
+    output_directory: Path,
+    actor_id: str,
+    approved_at_utc: str,
+    exact_approval_text: str,
+) -> dict[str, Any]:
+    """Apply one exact org-admin sign-off and freeze the closeout manifest."""
+    actor, role = _resolve_human_actor(participants, actor_id)
+    if role != "org_admin":
+        raise GateBExecutorError("closeout_owner_role_denied")
+    _require_utc("closeout_approved_at", approved_at_utc)
+    draft = load_json(output_directory / "final-acceptance-draft.json")
+    if _self_hash(draft, "acceptance_sha256") != draft.get("acceptance_sha256"):
+        raise GateBExecutorError("closeout_acceptance_draft_hash_mismatch")
+    if _participant_manifest_hash(participants) != draft.get("participant_manifest_sha256"):
+        raise GateBExecutorError("closeout_participant_manifest_mismatch")
+    if draft.get("owner_signoff") is not None or draft.get("phase11d_pilot_complete") is not False:
+        raise GateBExecutorError("closeout_approval_replay")
+    expected_text_path = output_directory / "final-acceptance-exact-approval.txt"
+    try:
+        expected_text = expected_text_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise GateBExecutorError("closeout_exact_approval_unavailable") from exc
+    if (
+        not secrets.compare_digest(exact_approval_text, expected_text)
+        or sha256_text(exact_approval_text) != draft.get("exact_approval_text_sha256")
+    ):
+        raise GateBExecutorError("closeout_exact_approval_mismatch")
+    final = dict(draft)
+    final["owner_signoff"] = {
+        "actor_id": actor,
+        "actor_role": role,
+        "actor_method": "human",
+        "decision": "approved",
+        "binding_sha256": draft["closeout_binding_sha256"],
+        "approved_at_utc": approved_at_utc,
+        "exact_approval_text_sha256": draft["exact_approval_text_sha256"],
+    }
+    final["phase11d_pilot_complete"] = True
+    final["acceptance_sha256"] = ""
+    final["acceptance_sha256"] = _self_hash(final, "acceptance_sha256")
+    _write_json(output_directory / "final-acceptance-report.json", final)
+    artifact_names = (
+        "review-cohort-receipt.json",
+        "repair-receipt.json",
+        "draft-pr-receipt.json",
+        "operator-session-receipt.json",
+        "feedback-receipt.json",
+        "time-cost-receipt.json",
+        "business-report.json",
+        "claim-decision-report.json",
+        "final-acceptance-report.json",
+        "final-acceptance-exact-approval.txt",
+    )
+    artifacts: list[dict[str, str]] = []
+    for name in artifact_names:
+        path = output_directory / name
+        try:
+            content = path.read_bytes()
+        except OSError as exc:
+            raise GateBExecutorError("closeout_artifact_missing") from exc
+        artifacts.append({"name": name, "sha256": sha256_bytes(content)})
+    manifest: dict[str, Any] = {
+        "schema_version": PILOT_MANIFEST_SCHEMA_VERSION,
+        "closeout_binding_sha256": draft["closeout_binding_sha256"],
+        "artifacts": artifacts,
+        "model_quality_status": "not_measured",
+        "formal_quality_status": "incomplete",
+        "production_ready": False,
+        "manifest_sha256": "",
+    }
+    manifest["manifest_sha256"] = _self_hash(manifest, "manifest_sha256")
+    _write_json(output_directory / "canonical-manifest.json", manifest)
+    return {
+        "phase11d_pilot_complete": True,
+        "acceptance_sha256": final["acceptance_sha256"],
+        "manifest_sha256": manifest["manifest_sha256"],
+    }
+
+
 def _load_artifacts(args: argparse.Namespace) -> tuple[
     dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]
 ]:
@@ -4641,6 +5738,39 @@ def build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--repository", required=True)
     resume.add_argument("--now-utc")
     resume.add_argument("--output", type=Path, required=True)
+
+    operator = commands.add_parser("run-review-repair-session")
+    operator.add_argument("--authorization", type=Path, required=True)
+    operator.add_argument("--participants", type=Path, required=True)
+    operator.add_argument("--repository-authorization", type=Path, required=True)
+    operator.add_argument("--credential-descriptor", type=Path, required=True)
+    operator.add_argument("--runtime", type=Path, required=True)
+    operator.add_argument("--selection-receipt", type=Path, required=True)
+    operator.add_argument("--source-root", type=Path, required=True)
+    operator.add_argument("--github-app-private-key-file", type=Path, required=True)
+    operator.add_argument("--provider-key-environment", required=True)
+    operator.add_argument("--owner", required=True)
+    operator.add_argument("--repository", required=True)
+    operator.add_argument("--receipt-directory", type=Path, required=True)
+    operator.add_argument("--port", type=int, default=0)
+    operator.add_argument("--now-utc")
+
+    closeout = commands.add_parser("prepare-pilot-closeout")
+    closeout.add_argument("--authorization", type=Path, required=True)
+    closeout.add_argument("--participants", type=Path, required=True)
+    closeout.add_argument("--selection-receipt", type=Path, required=True)
+    closeout.add_argument("--review-receipt", type=Path, required=True)
+    closeout.add_argument("--repair-receipt", type=Path, required=True)
+    closeout.add_argument("--draft-pr-receipt", type=Path, required=True)
+    closeout.add_argument("--feedback", type=Path, required=True)
+    closeout.add_argument("--output-directory", type=Path, required=True)
+
+    final = commands.add_parser("approve-pilot-closeout")
+    final.add_argument("--participants", type=Path, required=True)
+    final.add_argument("--output-directory", type=Path, required=True)
+    final.add_argument("--actor-id", required=True)
+    final.add_argument("--approved-at-utc", required=True)
+    final.add_argument("--exact-approval-text-file", type=Path, required=True)
     return parser
 
 
@@ -4722,6 +5852,43 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             )
             return 0
+        if args.command == "prepare-pilot-closeout":
+            result = prepare_pilot_closeout(
+                authorization=load_json(args.authorization),
+                participants=load_json(args.participants),
+                selection_receipt=load_json(args.selection_receipt),
+                review_receipt=load_json(args.review_receipt),
+                repair_receipt=load_json(args.repair_receipt),
+                draft_pr_receipt=load_json(args.draft_pr_receipt),
+                feedback=load_json(args.feedback),
+                output_directory=args.output_directory,
+            )
+            print(
+                json.dumps(
+                    {
+                        "closeout_binding_sha256": result["closeout_binding_sha256"],
+                        "exact_approval_text_sha256": result[
+                            "exact_approval_text_sha256"
+                        ],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.command == "approve-pilot-closeout":
+            try:
+                exact_text = args.exact_approval_text_file.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise GateBExecutorError("closeout_exact_approval_unavailable") from exc
+            result = approve_pilot_closeout(
+                participants=load_json(args.participants),
+                output_directory=args.output_directory,
+                actor_id=args.actor_id,
+                approved_at_utc=args.approved_at_utc,
+                exact_approval_text=exact_text,
+            )
+            print(json.dumps(result, sort_keys=True))
+            return 0
         authorization, participants, repository, descriptor, runtime = _load_artifacts(args)
         status = validate_execution_authorization(
             authorization=authorization,
@@ -4737,6 +5904,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not status.gate_b_allowed:
             print(json.dumps(status.to_dict(), sort_keys=True))
             return 2
+        if args.command == "run-review-repair-session":
+            now_utc = getattr(args, "now_utc", None) or datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
+            run_review_repair_operator(
+                authorization=authorization,
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                runtime=runtime,
+                selection_receipt=load_json(args.selection_receipt),
+                source_root=args.source_root,
+                github_app_private_key_file=args.github_app_private_key_file,
+                provider_key_environment=args.provider_key_environment,
+                owner=args.owner,
+                repository=args.repository,
+                receipt_directory=args.receipt_directory,
+                now_utc=now_utc,
+                port=args.port,
+            )
+            return 0
         if args.command == "select-pull-requests":
             selection = select_authorized_pull_requests(
                 authorization=authorization,

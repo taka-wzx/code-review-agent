@@ -1,8 +1,9 @@
 # Phase 11D Human Review-to-Repair Pilot v1
 
-Status: **Gate A complete; the default-closed Gate B executor, Repair control flow,
-and Draft PR publisher are implemented, but real Pilot execution remains closed** until
-an owner approval exactly matches the final frozen authorization bundle.
+Status: **Gate A complete; the default-closed Gate B Review-to-Repair operator,
+Repair control flow, Draft PR publisher, and closeout tooling are implemented. Real
+Pilot execution remains closed** until a newly frozen runtime, denominator, and exact
+owner approval authorize the full write-enabled flow.
 
 ## Scope
 
@@ -20,6 +21,9 @@ python phase11d_gate_b_executor.py approve-authorization --help
 python phase11d_gate_b_executor.py validate-authorization --help
 python phase11d_gate_b_executor.py select-pull-requests --help
 python phase11d_gate_b_executor.py review-selected-pull-requests --help
+python phase11d_gate_b_executor.py run-review-repair-session --help
+python phase11d_gate_b_executor.py prepare-pilot-closeout --help
+python phase11d_gate_b_executor.py approve-pilot-closeout --help
 ```
 
 The tool generates and validates synthetic receipts, reports, and a canonical manifest.
@@ -88,6 +92,33 @@ commit evidence; a second single-use DRAFT_PR approval binds that exact commit; 
 the publisher may act. The coordinator does not invent selections, plans, approvals,
 or sandbox evidence.
 
+`run-review-repair-session` runs one newly authorized immutable Review cohort and
+passes each structured Provider response to two views in the same process: the
+existing hash-only `ReviewOutcome` and an ephemeral human-readable Finding view. It
+then starts an authenticated HTTP operator on `127.0.0.1` only. The bearer token is
+printed once to the controlling terminal. The server rejects non-loopback and
+unauthenticated requests, suppresses request logging, sets `Cache-Control: no-store`,
+and terminates after publish, decline, human stop, or timeout.
+
+The operator sequence is fixed:
+
+1. `GET /v1/status` displays in-memory Findings only while selection is pending.
+2. `POST /v1/select-and-plan` binds one human-selected Finding and exact Repair Plan,
+   clears all unselected Findings, and returns the WRITE binding SHA-256.
+3. `POST /v1/write-approval` consumes one maintainer/org-admin approval.
+4. `POST /v1/sandbox` accepts only isolated sandbox evidence bound to the exact patch,
+   tests, reflection, checkpoint, budget, tree, and commit, then returns the DRAFT_PR
+   binding SHA-256. Patch bytes remain in process memory.
+5. `POST /v1/draft-pr-approval` consumes the second approval for that exact commit.
+6. `POST /v1/publish` may create one dedicated branch and one Draft PR. It writes only
+   sanitized Review, Repair, Draft PR, operator-session, and publication-journal
+   receipts, clears remaining raw material, and stops the server.
+
+The operator does not generate or attest sandbox evidence. The PATCH/TEST/REFLECT
+runner must remain in its separately authorized Docker/worktree boundary with network
+disabled and a non-root identity; submitted evidence is rejected unless all existing
+`SandboxResult` bindings and pass gates match.
+
 `GitHubDraftPublisher` is limited to repository verification, ref read-back, Git data
 objects, one dedicated `crag/phase11d/` branch, and one Draft PR. It has no PATCH, PUT,
 Ready, merge, comment, check, label, or review route. It writes a sanitized journal
@@ -95,6 +126,16 @@ outside the source tree, verifies the exact tree/commit/ref and Draft state, and
 reconciles an ambiguous post-write restart by read-back; unresolved ambiguity is
 quarantined. The implementation tests use fakes only and have made no real Provider
 call, GitHub write, Pilot branch, or Pilot Draft PR.
+
+After the Draft PR is reviewed by a participant, `prepare-pilot-closeout` hashes the
+human rationale and writes feedback, time/cost, business, and claim-decision reports,
+plus an exact final sign-off text. `approve-pilot-closeout` accepts only a human
+`org_admin` approval of that exact text and then writes `final-acceptance-report.json`
+and `canonical-manifest.json`. Completion means only that this Phase 11D Pilot's
+evidence chain is complete. The reports permanently keep `business_claim_allowed=false`,
+`quality_claim_allowed=false`, `production_ready=false`,
+`model_quality_status=not_measured`, `formal_quality_status=incomplete`, and
+`final_project_complete=false`.
 
 ## Preserved Boundaries
 
