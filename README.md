@@ -1,48 +1,62 @@
-# code-review-agent
+# Code Review Agent
 
-面向中小型 Python 团队的 GitHub PR Review Agent。系统自动分析 PR，默认处于 shadow 模式；
-Finding 只有经有权限的仓库维护者批准后才可发布到 GitHub。产品通过开发者 accept/reject 反馈，
-衡量审查噪声、人工复核时间、可靠性和成本。
+**Human-gated GitHub PR Review & Repair Agent for Python teams.**
 
-> **当前状态不是生产完成态。** 仓库已有 Finder + Verifier Review 引擎、GitHub Webhook、组织/
-> 用户/RBAC、Postgres 持久 job lease、API/worker 分离、背压与限流、Finding 审批/反馈基础、
-> Alembic migration 和 canonical trace；真实 OAuth/OIDC 验签服务、完整审批 UI、真实 GitHub
-> 跨主机 artifact store、真实 collector/通知渠道和云部署仍未实现。Phase 9F 已增加数据库聚合
-> `/metrics`、离线 Grafana/Prometheus 资产和 SLO 合同；历史评测和 Phase 9C
-> 容量检查来自单项目数据、确定性 fakes 或 synthetic 流程，应读作工程证据，不是生产收益。
+[![CI](https://github.com/taka-wzx/code-review-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/taka-wzx/code-review-agent/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.10--3.13-3776AB?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-2ea44f)
 
-> **Phase 9G-Prep（2026-07-26）** 已增加真实业务 Pilot 与正式质量评测的离线授权、选择、
-> 盲标/仲裁、gold freeze、feedback/time/receipt、预算和报告门禁。当前只有 synthetic 协议夹具，
-> `business_claim_allowed=false` 且 `quality_claim_allowed=false`；未调用真实模型/GitHub、未部署、
-> 未产生真人反馈或质量数字。操作与下一步授权表见
-> [`docs/phase9g-real-pilot.md`](docs/phase9g-real-pilot.md)，冻结合同见
-> [`docs/plans/phase9g-real-pilot.md`](docs/plans/phase9g-real-pilot.md)。
->
-> **Phase 9G-Solo Exploratory v1** 另行提供单一真人、5--10 个 PR、仅 shadow 的探索性
-> 工作流协议。它永久保持 `business_claim_allowed=false`、`quality_claim_allowed=false` 和
-> `formal_quality_status=incomplete`，不能替代 3--5 人 Pilot 或 A/B/C 真人质量评测。Solo-Run v1
-> 已从冻结 master 元数据物化 8 个候选并确定性选择 5 个 PR；2 个 selected diff 的敏感模式扫描
-> 命中已按协议保留选择并阻断对应 headline。auth-003 已批准标准 GLM-5.2、正温度 profile、
-> 零 SDK 重试和 96/96 调用上限；其 Key 预检通过后，外部调用仍在 executor 启动前被租户数据
-> 外发策略阻断，因此保持 0 请求/Token/费用和 `not_run_policy_blocked`。用户随后允许创建只接受
-> 匿名可验证公共 PR 输入的 auth-004；MIT 公共源的 exact commit 已正式物化，180 个候选
-> 确定性选择 5 个、0 个敏感命中且未换选，公共 receipt 绑定 15,103 个 diff bytes。auth-004
-> 仍没有真实模型调用或反馈，精确授权 SHA-256、离线门禁、即时 Key 预检和租户外发审批
-> 缺一不可。
-> 准备协议见
-> [`docs/phase9g-solo-exploratory-v1.md`](docs/phase9g-solo-exploratory-v1.md)，冻结合同见
-> [`docs/plans/phase9g-solo-exploratory-v1.md`](docs/plans/phase9g-solo-exploratory-v1.md)；运行状态和
-> 后续授权见 [`docs/phase9g-solo-run-v1.md`](docs/phase9g-solo-run-v1.md)。
->
-> **Phase 9H auth-004 Failure Hardening v1（2026-07-27）** 冻结 auth-004 的真实结果为
-> 5 个不可替换 headline 全部失败，稳定聚合类别为
-> `provider_or_pipeline_RuntimeError`；这不是模型、Business Pilot 或 Formal Quality 成功。
-> 当前脱敏聚合证据不足以区分 provider、response schema、agent loop、step cap、空工具根或
-> 本地终止原因，所有细粒度根因保持 `unknown`。本阶段仅增加固定枚举/整数的安全失败遥测和
-> fake/synthetic 离线兼容回归，不重跑 auth-004，也不打开任何真实调用门禁。说明见
-> [`docs/phase9h-auth004-failure-hardening-v1.md`](docs/phase9h-auth004-failure-hardening-v1.md)，
-> 冻结合同见
-> [`docs/plans/phase9h-auth004-failure-hardening-v1.md`](docs/plans/phase9h-auth004-failure-hardening-v1.md)。
+系统自动读取 PR diff、检索代码上下文，并通过双 Finder + 双 Verifier 产出可审计的 Finding；
+高风险 Repair 必须经过人工选择、`WRITE` 审批和 `DRAFT_PR` 审批，最终只允许发布保持 Draft
+的修复 PR。整个流程使用 GitHub App、隔离 Docker sandbox、幂等 publication journal 和
+hash-only receipt，把“模型建议代码”约束成可追踪、可停止、可恢复的工程工作流。
+
+## 已验证结果
+
+2026-08-11 完成 Phase 11D Human Review-to-Repair Pilot。以下数字来自冻结 receipt 和
+canonical manifest，不是 README 手工估算：
+
+| 指标 | 结果 |
+| --- | --- |
+| 真实 PR Review | 20/20 完成，固定 denominator，无失败替换 |
+| Review 输出 | 61 个 Finding，GLM-5.2 Review 总成本 CNY 1.226588 |
+| Repair 闭环 | 1 个 Finding 经人工选择，1 次隔离 Repair，测试与 reflection 通过 |
+| 人工控制 | org admin 分别完成 `WRITE` 与 `DRAFT_PR` 精确哈希审批 |
+| GitHub 结果 | [Draft Repair PR #138](https://github.com/taka-wzx/code-review-agent/pull/138)，CI 全绿，未 Ready、未合并 |
+| 人工复核 | Finding accepted，Draft PR adopted，active review 118 秒 |
+| 审计证据 | Final acceptance + 10 项 canonical artifact 全部通过 SHA-256 校验 |
+
+## 工程亮点
+
+- **Agentic Review**：主动上下文检索、双温度 Finder、双 pass Verifier、分歧 `uncertain` 通道和
+  Sentinel 兜底，而不是一次 Prompt 直接生成评论。
+- **持久任务平台**：FastAPI/API-worker 分离、Postgres lease/fencing、背压、组织级 RBAC、
+  Alembic migration、Webhook 与 MCP 接口。
+- **高风险 Repair 门禁**：人工双审批、Docker `network=none`、只读源挂载、非 root 执行、
+  精确 patch/tree/commit 绑定和 Draft-only GitHub publisher。
+- **可靠性与审计**：canonical trace、预算/成本计数、timeout recovery、幂等 journal、凭证指纹、
+  kill switch，以及对 base drift、CRLF blob、commit canonicalization 和 ref read-back 的 fail-closed 处理。
+
+## 端到端闭环
+
+```mermaid
+flowchart LR
+    A["GitHub PR"] --> B["Context retrieval"]
+    B --> C["Finder x2"]
+    C --> D["Verifier x2"]
+    D --> E["Human Finding selection"]
+    E --> F["WRITE approval"]
+    F --> G["Isolated patch / test / reflect"]
+    G --> H["DRAFT_PR approval"]
+    H --> I["Draft Repair PR"]
+    I --> J["Feedback / cost / canonical manifest"]
+```
+
+> **当前边界：工程 Pilot 完成，不等于生产完成。** 最终报告明确记录
+> `phase11d_pilot_complete=true`，同时保持 `production_ready=false`、
+> `business_claim_allowed=false`、`quality_claim_allowed=false` 和
+> `formal_quality_status=incomplete`。真实 OAuth/OIDC 服务、完整审批 UI、跨主机 artifact store、
+> collector/通知渠道、云部署与多人长期业务验证仍是生产化缺口。
 
 ## 产品主线
 
@@ -60,7 +74,7 @@ repository/PR/head SHA、Finding 内容哈希和一次性审批。反馈记忆�
 聚合规则，不做用户个人记忆。
 
 - Review 是唯一产品主线；
-- Repair 是后续高风险增强，不进入当前业务闭环；
+- Repair 是高风险受控增强；Phase 11D 已完成单次 Pilot 闭环，但尚未进入生产业务闭环；
 - Verifier Training 是研发附录，Phase 8 synthetic 结果不是模型质量或业务收益；
 - 不做聊天机器人，也不为了展示增加多 Agent。
 
@@ -615,4 +629,4 @@ Finder 完整性门已关闭，两份各 137 项、顺序不同的真人盲标�
 
 ## License
 
-MIT（见 `LICENSE`）。
+MIT（见 [`pyproject.toml`](pyproject.toml) 中的项目元数据）。
