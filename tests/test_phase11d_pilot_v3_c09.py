@@ -8,6 +8,10 @@ class Phase11DPilotV3C09Tests(unittest.TestCase):
         with self.assertRaisesRegex(gate_b.GateBExecutorError, "candidate_branch_invalid"):
             gate_b._require_branch("candidate_branch", "feature/../master")
 
+    def test_branch_rejects_lock_suffix(self) -> None:
+        with self.assertRaisesRegex(gate_b.GateBExecutorError, "candidate_branch_invalid"):
+            gate_b._require_branch("candidate_branch", "feature/repair.lock")
+
 
 if __name__ == "__main__":
     unittest.main()
