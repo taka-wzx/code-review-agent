@@ -2968,6 +2968,7 @@ class DraftPublication:
     pr_id: str
     base_branch: str
     base_sha: str
+    source_head_sha: str
     head_branch: str
     base_tree_sha: str
     expected_tree_sha: str
@@ -2985,6 +2986,7 @@ class DraftPublication:
         _require_stable_id("publication_pr_id", self.pr_id)
         _require_branch("publication_base_branch", self.base_branch)
         _require_git_sha("publication_base_sha", self.base_sha)
+        _require_git_sha("publication_source_head_sha", self.source_head_sha)
         _require_branch("publication_head_branch", self.head_branch)
         if not self.head_branch.startswith("crag/phase11d/") or self.head_branch == self.base_branch:
             raise GateBExecutorError("publication_branch_boundary_invalid")
@@ -3043,6 +3045,7 @@ class DraftPublication:
                     "pr_id": self.pr_id,
                     "base_branch": self.base_branch,
                     "base_sha": self.base_sha,
+                    "source_head_sha": self.source_head_sha,
                     "head_branch": self.head_branch,
                     "material_payload_sha256": material_payload_sha256,
                 }
@@ -3085,6 +3088,7 @@ def build_draft_publication(
                 "pr_id": intent.pr_id,
                 "base_branch": intent.base_branch,
                 "base_sha": intent.base_sha,
+                "source_head_sha": intent.head_sha,
                 "head_branch": intent.head_branch,
                 "material_payload_sha256": material.payload_sha256,
             }
@@ -3098,6 +3102,7 @@ def build_draft_publication(
         pr_id=intent.pr_id,
         base_branch=intent.base_branch,
         base_sha=intent.base_sha,
+        source_head_sha=intent.head_sha,
         head_branch=intent.head_branch,
         base_tree_sha=material.base_tree_sha,
         expected_tree_sha=material.expected_tree_sha,
@@ -3109,8 +3114,9 @@ def build_draft_publication(
     )
 
 
-JOURNAL_SCHEMA_VERSION = "crag.phase11d.gate-b-publication-journal/v1alpha1"
-_JOURNAL_FIELDS = frozenset(
+LEGACY_JOURNAL_SCHEMA_VERSION = "crag.phase11d.gate-b-publication-journal/v1alpha1"
+JOURNAL_SCHEMA_VERSION = "crag.phase11d.gate-b-publication-journal/v1alpha2"
+_LEGACY_JOURNAL_FIELDS = frozenset(
     {
         "schema_version",
         "authorization_id",
@@ -3129,18 +3135,26 @@ _JOURNAL_FIELDS = frozenset(
         "journal_sha256",
     }
 )
+_JOURNAL_FIELDS = _LEGACY_JOURNAL_FIELDS | {"source_head_sha"}
 
 
 def _validate_journal(value: Mapping[str, Any]) -> None:
-    _require_exact_fields("publication_journal", value, _JOURNAL_FIELDS)
-    if value["schema_version"] != JOURNAL_SCHEMA_VERSION:
+    schema_version = value.get("schema_version")
+    if schema_version == LEGACY_JOURNAL_SCHEMA_VERSION:
+        fields = _LEGACY_JOURNAL_FIELDS
+    elif schema_version == JOURNAL_SCHEMA_VERSION:
+        fields = _JOURNAL_FIELDS
+    else:
         raise GateBExecutorError("publication_journal_schema_invalid")
+    _require_exact_fields("publication_journal", value, fields)
     for name in ("authorization_id", "repository_id", "repair_job_id", "pr_id"):
         _require_stable_id(f"journal_{name}", value[name])
     _require_branch("journal_base_branch", value["base_branch"])
     _require_branch("journal_head_branch", value["head_branch"])
     _require_sha256("journal_authorization_sha256", value["authorization_sha256"])
     _require_git_sha("journal_base_sha", value["base_sha"])
+    if schema_version == JOURNAL_SCHEMA_VERSION:
+        _require_git_sha("journal_source_head_sha", value["source_head_sha"])
     _require_git_sha("journal_expected_tree_sha", value["expected_tree_sha"])
     _require_git_sha("journal_expected_commit_sha", value["expected_commit_sha"])
     _require_sha256("journal_marker_sha256", value["marker_sha256"])
@@ -3164,6 +3178,7 @@ def _journal_row(publication: DraftPublication, *, state: str, remote_pr_number:
         "pr_id": publication.pr_id,
         "base_branch": publication.base_branch,
         "base_sha": publication.base_sha,
+        "source_head_sha": publication.source_head_sha,
         "head_branch": publication.head_branch,
         "expected_tree_sha": publication.expected_tree_sha,
         "expected_commit_sha": publication.exact_commit_sha,
@@ -3380,9 +3395,16 @@ class GitHubDraftPublisher:
     def _allowed_path(self, method: str, path: str) -> bool:
         base = re.escape(self._base_path)
         encoded_branch = r"[A-Za-z0-9._~%/-]+"
-        if method == "GET" and path in {self._base_path, f"{self._base_path}/git/commits/"}:
+        git_sha = r"[0-9a-f]{40}"
+        if method == "GET" and path == self._base_path:
             return True
         if method == "GET" and re.fullmatch(f"{base}/git/ref/heads/{encoded_branch}", path):
+            return True
+        if method == "GET" and re.fullmatch(f"{base}/git/commits/{git_sha}", path):
+            return True
+        if method == "GET" and re.fullmatch(
+            rf"{base}/compare/{git_sha}\.\.\.{git_sha}", path
+        ):
             return True
         if method == "GET" and re.fullmatch(
             f"{base}/pulls\\?state=open&head=[A-Za-z0-9._~%:-]+&base=[A-Za-z0-9._~%/-]+&per_page=10",
@@ -3441,6 +3463,47 @@ class GitHubDraftPublisher:
         if not isinstance(obj, Mapping) or not isinstance(obj.get("sha"), str):
             raise GateBExecutorError("publisher_ref_invalid")
         return _require_git_sha("publisher_ref_sha", obj["sha"])
+
+    def _verify_source_head(self, publication: DraftPublication) -> None:
+        response = self._request(
+            method="GET",
+            path=f"{self._base_path}/git/commits/{publication.source_head_sha}",
+        )
+        body = _load_response_json(response, context="publisher_source_head")
+        tree = body.get("tree")
+        if (
+            body.get("sha") != publication.source_head_sha
+            or not isinstance(tree, Mapping)
+            or tree.get("sha") != publication.base_tree_sha
+        ):
+            raise GateBExecutorError("publisher_source_head_drift")
+
+    def _verify_forward_base(
+        self, publication: DraftPublication, *, current_base_sha: str
+    ) -> None:
+        if current_base_sha == publication.base_sha:
+            return
+        response = self._request(
+            method="GET",
+            path=(
+                f"{self._base_path}/compare/{publication.base_sha}"
+                f"...{current_base_sha}"
+            ),
+        )
+        body = _load_response_json(response, context="publisher_base_compare")
+        base_commit = body.get("base_commit")
+        merge_base_commit = body.get("merge_base_commit")
+        if (
+            body.get("status") != "ahead"
+            or not isinstance(base_commit, Mapping)
+            or base_commit.get("sha") != publication.base_sha
+            or not isinstance(merge_base_commit, Mapping)
+            or merge_base_commit.get("sha") != publication.base_sha
+            or _require_int("publisher_base_ahead_by", body.get("ahead_by"), minimum=1)
+            < 1
+            or _require_int("publisher_base_behind_by", body.get("behind_by")) != 0
+        ):
+            raise GateBExecutorError("publisher_base_drift")
 
     def _post(self, *, path: str, payload: Mapping[str, Any], context: str, statuses: frozenset[int]) -> Mapping[str, Any]:
         response = self._request(method="POST", path=path, payload=payload)
@@ -3544,7 +3607,7 @@ class GitHubDraftPublisher:
             payload={
                 "message": publication.commit_message,
                 "tree": publication.expected_tree_sha,
-                "parents": [publication.base_sha],
+                "parents": [publication.source_head_sha],
                 "author": {
                     "name": "Phase 11D Pilot",
                     "email": "phase11d-pilot@users.noreply.github.com",
@@ -3624,6 +3687,8 @@ class GitHubDraftPublisher:
         existing = self._journal.load()
         intent = _journal_row(publication, state="intent_recorded")
         if existing is not None:
+            if existing.get("schema_version") != JOURNAL_SCHEMA_VERSION:
+                raise GateBExecutorError("publisher_journal_upgrade_required")
             immutable = (
                 "authorization_id",
                 "authorization_sha256",
@@ -3632,6 +3697,7 @@ class GitHubDraftPublisher:
                 "pr_id",
                 "base_branch",
                 "base_sha",
+                "source_head_sha",
                 "head_branch",
                 "expected_tree_sha",
                 "expected_commit_sha",
@@ -3651,8 +3717,10 @@ class GitHubDraftPublisher:
         try:
             self._verify_repository()
             base_ref = self._get_ref(publication.base_branch)
-            if base_ref != publication.base_sha:
+            if base_ref is None:
                 raise GateBExecutorError("publisher_base_drift")
+            self._verify_forward_base(publication, current_base_sha=base_ref)
+            self._verify_source_head(publication)
             head_ref = self._get_ref(publication.head_branch)
             if head_ref is None:
                 self._upload_git_objects(publication)

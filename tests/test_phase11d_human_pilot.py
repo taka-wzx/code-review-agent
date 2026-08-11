@@ -347,6 +347,9 @@ class _PublisherTransport:
         base_sha: str,
         expected_tree_sha: str,
         expected_commit_sha: str,
+        current_base_sha: str | None = None,
+        source_tree_sha: str = "b" * 40,
+        compare_status: str = "ahead",
         fail_after_draft_pr: bool = False,
     ) -> None:
         self.owner = owner
@@ -354,10 +357,13 @@ class _PublisherTransport:
         self.base_sha = base_sha
         self.expected_tree_sha = expected_tree_sha
         self.expected_commit_sha = expected_commit_sha
+        self.source_tree_sha = source_tree_sha
+        self.compare_status = compare_status
         self.fail_after_draft_pr = fail_after_draft_pr
-        self.refs = {"master": base_sha}
+        self.refs = {"master": current_base_sha or base_sha}
         self.prs: list[dict[str, object]] = []
         self.calls: list[tuple[str, str]] = []
+        self.commit_parents: list[list[str]] = []
 
     @property
     def base_path(self) -> str:
@@ -378,6 +384,27 @@ class _PublisherTransport:
         self.calls.append((method, path))
         if method == "GET" and path == self.base_path:
             return _json_response({"id": 1301558766, "archived": False, "disabled": False})
+        commit_prefix = f"{self.base_path}/git/commits/"
+        if method == "GET" and path.startswith(commit_prefix):
+            return _json_response(
+                {
+                    "sha": path.removeprefix(commit_prefix),
+                    "tree": {"sha": self.source_tree_sha},
+                }
+            )
+        compare_prefix = f"{self.base_path}/compare/"
+        if method == "GET" and path.startswith(compare_prefix):
+            base_sha, current_sha = path.removeprefix(compare_prefix).split("...", 1)
+            del current_sha
+            return _json_response(
+                {
+                    "status": self.compare_status,
+                    "ahead_by": 1 if self.compare_status == "ahead" else 0,
+                    "behind_by": 0,
+                    "base_commit": {"sha": base_sha},
+                    "merge_base_commit": {"sha": base_sha},
+                }
+            )
         prefix = f"{self.base_path}/git/ref/heads/"
         if method == "GET" and path.startswith(prefix):
             branch = urllib_parse.unquote(path[len(prefix) :])
@@ -398,6 +425,10 @@ class _PublisherTransport:
         if method == "POST" and path == f"{self.base_path}/git/trees":
             return _json_response({"sha": self.expected_tree_sha}, status=201)
         if method == "POST" and path == f"{self.base_path}/git/commits":
+            assert isinstance(payload, dict)
+            parents = payload["parents"]
+            assert isinstance(parents, list) and all(isinstance(item, str) for item in parents)
+            self.commit_parents.append(parents)
             return _json_response({"sha": self.expected_commit_sha}, status=201)
         if method == "POST" and path == f"{self.base_path}/git/refs":
             assert isinstance(payload, dict)
@@ -1840,6 +1871,7 @@ class Phase11DHumanPilotTests(unittest.TestCase):
             self.assertEqual(
                 transport.calls.count(("POST", "/repos/example-owner/example-repo/git/refs")), 1
             )
+            self.assertEqual(transport.commit_parents, [[intent.head_sha]])
             self.assertEqual(
                 transport.calls.count(("POST", "/repos/example-owner/example-repo/pulls")), 1
             )
@@ -2202,9 +2234,57 @@ class Phase11DHumanPilotTests(unittest.TestCase):
                 transport.calls.count(("POST", "/repos/example-owner/example-repo/pulls")), 1
             )
             self.assertEqual(journal.load()["state"], "receipt_reconciled")
+            self.assertEqual(transport.commit_parents, [[intent.head_sha]])
 
             publication = coordinator._publication
             assert publication is not None
+            legacy_row = copy.deepcopy(journal.load())
+            legacy_row["schema_version"] = gate_b_executor.LEGACY_JOURNAL_SCHEMA_VERSION
+            legacy_row.pop("source_head_sha")
+            legacy_row["journal_sha256"] = gate_b_executor._self_hash(
+                legacy_row, "journal_sha256"
+            )
+            legacy_journal = gate_b_executor.PublicationJournal(
+                Path(temp) / "legacy-publication.json"
+            )
+            legacy_journal.path.write_bytes(gate_b_executor.canonical_json(legacy_row) + b"\n")
+            legacy_transport = _PublisherTransport(
+                owner="example-owner",
+                repository="example-repo",
+                base_sha=intent.base_sha,
+                expected_tree_sha=material.expected_tree_sha,
+                expected_commit_sha=material.exact_commit_sha,
+            )
+            legacy_publisher = gate_b_executor.GitHubDraftPublisher(
+                legacy_transport,
+                authorization=approved,
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                runtime=runtime,
+                source_root=Path(__file__).resolve().parents[1],
+                github_app_private_key_file=key_file,
+                provider_key_environment="PHASE11D_PUBLISHER_TEST_KEY",
+                token=gate_b_executor.InstallationToken(
+                    value="test-installation-token",
+                    expires_at_utc="2026-09-01T00:00:00Z",
+                    app_id=4421400,
+                    installation_id=149747930,
+                ),
+                owner="example-owner",
+                repository="example-repo",
+                expected_repository_id=1301558766,
+                expected_app_id=4421400,
+                expected_installation_id=149747930,
+                journal=legacy_journal,
+            )
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError,
+                "publisher_journal_upgrade_required",
+            ):
+                legacy_publisher.publish(publication, now_utc="2026-08-06T00:06:00Z")
+            self.assertEqual(legacy_transport.calls, [])
+
             blocked_authorization = copy.deepcopy(approved)
             blocked_authorization["gate_b_allowed"] = False
             blocked_transport = _PublisherTransport(
@@ -2241,12 +2321,58 @@ class Phase11DHumanPilotTests(unittest.TestCase):
                 blocked_publisher.publish(publication, now_utc="2026-08-06T00:06:00Z")
             self.assertEqual(blocked_transport.calls, [])
 
+            forward_transport = _PublisherTransport(
+                owner="example-owner",
+                repository="example-repo",
+                base_sha=intent.base_sha,
+                current_base_sha="8" * 40,
+                expected_tree_sha=material.expected_tree_sha,
+                expected_commit_sha=material.exact_commit_sha,
+            )
+            forward_publisher = gate_b_executor.GitHubDraftPublisher(
+                forward_transport,
+                authorization=approved,
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                runtime=runtime,
+                source_root=Path(__file__).resolve().parents[1],
+                github_app_private_key_file=key_file,
+                provider_key_environment="PHASE11D_PUBLISHER_TEST_KEY",
+                token=gate_b_executor.InstallationToken(
+                    value="test-installation-token",
+                    expires_at_utc="2026-09-01T00:00:00Z",
+                    app_id=4421400,
+                    installation_id=149747930,
+                ),
+                owner="example-owner",
+                repository="example-repo",
+                expected_repository_id=1301558766,
+                expected_app_id=4421400,
+                expected_installation_id=149747930,
+                journal=gate_b_executor.PublicationJournal(Path(temp) / "forward.json"),
+            )
+            forward_receipt = forward_publisher.publish(
+                publication, now_utc="2026-08-06T00:06:00Z"
+            )
+            self.assertEqual(forward_receipt.draft_pr_id, "draft-pr-1")
+            self.assertEqual(forward_transport.commit_parents, [[intent.head_sha]])
+            self.assertIn(
+                (
+                    "GET",
+                    f"/repos/example-owner/example-repo/compare/{intent.base_sha}...{'8' * 40}",
+                ),
+                forward_transport.calls,
+            )
+
             drift_transport = _PublisherTransport(
                 owner="example-owner",
                 repository="example-repo",
-                base_sha="9" * 40,
+                base_sha=intent.base_sha,
+                current_base_sha="9" * 40,
                 expected_tree_sha=material.expected_tree_sha,
                 expected_commit_sha=material.exact_commit_sha,
+                compare_status="diverged",
             )
             drift_journal = gate_b_executor.PublicationJournal(Path(temp) / "drift.json")
             drift_publisher = gate_b_executor.GitHubDraftPublisher(
@@ -2276,6 +2402,47 @@ class Phase11DHumanPilotTests(unittest.TestCase):
                 drift_publisher.publish(publication, now_utc="2026-08-06T00:06:00Z")
             self.assertEqual(drift_journal.load()["state"], "quarantined")
             self.assertNotIn(("POST", "/repos/example-owner/example-repo/git/refs"), drift_transport.calls)
+
+            source_drift_transport = _PublisherTransport(
+                owner="example-owner",
+                repository="example-repo",
+                base_sha=intent.base_sha,
+                source_tree_sha="7" * 40,
+                expected_tree_sha=material.expected_tree_sha,
+                expected_commit_sha=material.exact_commit_sha,
+            )
+            source_drift_publisher = gate_b_executor.GitHubDraftPublisher(
+                source_drift_transport,
+                authorization=approved,
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                runtime=runtime,
+                source_root=Path(__file__).resolve().parents[1],
+                github_app_private_key_file=key_file,
+                provider_key_environment="PHASE11D_PUBLISHER_TEST_KEY",
+                token=gate_b_executor.InstallationToken(
+                    value="test-installation-token",
+                    expires_at_utc="2026-09-01T00:00:00Z",
+                    app_id=4421400,
+                    installation_id=149747930,
+                ),
+                owner="example-owner",
+                repository="example-repo",
+                expected_repository_id=1301558766,
+                expected_app_id=4421400,
+                expected_installation_id=149747930,
+                journal=gate_b_executor.PublicationJournal(
+                    Path(temp) / "source-drift.json"
+                ),
+            )
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError, "publisher_source_head_drift"
+            ):
+                source_drift_publisher.publish(
+                    publication, now_utc="2026-08-06T00:06:00Z"
+                )
+            self.assertEqual(source_drift_transport.commit_parents, [])
 
     def test_gate_b_github_app_jwt_has_a_valid_rs256_signature(self) -> None:
         try:
