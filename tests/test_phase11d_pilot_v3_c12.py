@@ -15,6 +15,19 @@ class Phase11DPilotV3C12Tests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first["snapshot_sha256"]), 64)
 
+    def test_candidate_snapshot_changes_with_head_sha(self) -> None:
+        common = {
+            "number": 104,
+            "github_id": 500104,
+            "base_branch": "master",
+            "base_sha": "a" * 40,
+            "updated_at_utc": "2026-08-11T05:20:00Z",
+            "selection_rank_sha256": "c" * 64,
+        }
+        left = gate_b.PullRequestCandidate(head_sha="b" * 40, **common)
+        right = gate_b.PullRequestCandidate(head_sha="d" * 40, **common)
+        self.assertNotEqual(left.receipt_row()["snapshot_sha256"], right.receipt_row()["snapshot_sha256"])
+
 
 if __name__ == "__main__":
     unittest.main()
