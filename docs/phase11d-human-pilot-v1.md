@@ -22,6 +22,8 @@ python phase11d_gate_b_executor.py validate-authorization --help
 python phase11d_gate_b_executor.py select-pull-requests --help
 python phase11d_gate_b_executor.py review-selected-pull-requests --help
 python phase11d_gate_b_executor.py run-review-repair-session --help
+python phase11d_gate_b_executor.py build-timeout-recovery-checkpoint --help
+python phase11d_gate_b_executor.py resume-write-approved-repair-session --help
 python phase11d_gate_b_executor.py prepare-pilot-closeout --help
 python phase11d_gate_b_executor.py approve-pilot-closeout --help
 ```
@@ -118,6 +120,31 @@ The operator does not generate or attest sandbox evidence. The PATCH/TEST/REFLEC
 runner must remain in its separately authorized Docker/worktree boundary with network
 disabled and a non-root identity; submitted evidence is rejected unless all existing
 `SandboxResult` bindings and pass gates match.
+
+If the operator expires after Finding selection and WRITE approval but before sandbox
+evidence is accepted, `build-timeout-recovery-checkpoint` creates the only supported
+WRITE-stage recovery checkpoint. It accepts only a completed 20--30 PR Review receipt
+with `stop_category=none` and an `expired/timeout` operator receipt. The self-hashed
+checkpoint binds the source authorization/runtime, selection and Review receipts,
+selected Finding and Review response, prior selection/Plan/WRITE lineage, recovery
+actor, and new recovery selection, Repair job, and WRITE approval identifiers. It is
+offline and has no Provider or GitHub transport.
+
+Recovery requires a newly frozen runtime and an independently exact-approved Gate B
+authorization whose `deterministic_selection_seed_sha256` equals the checkpoint
+SHA-256. `resume-write-approved-repair-session` reorders and rebinds the same immutable
+20--30 PR rows under that authorization, carries the completed Review rows and budget
+usage into a resumed hash-only receipt, and starts directly at
+`awaiting_write_approval`. It has no Provider client and cannot replay any Review call.
+The recovery actor must be a confirmed maintainer/org-admin and a maintainer/org-admin
+must consume the new single-use WRITE binding before sandbox evidence is accepted.
+
+The recovered flow keeps the normal publication boundary unchanged: passing isolated
+sandbox evidence must bind the exact commit and produce a new DRAFT_PR binding; a
+separate exact DRAFT_PR approval must then be consumed before the publisher factory is
+created or any GitHub credential is read. Until that approval, no Repair branch may be
+pushed and no Draft Repair PR may be created. The publisher can still create only one
+Draft PR and cannot mark it Ready or merge it.
 
 `GitHubDraftPublisher` is limited to repository verification, ref read-back, Git data
 objects, one dedicated `crag/phase11d/` branch, and one Draft PR. It has no PATCH, PUT,

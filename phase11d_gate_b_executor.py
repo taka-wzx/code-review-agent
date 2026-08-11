@@ -4612,6 +4612,344 @@ class GateBRepairCoordinator:
 
 OPERATOR_SESSION_SCHEMA_VERSION = "crag.phase11d.operator-session/v1alpha1"
 _OPERATOR_MAX_REQUEST_BYTES = 3_000_000
+TIMEOUT_RECOVERY_CHECKPOINT_SCHEMA_VERSION = (
+    "crag.phase11d.operator-timeout-recovery/v1alpha1"
+)
+_OPERATOR_SESSION_RECEIPT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "authorization_id",
+        "canonical_authorization_sha256",
+        "review_cohort_receipt_sha256",
+        "selected_finding_id",
+        "state",
+        "terminal_category",
+        "started_at_utc",
+        "session_receipt_sha256",
+    }
+)
+_TIMEOUT_RECOVERY_CHECKPOINT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "source_authorization_id",
+        "source_authorization_sha256",
+        "source_runtime_sha256",
+        "selection_receipt_sha256",
+        "review_cohort_receipt_sha256",
+        "timeout_session_receipt_sha256",
+        "selected_finding_id",
+        "selected_review_response_sha256",
+        "prior_selection_sha256",
+        "prior_plan_sha256",
+        "prior_write_binding_sha256",
+        "prior_write_approval_id",
+        "prior_write_approved_at_utc",
+        "recovery_actor_id",
+        "recovery_selection_id",
+        "recovery_repair_job_id",
+        "recovery_write_approval_id",
+        "recovery_requested_at_utc",
+        "checkpoint_sha256",
+    }
+)
+
+
+def _require_complete_recovery_review(review_receipt: Mapping[str, Any]) -> None:
+    review_rows = review_receipt.get("review_rows")
+    if (
+        review_receipt.get("stop_category") != "none"
+        or not isinstance(review_rows, list)
+        or not 20 <= len(review_rows) <= 30
+        or any(
+            not isinstance(row, Mapping)
+            or row.get("status") != "completed"
+            or row.get("terminal_category") != "completed"
+            for row in review_rows
+        )
+    ):
+        raise GateBExecutorError("recovery_review_incomplete")
+
+
+def validate_operator_timeout_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    authorization: Mapping[str, Any],
+    review_receipt: Mapping[str, Any],
+) -> None:
+    _require_exact_fields(
+        "operator_session_receipt", receipt, _OPERATOR_SESSION_RECEIPT_FIELDS
+    )
+    if receipt["schema_version"] != OPERATOR_SESSION_SCHEMA_VERSION:
+        raise GateBExecutorError("operator_session_schema_invalid")
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    if (
+        receipt["authorization_id"] != required.get("authorization_id")
+        or receipt["canonical_authorization_sha256"]
+        != required.get("canonical_authorization_sha256")
+        or receipt["review_cohort_receipt_sha256"]
+        != review_receipt.get("review_cohort_receipt_sha256")
+    ):
+        raise GateBExecutorError("operator_session_binding_mismatch")
+    _require_sha256("operator_selected_finding_id", receipt["selected_finding_id"])
+    _require_utc("operator_session_started_at", receipt["started_at_utc"])
+    if receipt["state"] != "expired" or receipt["terminal_category"] != "timeout":
+        raise GateBExecutorError("operator_session_not_recoverable")
+    receipt_sha = _require_sha256(
+        "operator_session_receipt_sha256", receipt["session_receipt_sha256"]
+    )
+    if _self_hash(receipt, "session_receipt_sha256") != receipt_sha:
+        raise GateBExecutorError("operator_session_receipt_hash_mismatch")
+
+
+def build_timeout_recovery_checkpoint(
+    *,
+    source_authorization: Mapping[str, Any],
+    source_runtime: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    review_receipt: Mapping[str, Any],
+    timeout_receipt: Mapping[str, Any],
+    selected_finding_id: str,
+    prior_selection_sha256: str,
+    prior_plan_sha256: str,
+    prior_write_binding_sha256: str,
+    prior_write_approval_id: str,
+    prior_write_approved_at_utc: str,
+    recovery_actor_id: str,
+    recovery_selection_id: str,
+    recovery_repair_job_id: str,
+    recovery_write_approval_id: str,
+    recovery_requested_at_utc: str,
+) -> dict[str, Any]:
+    validate_selection_receipt(selection_receipt)
+    validate_review_cohort_receipt(
+        review_receipt,
+        authorization=source_authorization,
+        selection_receipt=selection_receipt,
+    )
+    _require_complete_recovery_review(review_receipt)
+    validate_operator_timeout_receipt(
+        timeout_receipt,
+        authorization=source_authorization,
+        review_receipt=review_receipt,
+    )
+    finding_id = _require_sha256("recovery_selected_finding_id", selected_finding_id)
+    if timeout_receipt["selected_finding_id"] != finding_id:
+        raise GateBExecutorError("recovery_selected_finding_mismatch")
+    matching_rows = [
+        row
+        for row in review_receipt["review_rows"]
+        if finding_id in row.get("feedback_eligible_finding_ids", [])
+    ]
+    if len(matching_rows) != 1 or matching_rows[0].get("status") != "completed":
+        raise GateBExecutorError("recovery_selected_finding_unavailable")
+    source_required = source_authorization.get("required_fields")
+    if not isinstance(source_required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    runtime_sha = _require_sha256(
+        "recovery_source_runtime_sha256", source_runtime.get("runtime_sha256")
+    )
+    for name, value in (
+        ("prior_selection_sha256", prior_selection_sha256),
+        ("prior_plan_sha256", prior_plan_sha256),
+        ("prior_write_binding_sha256", prior_write_binding_sha256),
+    ):
+        _require_sha256(name, value)
+    for name, value in (
+        ("prior_write_approval_id", prior_write_approval_id),
+        ("recovery_actor_id", recovery_actor_id),
+        ("recovery_selection_id", recovery_selection_id),
+        ("recovery_repair_job_id", recovery_repair_job_id),
+        ("recovery_write_approval_id", recovery_write_approval_id),
+    ):
+        _require_stable_id(name, value)
+    _require_utc("prior_write_approved_at", prior_write_approved_at_utc)
+    _require_utc("recovery_requested_at", recovery_requested_at_utc)
+    checkpoint: dict[str, Any] = {
+        "schema_version": TIMEOUT_RECOVERY_CHECKPOINT_SCHEMA_VERSION,
+        "source_authorization_id": source_required["authorization_id"],
+        "source_authorization_sha256": source_required["canonical_authorization_sha256"],
+        "source_runtime_sha256": runtime_sha,
+        "selection_receipt_sha256": selection_receipt["selection_receipt_sha256"],
+        "review_cohort_receipt_sha256": review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
+        "timeout_session_receipt_sha256": timeout_receipt["session_receipt_sha256"],
+        "selected_finding_id": finding_id,
+        "selected_review_response_sha256": matching_rows[0]["response_sha256"],
+        "prior_selection_sha256": prior_selection_sha256,
+        "prior_plan_sha256": prior_plan_sha256,
+        "prior_write_binding_sha256": prior_write_binding_sha256,
+        "prior_write_approval_id": prior_write_approval_id,
+        "prior_write_approved_at_utc": prior_write_approved_at_utc,
+        "recovery_actor_id": recovery_actor_id,
+        "recovery_selection_id": recovery_selection_id,
+        "recovery_repair_job_id": recovery_repair_job_id,
+        "recovery_write_approval_id": recovery_write_approval_id,
+        "recovery_requested_at_utc": recovery_requested_at_utc,
+        "checkpoint_sha256": "",
+    }
+    checkpoint["checkpoint_sha256"] = _self_hash(checkpoint, "checkpoint_sha256")
+    validate_timeout_recovery_checkpoint(
+        checkpoint,
+        source_authorization=source_authorization,
+        source_runtime=source_runtime,
+        selection_receipt=selection_receipt,
+        review_receipt=review_receipt,
+        timeout_receipt=timeout_receipt,
+    )
+    return checkpoint
+
+
+def validate_timeout_recovery_checkpoint(
+    checkpoint: Mapping[str, Any],
+    *,
+    source_authorization: Mapping[str, Any],
+    source_runtime: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    review_receipt: Mapping[str, Any],
+    timeout_receipt: Mapping[str, Any],
+) -> None:
+    _require_exact_fields(
+        "timeout_recovery_checkpoint", checkpoint, _TIMEOUT_RECOVERY_CHECKPOINT_FIELDS
+    )
+    if checkpoint["schema_version"] != TIMEOUT_RECOVERY_CHECKPOINT_SCHEMA_VERSION:
+        raise GateBExecutorError("recovery_checkpoint_schema_invalid")
+    source_required = source_authorization.get("required_fields")
+    if not isinstance(source_required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    expected = {
+        "source_authorization_id": source_required.get("authorization_id"),
+        "source_authorization_sha256": source_required.get(
+            "canonical_authorization_sha256"
+        ),
+        "source_runtime_sha256": source_runtime.get("runtime_sha256"),
+        "selection_receipt_sha256": selection_receipt.get("selection_receipt_sha256"),
+        "review_cohort_receipt_sha256": review_receipt.get(
+            "review_cohort_receipt_sha256"
+        ),
+        "timeout_session_receipt_sha256": timeout_receipt.get(
+            "session_receipt_sha256"
+        ),
+        "selected_finding_id": timeout_receipt.get("selected_finding_id"),
+    }
+    if any(checkpoint.get(name) != value for name, value in expected.items()):
+        raise GateBExecutorError("recovery_checkpoint_binding_mismatch")
+    for name in (
+        "source_authorization_sha256",
+        "source_runtime_sha256",
+        "selection_receipt_sha256",
+        "review_cohort_receipt_sha256",
+        "timeout_session_receipt_sha256",
+        "selected_finding_id",
+        "selected_review_response_sha256",
+        "prior_selection_sha256",
+        "prior_plan_sha256",
+        "prior_write_binding_sha256",
+        "checkpoint_sha256",
+    ):
+        _require_sha256(f"recovery_{name}", checkpoint[name])
+    for name in (
+        "prior_write_approval_id",
+        "recovery_actor_id",
+        "recovery_selection_id",
+        "recovery_repair_job_id",
+        "recovery_write_approval_id",
+    ):
+        _require_stable_id(name, checkpoint[name])
+    _require_utc("prior_write_approved_at", checkpoint["prior_write_approved_at_utc"])
+    _require_utc("recovery_requested_at", checkpoint["recovery_requested_at_utc"])
+    _require_complete_recovery_review(review_receipt)
+    rows = [
+        row
+        for row in review_receipt.get("review_rows", [])
+        if checkpoint["selected_finding_id"]
+        in row.get("feedback_eligible_finding_ids", [])
+    ]
+    if (
+        len(rows) != 1
+        or rows[0].get("status") != "completed"
+        or rows[0].get("response_sha256")
+        != checkpoint["selected_review_response_sha256"]
+    ):
+        raise GateBExecutorError("recovery_selected_finding_unavailable")
+    if _self_hash(checkpoint, "checkpoint_sha256") != checkpoint["checkpoint_sha256"]:
+        raise GateBExecutorError("recovery_checkpoint_hash_mismatch")
+
+
+def rebind_recovery_selection_receipt(
+    *,
+    authorization: Mapping[str, Any],
+    source_selection_receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    validate_selection_receipt(source_selection_receipt)
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    seed = _require_sha256(
+        "recovery_selection_seed", required["deterministic_selection_seed_sha256"]
+    )
+    base_branch = required["allowed_base_branch_rule"]["base_branch"]
+    candidates = []
+    for row in source_selection_receipt["selected_prs"]:
+        candidate = _candidate_from_selection_row(row, base_branch=base_branch)
+        candidates.append(
+            PullRequestCandidate(
+                number=candidate.number,
+                github_id=candidate.github_id,
+                base_branch=candidate.base_branch,
+                base_sha=candidate.base_sha,
+                head_sha=candidate.head_sha,
+                updated_at_utc=candidate.updated_at_utc,
+                selection_rank_sha256=sha256_text(f"{seed}\n{candidate.pr_id}"),
+            )
+        )
+    candidates.sort(key=lambda item: (item.selection_rank_sha256, item.number))
+    return build_selection_receipt(
+        authorization=authorization,
+        candidates=candidates,
+        excluded_counts=source_selection_receipt["excluded_counts"],
+    )
+
+
+def rebind_recovery_review_receipt(
+    *,
+    authorization: Mapping[str, Any],
+    selection_receipt: Mapping[str, Any],
+    source_review_receipt: Mapping[str, Any],
+    created_at_utc: str,
+) -> dict[str, Any]:
+    outcomes = {
+        row["pr_id"]: _review_outcome_from_receipt_row(row)
+        for row in source_review_receipt["review_rows"]
+    }
+    ordered = [outcomes[row["pr_id"]] for row in selection_receipt["selected_prs"]]
+    budget_usage = source_review_receipt["budget_usage"]
+    required = authorization["required_fields"]
+    budget = ReviewBudget(
+        max_logical_calls=required["max_logical_calls"],
+        max_http_attempts=required["max_http_attempts"],
+        max_input_tokens=required["max_input_tokens"],
+        max_output_tokens=required["max_output_tokens"],
+        max_cached_tokens=required["max_cached_tokens"],
+        max_micro_cny=required["max_micro_cny"],
+        max_wall_clock_seconds=required["max_wall_clock_seconds"],
+    )
+    budget.restore(budget_usage)
+    if budget.to_dict() != budget_usage:
+        raise GateBExecutorError("recovery_review_budget_mismatch")
+    return build_review_cohort_receipt(
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        outcomes=ordered,
+        budget=budget,
+        stop_category="none",
+        created_at_utc=created_at_utc,
+        previous_review_cohort_receipt_sha256=source_review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
+    )
 
 
 def _operator_patch_files(value: Any) -> tuple[SandboxPatchFile, ...]:
@@ -4728,6 +5066,59 @@ class ReviewRepairOperatorSession:
         if set(finding_map) != expected_ids:
             raise GateBExecutorError("operator_finding_set_incomplete")
         self._findings = finding_map
+
+    @classmethod
+    def from_write_recovery(
+        cls,
+        *,
+        coordinator: GateBRepairCoordinator,
+        authorization: Mapping[str, Any],
+        selection_receipt: Mapping[str, Any],
+        review_receipt: Mapping[str, Any],
+        intent: RepairIntent,
+        selected_finding_id: str,
+        receipt_directory: Path,
+        source_root: Path,
+        publisher_factory: Callable[[], GitHubDraftPublisher],
+        started_at_utc: str,
+        timeout_seconds: int,
+    ) -> ReviewRepairOperatorSession:
+        validate_review_cohort_receipt(
+            review_receipt,
+            authorization=authorization,
+            selection_receipt=selection_receipt,
+        )
+        if intent.finding_id != selected_finding_id:
+            raise GateBExecutorError("recovery_selected_finding_mismatch")
+        instance = cls.__new__(cls)
+        instance._coordinator = coordinator
+        instance._authorization = authorization
+        instance._selection_receipt = dict(selection_receipt)
+        instance._review_receipt = dict(review_receipt)
+        instance._receipt_directory = receipt_directory.resolve()
+        resolved_source = source_root.resolve()
+        if (
+            instance._receipt_directory == resolved_source
+            or resolved_source in instance._receipt_directory.parents
+        ):
+            raise GateBExecutorError("operator_receipt_directory_inside_source_tree")
+        instance._publisher_factory = publisher_factory
+        instance._started_at_utc = started_at_utc
+        _require_utc("operator_started_at", started_at_utc)
+        instance._timeout_seconds = _require_int(
+            "operator_timeout_seconds", timeout_seconds, minimum=1
+        )
+        instance._started_monotonic = time.monotonic()
+        instance._state = "awaiting_write_approval"
+        instance._lock = threading.RLock()
+        instance._selected_finding_id = selected_finding_id
+        instance._intent = intent
+        instance._draft_binding_sha256 = ""
+        instance._receipt = None
+        instance._reviews = {}
+        instance._candidates = {}
+        instance._findings = {}
+        return instance
 
     @property
     def terminal(self) -> bool:
@@ -5135,6 +5526,297 @@ class LoopbackReviewRepairServer:
 
     def close(self) -> None:
         self._server.server_close()
+
+
+def prepare_timeout_recovery_operator_session(
+    *,
+    authorization: Mapping[str, Any],
+    source_authorization: Mapping[str, Any],
+    participants: Mapping[str, Any],
+    repository_authorization: Mapping[str, Any],
+    credential_descriptor: Mapping[str, Any],
+    source_credential_descriptor: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    source_runtime: Mapping[str, Any],
+    source_selection_receipt: Mapping[str, Any],
+    source_review_receipt: Mapping[str, Any],
+    timeout_receipt: Mapping[str, Any],
+    recovery_checkpoint: Mapping[str, Any],
+    plan_text: str,
+    source_root: Path,
+    receipt_directory: Path,
+    publisher_factory: Callable[[], GitHubDraftPublisher],
+    now_utc: str,
+) -> ReviewRepairOperatorSession:
+    source_status = validate_execution_authorization(
+        authorization=source_authorization,
+        participants=participants,
+        repository=repository_authorization,
+        credential_descriptor=source_credential_descriptor,
+        runtime=source_runtime,
+        now_utc=recovery_checkpoint["prior_write_approved_at_utc"],
+    )
+    if not source_status.gate_b_allowed:
+        blocker = source_status.blockers[0] if source_status.blockers else "gate_b_closed"
+        raise GateBExecutorError(f"recovery_source_{blocker}")
+    require_active_execution_authorization(
+        authorization=authorization,
+        participants=participants,
+        repository=repository_authorization,
+        credential_descriptor=credential_descriptor,
+        runtime=runtime,
+        source_root=source_root,
+        now_utc=now_utc,
+    )
+    validate_review_cohort_receipt(
+        source_review_receipt,
+        authorization=source_authorization,
+        selection_receipt=source_selection_receipt,
+    )
+    validate_operator_timeout_receipt(
+        timeout_receipt,
+        authorization=source_authorization,
+        review_receipt=source_review_receipt,
+    )
+    validate_timeout_recovery_checkpoint(
+        recovery_checkpoint,
+        source_authorization=source_authorization,
+        source_runtime=source_runtime,
+        selection_receipt=source_selection_receipt,
+        review_receipt=source_review_receipt,
+        timeout_receipt=timeout_receipt,
+    )
+    required = authorization.get("required_fields")
+    if not isinstance(required, Mapping):
+        raise GateBExecutorError("authorization_required_fields_invalid")
+    if (
+        required.get("deterministic_selection_seed_sha256")
+        != recovery_checkpoint["checkpoint_sha256"]
+    ):
+        raise GateBExecutorError("recovery_authorization_checkpoint_mismatch")
+    recovery_actor_id, _recovery_actor_role = _resolve_human_actor(
+        participants, recovery_checkpoint["recovery_actor_id"]
+    )
+    selection_receipt = rebind_recovery_selection_receipt(
+        authorization=authorization,
+        source_selection_receipt=source_selection_receipt,
+    )
+    review_receipt = rebind_recovery_review_receipt(
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        source_review_receipt=source_review_receipt,
+        created_at_utc=now_utc,
+    )
+    selected_finding_id = recovery_checkpoint["selected_finding_id"]
+    source_review_row = next(
+        row
+        for row in source_review_receipt["review_rows"]
+        if selected_finding_id in row["feedback_eligible_finding_ids"]
+    )
+    selected_pr_id = source_review_row["pr_id"]
+    selected_row = next(
+        row for row in selection_receipt["selected_prs"] if row["pr_id"] == selected_pr_id
+    )
+    candidate = _candidate_from_selection_row(
+        selected_row,
+        base_branch=required["allowed_base_branch_rule"]["base_branch"],
+    )
+    review = _review_outcome_from_receipt_row(
+        next(row for row in review_receipt["review_rows"] if row["pr_id"] == selected_pr_id)
+    )
+    coordinator = GateBRepairCoordinator(
+        authorization=authorization,
+        participants=participants,
+        repository=repository_authorization,
+        credential_descriptor=credential_descriptor,
+        runtime=runtime,
+        source_root=source_root,
+        selection_receipt=selection_receipt,
+        now_utc=now_utc,
+    )
+    coordinator.select_finding(
+        candidate=candidate,
+        review=review,
+        finding_id=selected_finding_id,
+        selection_id=recovery_checkpoint["recovery_selection_id"],
+        selector_id=recovery_actor_id,
+        selected_at_utc=now_utc,
+    )
+    intent = coordinator.prepare_repair(
+        candidate=candidate,
+        plan_text=plan_text,
+        repair_job_id=recovery_checkpoint["recovery_repair_job_id"],
+        requested_by=recovery_actor_id,
+        requested_at_utc=now_utc,
+    )
+    write_binding = coordinator.request_write_approval(
+        approval_id=recovery_checkpoint["recovery_write_approval_id"],
+        requested_at_utc=now_utc,
+    )
+    session = ReviewRepairOperatorSession.from_write_recovery(
+        coordinator=coordinator,
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        review_receipt=review_receipt,
+        intent=intent,
+        selected_finding_id=selected_finding_id,
+        receipt_directory=receipt_directory,
+        source_root=source_root,
+        publisher_factory=publisher_factory,
+        started_at_utc=now_utc,
+        timeout_seconds=_require_int(
+            "max_wall_clock_seconds", required.get("max_wall_clock_seconds"), minimum=1
+        ),
+    )
+    recovery_receipt: dict[str, Any] = {
+        "schema_version": "crag.phase11d.operator-timeout-recovery-receipt/v1alpha1",
+        "authorization_id": required["authorization_id"],
+        "canonical_authorization_sha256": required["canonical_authorization_sha256"],
+        "checkpoint_sha256": recovery_checkpoint["checkpoint_sha256"],
+        "source_review_cohort_receipt_sha256": source_review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
+        "source_timeout_session_receipt_sha256": timeout_receipt[
+            "session_receipt_sha256"
+        ],
+        "selection_receipt_sha256": selection_receipt["selection_receipt_sha256"],
+        "review_cohort_receipt_sha256": review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
+        "selected_finding_id": selected_finding_id,
+        "prior_write_binding_sha256": recovery_checkpoint[
+            "prior_write_binding_sha256"
+        ],
+        "write_binding_sha256": write_binding,
+        "state": "awaiting_write_approval",
+        "created_at_utc": now_utc,
+        "recovery_receipt_sha256": "",
+    }
+    recovery_receipt["recovery_receipt_sha256"] = _self_hash(
+        recovery_receipt, "recovery_receipt_sha256"
+    )
+    receipt_directory.mkdir(parents=True, exist_ok=True)
+    _write_json(receipt_directory / "operator-timeout-recovery-receipt.json", recovery_receipt)
+    _write_json(receipt_directory / "recovery-selection-receipt.json", selection_receipt)
+    _write_json(receipt_directory / "recovery-review-cohort-receipt.json", review_receipt)
+    return session
+
+
+def run_timeout_recovery_operator(
+    *,
+    authorization: Mapping[str, Any],
+    source_authorization: Mapping[str, Any],
+    participants: Mapping[str, Any],
+    repository_authorization: Mapping[str, Any],
+    credential_descriptor: Mapping[str, Any],
+    source_credential_descriptor: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    source_runtime: Mapping[str, Any],
+    source_selection_receipt: Mapping[str, Any],
+    source_review_receipt: Mapping[str, Any],
+    timeout_receipt: Mapping[str, Any],
+    recovery_checkpoint: Mapping[str, Any],
+    plan_text: str,
+    source_root: Path,
+    github_app_private_key_file: Path,
+    provider_key_environment: str,
+    owner: str,
+    repository: str,
+    receipt_directory: Path,
+    now_utc: str,
+    port: int = 0,
+) -> None:
+    def publisher_factory() -> GitHubDraftPublisher:
+        require_active_execution_authorization(
+            authorization=authorization,
+            participants=participants,
+            repository=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+        )
+        verify_credential_fingerprints(
+            authorization=authorization,
+            participants=participants,
+            repository=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+            github_app_private_key_file=github_app_private_key_file,
+            provider_key_environment=provider_key_environment,
+        )
+        private_key = _read_private_key_file(
+            github_app_private_key_file,
+            expected_sha256=credential_descriptor[
+                "github_app_private_key_fingerprint_sha256"
+            ],
+        )
+        transport = StrictHttpsJsonTransport(allowed_hosts=frozenset({_GITHUB_HOST}))
+        token = GitHubAppAuthenticator(transport).mint_installation_token(
+            app_id=credential_descriptor["github_app_id"],
+            installation_id=credential_descriptor["github_app_installation_id"],
+            private_key=private_key,
+        )
+        del private_key
+        required = authorization["required_fields"]
+        repository_ids = required["repository_allowlist"]["repository_ids"]
+        return GitHubDraftPublisher(
+            transport,
+            authorization=authorization,
+            participants=participants,
+            repository_authorization=repository_authorization,
+            credential_descriptor=credential_descriptor,
+            runtime=runtime,
+            source_root=source_root,
+            github_app_private_key_file=github_app_private_key_file,
+            provider_key_environment=provider_key_environment,
+            token=token,
+            owner=owner,
+            repository=repository,
+            expected_repository_id=_github_numeric_repository_id(repository_ids[0]),
+            expected_app_id=credential_descriptor["github_app_id"],
+            expected_installation_id=credential_descriptor["github_app_installation_id"],
+            journal=PublicationJournal(receipt_directory / "publication-journal.json"),
+        )
+
+    session = prepare_timeout_recovery_operator_session(
+        authorization=authorization,
+        source_authorization=source_authorization,
+        participants=participants,
+        repository_authorization=repository_authorization,
+        credential_descriptor=credential_descriptor,
+        source_credential_descriptor=source_credential_descriptor,
+        runtime=runtime,
+        source_runtime=source_runtime,
+        source_selection_receipt=source_selection_receipt,
+        source_review_receipt=source_review_receipt,
+        timeout_receipt=timeout_receipt,
+        recovery_checkpoint=recovery_checkpoint,
+        plan_text=plan_text,
+        source_root=source_root,
+        receipt_directory=receipt_directory,
+        publisher_factory=publisher_factory,
+        now_utc=now_utc,
+    )
+    server = LoopbackReviewRepairServer(session, port=port)
+    try:
+        host, actual_port = server.address
+        print(
+            json.dumps(
+                {
+                    "operator_url": f"http://{host}:{actual_port}",
+                    "bearer_token": server.bearer_token,
+                    "state": session.status()["state"],
+                    "write_binding_sha256": session.status()["write_binding_sha256"],
+                    "checkpoint_sha256": recovery_checkpoint["checkpoint_sha256"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        server.serve_until_terminal()
+    finally:
+        server.close()
 
 
 def run_review_repair_operator(
@@ -5755,6 +6437,55 @@ def build_parser() -> argparse.ArgumentParser:
     operator.add_argument("--port", type=int, default=0)
     operator.add_argument("--now-utc")
 
+    recovery_checkpoint = commands.add_parser("build-timeout-recovery-checkpoint")
+    recovery_checkpoint.add_argument("--source-authorization", type=Path, required=True)
+    recovery_checkpoint.add_argument("--participants", type=Path, required=True)
+    recovery_checkpoint.add_argument(
+        "--repository-authorization", type=Path, required=True
+    )
+    recovery_checkpoint.add_argument(
+        "--source-credential-descriptor", type=Path, required=True
+    )
+    recovery_checkpoint.add_argument("--source-runtime", type=Path, required=True)
+    recovery_checkpoint.add_argument("--selection-receipt", type=Path, required=True)
+    recovery_checkpoint.add_argument("--review-receipt", type=Path, required=True)
+    recovery_checkpoint.add_argument("--timeout-receipt", type=Path, required=True)
+    recovery_checkpoint.add_argument("--selected-finding-id", required=True)
+    recovery_checkpoint.add_argument("--prior-selection-sha256", required=True)
+    recovery_checkpoint.add_argument("--prior-plan-sha256", required=True)
+    recovery_checkpoint.add_argument("--prior-write-binding-sha256", required=True)
+    recovery_checkpoint.add_argument("--prior-write-approval-id", required=True)
+    recovery_checkpoint.add_argument("--prior-write-approved-at-utc", required=True)
+    recovery_checkpoint.add_argument("--recovery-actor-id", required=True)
+    recovery_checkpoint.add_argument("--recovery-selection-id", required=True)
+    recovery_checkpoint.add_argument("--recovery-repair-job-id", required=True)
+    recovery_checkpoint.add_argument("--recovery-write-approval-id", required=True)
+    recovery_checkpoint.add_argument("--recovery-requested-at-utc", required=True)
+    recovery_checkpoint.add_argument("--output", type=Path, required=True)
+
+    recovery = commands.add_parser("resume-write-approved-repair-session")
+    recovery.add_argument("--authorization", type=Path, required=True)
+    recovery.add_argument("--source-authorization", type=Path, required=True)
+    recovery.add_argument("--participants", type=Path, required=True)
+    recovery.add_argument("--repository-authorization", type=Path, required=True)
+    recovery.add_argument("--credential-descriptor", type=Path, required=True)
+    recovery.add_argument("--source-credential-descriptor", type=Path, required=True)
+    recovery.add_argument("--runtime", type=Path, required=True)
+    recovery.add_argument("--source-runtime", type=Path, required=True)
+    recovery.add_argument("--selection-receipt", type=Path, required=True)
+    recovery.add_argument("--review-receipt", type=Path, required=True)
+    recovery.add_argument("--timeout-receipt", type=Path, required=True)
+    recovery.add_argument("--recovery-checkpoint", type=Path, required=True)
+    recovery.add_argument("--plan-file", type=Path, required=True)
+    recovery.add_argument("--source-root", type=Path, required=True)
+    recovery.add_argument("--github-app-private-key-file", type=Path, required=True)
+    recovery.add_argument("--provider-key-environment", required=True)
+    recovery.add_argument("--owner", required=True)
+    recovery.add_argument("--repository", required=True)
+    recovery.add_argument("--receipt-directory", type=Path, required=True)
+    recovery.add_argument("--port", type=int, default=0)
+    recovery.add_argument("--now-utc")
+
     closeout = commands.add_parser("prepare-pilot-closeout")
     closeout.add_argument("--authorization", type=Path, required=True)
     closeout.add_argument("--participants", type=Path, required=True)
@@ -5889,6 +6620,52 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(json.dumps(result, sort_keys=True))
             return 0
+        if args.command == "build-timeout-recovery-checkpoint":
+            source_authorization = load_json(args.source_authorization)
+            participants = load_json(args.participants)
+            repository = load_json(args.repository_authorization)
+            source_descriptor = load_json(args.source_credential_descriptor)
+            source_runtime = load_json(args.source_runtime)
+            status = validate_execution_authorization(
+                authorization=source_authorization,
+                participants=participants,
+                repository=repository,
+                credential_descriptor=source_descriptor,
+                runtime=source_runtime,
+                now_utc=args.prior_write_approved_at_utc,
+            )
+            if not status.gate_b_allowed:
+                print(json.dumps(status.to_dict(), sort_keys=True))
+                return 2
+            checkpoint = build_timeout_recovery_checkpoint(
+                source_authorization=source_authorization,
+                source_runtime=source_runtime,
+                selection_receipt=load_json(args.selection_receipt),
+                review_receipt=load_json(args.review_receipt),
+                timeout_receipt=load_json(args.timeout_receipt),
+                selected_finding_id=args.selected_finding_id,
+                prior_selection_sha256=args.prior_selection_sha256,
+                prior_plan_sha256=args.prior_plan_sha256,
+                prior_write_binding_sha256=args.prior_write_binding_sha256,
+                prior_write_approval_id=args.prior_write_approval_id,
+                prior_write_approved_at_utc=args.prior_write_approved_at_utc,
+                recovery_actor_id=args.recovery_actor_id,
+                recovery_selection_id=args.recovery_selection_id,
+                recovery_repair_job_id=args.recovery_repair_job_id,
+                recovery_write_approval_id=args.recovery_write_approval_id,
+                recovery_requested_at_utc=args.recovery_requested_at_utc,
+            )
+            _write_json(args.output, checkpoint)
+            print(
+                json.dumps(
+                    {
+                        "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+                        "selected_finding_id": checkpoint["selected_finding_id"],
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         authorization, participants, repository, descriptor, runtime = _load_artifacts(args)
         status = validate_execution_authorization(
             authorization=authorization,
@@ -5904,6 +6681,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not status.gate_b_allowed:
             print(json.dumps(status.to_dict(), sort_keys=True))
             return 2
+        if args.command == "resume-write-approved-repair-session":
+            try:
+                plan_bytes = args.plan_file.read_bytes()
+            except OSError as exc:
+                raise GateBExecutorError("recovery_plan_unavailable") from exc
+            if not 1 <= len(plan_bytes) <= 64_000:
+                raise GateBExecutorError("recovery_plan_invalid")
+            try:
+                plan_text = plan_bytes.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise GateBExecutorError("recovery_plan_invalid") from exc
+            now_utc = getattr(args, "now_utc", None) or datetime.now(
+                timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            run_timeout_recovery_operator(
+                authorization=authorization,
+                source_authorization=load_json(args.source_authorization),
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                source_credential_descriptor=load_json(
+                    args.source_credential_descriptor
+                ),
+                runtime=runtime,
+                source_runtime=load_json(args.source_runtime),
+                source_selection_receipt=load_json(args.selection_receipt),
+                source_review_receipt=load_json(args.review_receipt),
+                timeout_receipt=load_json(args.timeout_receipt),
+                recovery_checkpoint=load_json(args.recovery_checkpoint),
+                plan_text=plan_text,
+                source_root=args.source_root,
+                github_app_private_key_file=args.github_app_private_key_file,
+                provider_key_environment=args.provider_key_environment,
+                owner=args.owner,
+                repository=args.repository,
+                receipt_directory=args.receipt_directory,
+                now_utc=now_utc,
+                port=args.port,
+            )
+            return 0
         if args.command == "run-review-repair-session":
             now_utc = getattr(args, "now_utc", None) or datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"

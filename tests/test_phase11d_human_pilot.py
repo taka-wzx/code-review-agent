@@ -470,6 +470,130 @@ def _completed_review(candidate: gate_b_executor.PullRequestCandidate) -> gate_b
     )
 
 
+def _completed_review_receipt(
+    *,
+    authorization: dict[str, object],
+    selection_receipt: dict[str, object],
+    selected_candidate: gate_b_executor.PullRequestCandidate,
+    candidates: list[gate_b_executor.PullRequestCandidate],
+) -> dict[str, object]:
+    outcomes: list[gate_b_executor.ReviewOutcome] = []
+    required = authorization["required_fields"]
+    assert isinstance(required, dict)
+    budget = gate_b_executor._review_budget_from_authorization(required)
+    for candidate in candidates:
+        outcome = (
+            _completed_review(candidate)
+            if candidate == selected_candidate
+            else gate_b_executor.ReviewOutcome(
+                pr_id=candidate.pr_id,
+                status="completed",
+                terminal_category="completed",
+                finding_ids=(),
+                feedback_eligible_finding_ids=(),
+                provider_call_count=1,
+                http_attempt_count=1,
+                input_tokens=10,
+                output_tokens=5,
+                cached_tokens=0,
+                response_sha256="e" * 64,
+            )
+        )
+        budget.reserve_call()
+        budget.reserve_http()
+        budget.settle(outcome)
+        outcomes.append(outcome)
+    return gate_b_executor.build_review_cohort_receipt(
+        authorization=authorization,
+        selection_receipt=selection_receipt,
+        outcomes=outcomes,
+        budget=budget,
+        stop_category="none",
+        created_at_utc="2026-08-06T00:02:00Z",
+    )
+
+
+def _operator_timeout_receipt(
+    *,
+    authorization: dict[str, object],
+    review_receipt: dict[str, object],
+    finding_id: str,
+) -> dict[str, object]:
+    required = authorization["required_fields"]
+    assert isinstance(required, dict)
+    receipt: dict[str, object] = {
+        "schema_version": gate_b_executor.OPERATOR_SESSION_SCHEMA_VERSION,
+        "authorization_id": required["authorization_id"],
+        "canonical_authorization_sha256": required["canonical_authorization_sha256"],
+        "review_cohort_receipt_sha256": review_receipt[
+            "review_cohort_receipt_sha256"
+        ],
+        "selected_finding_id": finding_id,
+        "state": "expired",
+        "terminal_category": "timeout",
+        "started_at_utc": "2026-08-06T00:03:00Z",
+        "session_receipt_sha256": "",
+    }
+    receipt["session_receipt_sha256"] = gate_b_executor._self_hash(
+        receipt, "session_receipt_sha256"
+    )
+    return receipt
+
+
+def _approved_recovery_context(
+    *,
+    checkpoint_sha256: str,
+    participants: dict[str, object],
+    repository: dict[str, object],
+) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    authorization_id = "phase11d-gate-b-timeout-recovery-v1-20260806-001"
+    draft, _participants, _repository, _descriptor = _gate_b_real_inputs()
+    required = draft["required_fields"]
+    assert isinstance(required, dict)
+    required["authorization_id"] = authorization_id
+    required["deterministic_selection_seed_sha256"] = checkpoint_sha256
+    descriptor = pilot.build_credential_descriptor(
+        authorization_id=authorization_id,
+        credential_descriptor_id="phase11d-gate-b-timeout-recovery-credentials-001",
+        github_app_id=4421400,
+        github_app_installation_id=149747930,
+        github_app_private_key_fingerprint_sha256=gate_b_executor.sha256_bytes(
+            b"test-private-key"
+        ),
+        provider_id="zhipu",
+        provider_model_snapshot="glm-5.2",
+        provider_api_key_fingerprint_sha256=gate_b_executor.sha256_text(
+            "test-provider-key"
+        ),
+        credential_delivery_mode="local_secret_store_to_ephemeral_process_environment",
+        credential_revoke_procedure="github_delete_private_key_and_zhipu_disable_api_key",
+    )
+    required["credential_fingerprint_sha256"] = descriptor[
+        "credential_descriptor_sha256"
+    ]
+    runtime = gate_b_executor.freeze_executor_runtime(
+        source_root=Path(__file__).resolve().parents[1],
+        authorization_id=authorization_id,
+        executor_id="phase11d-gate-b-timeout-recovery-executor-001",
+        created_at_utc="2026-08-06T00:10:00Z",
+    )
+    frozen = gate_b_executor.freeze_authorization(
+        draft=draft,
+        participants=participants,
+        repository=repository,
+        credential_descriptor=descriptor,
+        runtime=runtime,
+    )
+    approved = gate_b_executor.approve_authorization(
+        frozen=frozen,
+        participants=participants,
+        actor_id="p-03",
+        approved_at_utc="2026-08-06T00:11:00Z",
+        exact_approval_text=gate_b_executor.build_exact_approval_text(frozen),
+    )
+    return approved, descriptor, runtime
+
+
 class _CohortReviewReader:
     def __init__(
         self,
@@ -1284,6 +1408,312 @@ class Phase11DHumanPilotTests(unittest.TestCase):
         )
         self.assertEqual(resume_args.command, "resume-selected-pull-requests")
         self.assertEqual(resume_args.previous_review_receipt, Path("previous-review.json"))
+
+        checkpoint_args = gate_b_executor.build_parser().parse_args(
+            [
+                "build-timeout-recovery-checkpoint",
+                "--source-authorization",
+                "source-authorization.json",
+                "--participants",
+                "participants.json",
+                "--repository-authorization",
+                "repository.json",
+                "--source-credential-descriptor",
+                "source-credentials.json",
+                "--source-runtime",
+                "source-runtime.json",
+                "--selection-receipt",
+                "selection.json",
+                "--review-receipt",
+                "review.json",
+                "--timeout-receipt",
+                "timeout.json",
+                "--selected-finding-id",
+                "f" * 64,
+                "--prior-selection-sha256",
+                "1" * 64,
+                "--prior-plan-sha256",
+                "2" * 64,
+                "--prior-write-binding-sha256",
+                "3" * 64,
+                "--prior-write-approval-id",
+                "write-source-001",
+                "--prior-write-approved-at-utc",
+                "2026-08-06T00:04:00Z",
+                "--recovery-actor-id",
+                "p-03",
+                "--recovery-selection-id",
+                "selection-recovery-001",
+                "--recovery-repair-job-id",
+                "repair-recovery-001",
+                "--recovery-write-approval-id",
+                "write-recovery-001",
+                "--recovery-requested-at-utc",
+                "2026-08-06T00:12:00Z",
+                "--output",
+                "checkpoint.json",
+            ]
+        )
+        self.assertEqual(
+            checkpoint_args.command, "build-timeout-recovery-checkpoint"
+        )
+        self.assertEqual(checkpoint_args.recovery_actor_id, "p-03")
+
+        recovery_args = gate_b_executor.build_parser().parse_args(
+            [
+                "resume-write-approved-repair-session",
+                "--authorization",
+                "authorization.json",
+                "--source-authorization",
+                "source-authorization.json",
+                "--participants",
+                "participants.json",
+                "--repository-authorization",
+                "repository.json",
+                "--credential-descriptor",
+                "credentials.json",
+                "--source-credential-descriptor",
+                "source-credentials.json",
+                "--runtime",
+                "runtime.json",
+                "--source-runtime",
+                "source-runtime.json",
+                "--selection-receipt",
+                "selection.json",
+                "--review-receipt",
+                "review.json",
+                "--timeout-receipt",
+                "timeout.json",
+                "--recovery-checkpoint",
+                "checkpoint.json",
+                "--plan-file",
+                "plan.txt",
+                "--source-root",
+                ".",
+                "--github-app-private-key-file",
+                "private-key.pem",
+                "--provider-key-environment",
+                "PROVIDER_KEY",
+                "--owner",
+                "acme",
+                "--repository",
+                "widget",
+                "--receipt-directory",
+                "receipts",
+            ]
+        )
+        self.assertEqual(
+            recovery_args.command, "resume-write-approved-repair-session"
+        )
+        self.assertEqual(recovery_args.recovery_checkpoint, Path("checkpoint.json"))
+
+    def test_timeout_recovery_reuses_receipts_without_provider_or_github_access(
+        self,
+    ) -> None:
+        (
+            source_authorization,
+            participants,
+            repository,
+            source_descriptor,
+            source_runtime,
+        ) = _approved_gate_b_context()
+        selected_candidate, candidates = _repair_candidates()
+        source_selection = gate_b_executor.build_selection_receipt(
+            authorization=source_authorization,
+            candidates=candidates,
+            excluded_counts={
+                "draft": 0,
+                "malformed": 0,
+                "outside_window": 0,
+                "wrong_base": 0,
+            },
+        )
+        source_review = _completed_review_receipt(
+            authorization=source_authorization,
+            selection_receipt=source_selection,
+            selected_candidate=selected_candidate,
+            candidates=candidates,
+        )
+        timeout_receipt = _operator_timeout_receipt(
+            authorization=source_authorization,
+            review_receipt=source_review,
+            finding_id="f" * 64,
+        )
+        checkpoint = gate_b_executor.build_timeout_recovery_checkpoint(
+            source_authorization=source_authorization,
+            source_runtime=source_runtime,
+            selection_receipt=source_selection,
+            review_receipt=source_review,
+            timeout_receipt=timeout_receipt,
+            selected_finding_id="f" * 64,
+            prior_selection_sha256="1" * 64,
+            prior_plan_sha256="2" * 64,
+            prior_write_binding_sha256="3" * 64,
+            prior_write_approval_id="write-source-001",
+            prior_write_approved_at_utc="2026-08-06T00:04:00Z",
+            recovery_actor_id="p-03",
+            recovery_selection_id="selection-recovery-001",
+            recovery_repair_job_id="repair-recovery-001",
+            recovery_write_approval_id="write-recovery-001",
+            recovery_requested_at_utc="2026-08-06T00:12:00Z",
+        )
+        authorization, descriptor, runtime = _approved_recovery_context(
+            checkpoint_sha256=checkpoint["checkpoint_sha256"],
+            participants=participants,
+            repository=repository,
+        )
+        publisher_factory_calls: list[str] = []
+
+        def publisher_factory() -> object:
+            publisher_factory_calls.append("github")
+            raise AssertionError("publisher must remain closed before DRAFT_PR approval")
+
+        with tempfile.TemporaryDirectory() as temp:
+            receipt_directory = Path(temp) / "receipts"
+            session = gate_b_executor.prepare_timeout_recovery_operator_session(
+                authorization=authorization,
+                source_authorization=source_authorization,
+                participants=participants,
+                repository_authorization=repository,
+                credential_descriptor=descriptor,
+                source_credential_descriptor=source_descriptor,
+                runtime=runtime,
+                source_runtime=source_runtime,
+                source_selection_receipt=source_selection,
+                source_review_receipt=source_review,
+                timeout_receipt=timeout_receipt,
+                recovery_checkpoint=checkpoint,
+                plan_text="Repair only the selected token-prefix validation and tests.",
+                source_root=Path(__file__).resolve().parents[1],
+                receipt_directory=receipt_directory,
+                publisher_factory=publisher_factory,
+                now_utc="2026-08-06T00:12:00Z",
+            )
+            status = session.status()
+            self.assertEqual(status["state"], "awaiting_write_approval")
+            self.assertNotEqual(status["write_binding_sha256"], "3" * 64)
+            self.assertEqual(publisher_factory_calls, [])
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError, "operator_state_invalid"
+            ):
+                session.publish({"published_at_utc": "2026-08-06T00:13:00Z"})
+            self.assertEqual(publisher_factory_calls, [])
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError, "human_actor_role_denied"
+            ):
+                session.decide_write(
+                    {
+                        "approval_id": "write-recovery-001",
+                        "actor_id": "not-a-participant",
+                        "decision": "approved",
+                        "approved_at_utc": "2026-08-06T00:13:00Z",
+                    }
+                )
+            write_result = session.decide_write(
+                {
+                    "approval_id": "write-recovery-001",
+                    "actor_id": "p-02",
+                    "decision": "approved",
+                    "approved_at_utc": "2026-08-06T00:13:01Z",
+                }
+            )
+            self.assertEqual(write_result["state"], "awaiting_sandbox")
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError, "operator_state_invalid"
+            ):
+                session.decide_write(
+                    {
+                        "approval_id": "write-recovery-001",
+                        "actor_id": "p-02",
+                        "decision": "approved",
+                        "approved_at_utc": "2026-08-06T00:13:02Z",
+                    }
+                )
+            self.assertEqual(publisher_factory_calls, [])
+            recovery_receipt = gate_b_executor.load_json(
+                receipt_directory / "operator-timeout-recovery-receipt.json"
+            )
+            self.assertEqual(
+                recovery_receipt["source_review_cohort_receipt_sha256"],
+                source_review["review_cohort_receipt_sha256"],
+            )
+            rebound_review = gate_b_executor.load_json(
+                receipt_directory / "recovery-review-cohort-receipt.json"
+            )
+            self.assertEqual(len(rebound_review["review_rows"]), 20)
+            self.assertEqual(
+                rebound_review["previous_review_cohort_receipt_sha256"],
+                source_review["review_cohort_receipt_sha256"],
+            )
+
+            tampered_checkpoint = copy.deepcopy(checkpoint)
+            tampered_checkpoint["prior_plan_sha256"] = "4" * 64
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError,
+                "recovery_checkpoint_hash_mismatch",
+            ):
+                gate_b_executor.prepare_timeout_recovery_operator_session(
+                    authorization=authorization,
+                    source_authorization=source_authorization,
+                    participants=participants,
+                    repository_authorization=repository,
+                    credential_descriptor=descriptor,
+                    source_credential_descriptor=source_descriptor,
+                    runtime=runtime,
+                    source_runtime=source_runtime,
+                    source_selection_receipt=source_selection,
+                    source_review_receipt=source_review,
+                    timeout_receipt=timeout_receipt,
+                    recovery_checkpoint=tampered_checkpoint,
+                    plan_text="Repair only the selected token-prefix validation and tests.",
+                    source_root=Path(__file__).resolve().parents[1],
+                    receipt_directory=Path(temp) / "tampered",
+                    publisher_factory=publisher_factory,
+                    now_utc="2026-08-06T00:12:00Z",
+                )
+
+            drifted_timeout = copy.deepcopy(timeout_receipt)
+            drifted_timeout["started_at_utc"] = "2026-08-06T00:03:01Z"
+            drifted_timeout["session_receipt_sha256"] = gate_b_executor._self_hash(
+                drifted_timeout, "session_receipt_sha256"
+            )
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError,
+                "recovery_checkpoint_binding_mismatch",
+            ):
+                gate_b_executor.validate_timeout_recovery_checkpoint(
+                    checkpoint,
+                    source_authorization=source_authorization,
+                    source_runtime=source_runtime,
+                    selection_receipt=source_selection,
+                    review_receipt=source_review,
+                    timeout_receipt=drifted_timeout,
+                )
+
+            with self.assertRaisesRegex(
+                gate_b_executor.GateBExecutorError,
+                "recovery_authorization_checkpoint_mismatch",
+            ):
+                gate_b_executor.prepare_timeout_recovery_operator_session(
+                    authorization=source_authorization,
+                    source_authorization=source_authorization,
+                    participants=participants,
+                    repository_authorization=repository,
+                    credential_descriptor=source_descriptor,
+                    source_credential_descriptor=source_descriptor,
+                    runtime=source_runtime,
+                    source_runtime=source_runtime,
+                    source_selection_receipt=source_selection,
+                    source_review_receipt=source_review,
+                    timeout_receipt=timeout_receipt,
+                    recovery_checkpoint=checkpoint,
+                    plan_text="Repair only the selected token-prefix validation and tests.",
+                    source_root=Path(__file__).resolve().parents[1],
+                    receipt_directory=Path(temp) / "generic-authorization",
+                    publisher_factory=publisher_factory,
+                    now_utc="2026-08-06T00:12:00Z",
+                )
+            self.assertEqual(publisher_factory_calls, [])
 
     @mock.patch.dict(os.environ, {"PHASE11D_PUBLISHER_TEST_KEY": "test-provider-key"})
     def test_gate_b_repair_requires_human_selection_two_approvals_and_exact_sandbox_commit(self) -> None:
